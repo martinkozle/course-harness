@@ -1,0 +1,3 @@
+# Separate durable Library data from disposable processing cache
+
+Store the global Library registry, admitted immutable Source snapshots, and Template Profiles in the platform-native durable user-data directory, while keeping reproducible parser outputs, chunks, indexes, thumbnails, previews, and transient discovery downloads in the platform-native cache directory. Course Workspaces pin Source hashes and retrieval metadata; deleting the cache may cost processing time but cannot invalidate a Course, and remote deletion or mutation cannot erase the Source Version that grounded published material.

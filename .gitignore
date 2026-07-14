@@ -1,0 +1,24 @@
+.scratch/
+
+# Local agent and tool output
+.playwright-mcp/
+playwright-report/
+test-results/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ty/
+
+# Frontend
+node_modules/
+dist/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example

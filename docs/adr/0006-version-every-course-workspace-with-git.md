@@ -1,0 +1,3 @@
+# Version every Course Workspace with Git
+
+Create Courses in empty directories by default and automatically initialize Git, but create visible Course Revisions only at meaningful milestones chosen by the Course Agent or Course Author rather than after every chat run or tool call. Preserve cancelled valid work in Current State, create hidden recovery snapshots around runs, and expose changes, selective revert, revision creation, and restore through a UI that does not require Git knowledge. Exclude secrets, caches, processor outputs, and transient runtime data, and retain stable domain IDs because Git history alone cannot address or validate Course entities.

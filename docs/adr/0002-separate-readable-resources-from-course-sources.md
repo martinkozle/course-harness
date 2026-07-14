@@ -1,0 +1,3 @@
+# Separate readable resources from course sources
+
+Use Resource for any durable item the harness can access and reserve Source for the Course-scoped decision that a Resource may ground authored material. Full reading may lazily create an immutable Snapshot and processor-specific Derived Representation without declaring the Resource relevant; claims ultimately link through Evidence and Citations. This extra lifecycle prevents research exploration from polluting a Course's corpus while preserving reproducibility, provider-neutral retrieval, and future connector compatibility, and its boundaries may be revised if implementation evidence shows unnecessary separation.

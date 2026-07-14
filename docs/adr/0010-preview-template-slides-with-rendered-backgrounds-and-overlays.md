@@ -1,0 +1,3 @@
+# Preview template slides with rendered backgrounds and selectable overlays
+
+During Template Profile onboarding, render an empty calibration slide for each mapped layout and retain its image as the fixed browser-preview background, capturing master backgrounds, logos, branding, and decorative shapes without recreating PowerPoint in CSS. Position selectable HTML/SVG content over that image using placeholder geometry for immediate streamed updates, then debounce generation and rendering of the actual slide to an authoritative thumbnail through installed PowerPoint or LibreOffice when available; keep a plain semantic fallback so neither renderer is a hard dependency.
