@@ -13,6 +13,7 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 .ty/
+.cache/
 
 # Frontend
 node_modules/
