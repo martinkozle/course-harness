@@ -14,7 +14,7 @@ The Course Author needs working local software, not a separate academic report: 
 
 ## Solution
 
-Course Harness is a local-first, chat-first application opened on one Course Workspace. A persistent Course Agent collaborates with the Course Author, may delegate bounded research and drafting to Worker Agents, and changes typed Course state only through validated tools. The Course Plan contains an ordered flat list of Lectures; each Lecture may progressively acquire a Presentation, notes, and later other Artifacts.
+Course Harness is a local-first, chat-first application that starts in a restricted Workspace Launcher and binds to at most one explicitly chosen Course Workspace. A persistent Course Agent collaborates with the Course Author, may delegate bounded research and drafting to Worker Agents, and changes typed Course state only through validated tools. The Course Plan contains an ordered flat list of Lectures; each Lecture may progressively acquire a Presentation, notes, and later other Artifacts.
 
 The application maintains a reusable global Library while keeping each Course portable and inspectable through human-readable files and Git-backed history. Local files, uploads, URLs, papers, GitHub material, and future connectors enter a provider-neutral Resource lifecycle, with immutable Source Versions, Evidence, and human-verifiable Citations. Research can remain exploratory until a Resource is admitted as a Course Source.
 
@@ -23,8 +23,8 @@ PowerPoint remains the flagship deliverable. Course Harness onboards arbitrary s
 ## User Stories
 
 1. As a Course Author, I want to create a Course in an empty directory, so that its files and history have a clear home.
-2. As a Course Author, I want to open the current directory from the CLI, so that Course Harness fits a coding-tool-style local workflow.
-3. As a Course Author, I want to choose or reopen a Course Workspace from the UI, so that routine use does not require terminal knowledge.
+2. As a Course Author, I want to pass a directory such as the current directory from the CLI, so that Course Harness fits a coding-tool-style local workflow.
+3. As a Course Author, I want to create, open, or reopen a Course Workspace from a launcher UI, so that routine use does not require terminal knowledge or an implicit filesystem default.
 4. As a Course Author, I want one Course identity per Workspace, so that Sources, history, Artifacts, and restore operations remain unambiguous.
 5. As a Course Author, I want a Workspace explorer, so that I can inspect Course files, assets, Artifacts, and attached locations without using a general-purpose file manager.
 6. As a Course Author, I want Course state stored in readable YAML and Markdown, so that it can be backed up, diffed, and understood outside the application.
@@ -96,9 +96,9 @@ PowerPoint remains the flagship deliverable. Course Harness onboards arbitrary s
 ## Implementation Decisions
 
 - Use Python 3.14 managed by uv, FastAPI, Pydantic AI, AG-UI, React, Bun, Ruff, and ty. Dependency compatibility must be proven and pinned before feature implementation proceeds deeply.
-- Package one Python application that serves the API, AG-UI endpoint, export and ingestion routes, and bundled prebuilt frontend. A local CLI starts the application in a selected directory and opens the browser. Docker remains optional.
+- Package one Python application that serves the Workspace Launcher, API, AG-UI endpoint, export and ingestion routes, and bundled prebuilt frontend. With no path, the local CLI opens the restricted launcher; an explicit path bypasses it. Docker remains optional.
 - Use neutral UI language: “you” where possible and `Course Author` where a role name is required. “Professor” may appear only in historical assignment context, not product copy.
-- Treat one directory as one Course Workspace. New Courses start in empty directories by default, and the UI may switch Workspaces similarly to an editor's Open Folder action.
+- Treat one directory as one Course Workspace. Do not silently use the current directory or an application-managed home directory. The Workspace Launcher creates, opens, and reopens Workspaces explicitly, while an explicit CLI path remains a power-user shortcut; after selection, the process has at most one active Workspace.
 - Keep portable intent in canonical YAML/Markdown: Course Plan, instructions, Sources, ordered Lecture state, Presentations, notes, and Course-owned assets. Generated Artifacts are reproducible outputs rather than authority.
 - Keep chat transcripts, execution events, provider secrets, global Library objects, parser output, thumbnails, and indexes outside canonical Course files.
 - Use platform-native data, cache, configuration, and credential locations. Durable admitted snapshots and Template Profiles belong to user data; Derived Representations and previews belong to disposable cache; credentials use the OS keyring where viable.

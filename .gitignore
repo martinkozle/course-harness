@@ -14,6 +14,8 @@ __pycache__/
 .mypy_cache/
 .ty/
 .cache/
+.direnv/
+/.pre-commit-config.yaml
 
 # Frontend
 node_modules/

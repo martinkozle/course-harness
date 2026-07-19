@@ -76,6 +76,10 @@ _Avoid_: Autonomy Level, permission tier
 The directory opened by the app that contains one Course's human-readable inputs, authored state, and Artifacts, plus hidden derived runtime data.
 _Avoid_: Project, repository, database
 
+**Workspace Launcher**:
+The restricted Course Harness state shown before a Course Workspace is active, from which a Course Author may create, open, or reopen one explicitly.
+_Avoid_: Default Workspace, home Workspace, dashboard
+
 **Course Revision**:
 An atomic, recoverable version of the human-readable Course Workspace created after a meaningful Course Author or agent action.
 _Avoid_: Tool call, autosave, database transaction

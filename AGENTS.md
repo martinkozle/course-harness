@@ -12,7 +12,8 @@ This is a single-context repository using root `CONTEXT.md` and `docs/adr/`. See
 
 ## Architecture invariants
 
-- One running application is bound to one explicit Course Workspace.
+- A running application may be unbound only in the restricted Workspace Launcher; after selection,
+  it is bound to at most one explicit Course Workspace.
 - The Python package owns the HTTP boundary and serves the production React bundle.
 - The browser may inspect the selected Workspace identity through `/api/workspace`; do not add a
   general filesystem browser or accept arbitrary paths through HTTP.
@@ -24,5 +25,9 @@ This is a single-context repository using root `CONTEXT.md` and `docs/adr/`. See
 ## Commands
 
 See `README.md` for setup and launch instructions. Before handing off implementation work, run
-Ruff, Ruff formatting, ty, the Python suite, frontend lint/typechecking/build, and the Playwright
-smoke journey.
+all pre-commit hooks, Ruff, Ruff formatting, ty, the Python suite, frontend
+lint/typechecking/build, and the Playwright smoke journey.
+
+Run development commands inside the pinned Nix shell. When `IN_NIX_SHELL` is absent, prefix a
+command with `nix develop -c`. Add system-facing tools to `flake.nix`; keep Python and frontend
+application dependencies in `pyproject.toml`/`uv.lock` and `package.json`/`bun.lock` respectively.

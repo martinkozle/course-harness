@@ -55,6 +55,12 @@
       "skillPath": "skills/engineering/implement/SKILL.md",
       "computedHash": "2139cfedf24791adbc839aaab6019cff158af1e28bfead020ec6e0ce01b3e74d"
     },
+    "nix-best-practices": {
+      "source": "0xbigboss/claude-code",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/nix-best-practices/SKILL.md",
+      "computedHash": "f6d14bf40d4b505dd50cb389711eae74bc1459740adb27f4641cd75c21042311"
+    },
     "research": {
       "source": "mattpocock/skills",
       "sourceType": "github",
