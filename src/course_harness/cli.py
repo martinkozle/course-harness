@@ -8,6 +8,7 @@ import typer
 import uvicorn
 
 from course_harness.app import create_app
+from course_harness.workspaces import WorkspaceSelectionError, validate_workspace_path
 
 app = typer.Typer(
     add_completion=False,
@@ -22,41 +23,28 @@ def _fail(message: str) -> NoReturn:
 
 
 def _workspace_from(value: str) -> Path:
-    candidate = Path(value).expanduser()
-    if ".." in candidate.parts:
-        _fail(f"Workspace path cannot contain parent traversal: {candidate}")
-    if not candidate.exists():
-        _fail(f"Workspace does not exist: {candidate}")
-    absolute_candidate = candidate.absolute()
-    filesystem_root = Path(absolute_candidate.anchor)
-    path_components = (absolute_candidate, *absolute_candidate.parents)
-    if any(path.is_symlink() and path.parent != filesystem_root for path in path_components):
-        _fail(f"Workspace path cannot contain symbolic links: {candidate}")
-    if not candidate.is_dir():
-        _fail(f"Workspace is not a directory: {candidate}")
-
-    workspace = candidate.resolve(strict=True)
-    if workspace == filesystem_root:
-        _fail("The filesystem root cannot be used as a Workspace")
-    return workspace
+    try:
+        return validate_workspace_path(value)
+    except WorkspaceSelectionError as error:
+        _fail(str(error))
 
 
 @app.command()
 def launch(
     workspace_path: Annotated[
-        str,
+        str | None,
         typer.Argument(
             metavar="WORKSPACE",
-            help="Existing directory to use as the Course Workspace",
+            help="Existing Course Workspace; omit to open the Workspace Launcher",
         ),
-    ],
+    ] = None,
     port: Annotated[int, typer.Option(min=1, max=65535, help="Local port")] = 8765,
     no_browser: Annotated[
         bool,
         typer.Option("--no-browser", help="Start without opening the application in a browser"),
     ] = False,
 ) -> None:
-    workspace = _workspace_from(workspace_path)
+    workspace = _workspace_from(workspace_path) if workspace_path is not None else None
     host = "127.0.0.1"
     url = f"http://{host}:{port}"
 
