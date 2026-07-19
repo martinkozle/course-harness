@@ -189,28 +189,26 @@ function CourseSetup({ workspace, busy, error, onCreate }: CourseSetupProps) {
           />
         </div>
         <div className="field">
-          <label htmlFor="course-goals">Goals</label>
+          <label htmlFor="course-goals">Course goals (optional)</label>
           <textarea
             id="course-goals"
             value={goals}
             onChange={(event) => setGoals(event.target.value)}
             aria-describedby="goals-help"
-            required
             rows={5}
           />
-          <small id="goals-help">One goal per line</small>
+          <small id="goals-help">Broad teaching intentions, one per line</small>
         </div>
         <div className="field">
-          <label htmlFor="course-outcomes">Outcomes</label>
+          <label htmlFor="course-outcomes">Learning outcomes (optional)</label>
           <textarea
             id="course-outcomes"
             value={outcomes}
             onChange={(event) => setOutcomes(event.target.value)}
             aria-describedby="outcomes-help"
-            required
             rows={5}
           />
-          <small id="outcomes-help">One observable outcome per line</small>
+          <small id="outcomes-help">What learners should be able to do, one per line</small>
         </div>
         <div className="field wide-field lecture-field">
           <label htmlFor="course-lectures">Lectures in teaching order</label>
@@ -591,13 +589,43 @@ export function App() {
     await runMutation(() => loadWorkspace(workspace), "The Course could not be read.");
   }
 
+  async function returnToLauncher() {
+    await runMutation(async () => {
+      const closeResponse = await fetch("/api/workspace/close", { method: "POST" });
+      if (!closeResponse.ok) {
+        throw new Error(await responseError(closeResponse));
+      }
+      setWorkspace(null);
+      setCourse(null);
+      setFiles([]);
+
+      const recentResponse = await fetch("/api/launcher/recent");
+      if (!recentResponse.ok) {
+        throw new Error(await responseError(recentResponse));
+      }
+      setRecent((await recentResponse.json()) as RecentWorkspace[]);
+    }, "The Workspace Launcher could not be opened.");
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
         <Brand />
-        <p className="local-status">
-          <span aria-hidden="true" /> {workspace ? "One Workspace active" : "Local session"}
-        </p>
+        <div className="topbar-actions">
+          <p className="local-status">
+            <span aria-hidden="true" /> {workspace ? "One Workspace active" : "Local session"}
+          </p>
+          {workspace ? (
+            <button
+              className="launcher-return"
+              type="button"
+              disabled={busy}
+              onClick={() => void returnToLauncher()}
+            >
+              Back to Workspace Launcher
+            </button>
+          ) : null}
+        </div>
       </header>
 
       {workspace === undefined ? (

@@ -8,7 +8,12 @@ import typer
 import uvicorn
 
 from course_harness.app import create_app
-from course_harness.workspaces import WorkspaceSelectionError, validate_workspace_path
+from course_harness.workspaces import (
+    WorkspaceSelectionError,
+    default_recent_store_path,
+    remember_workspace,
+    validate_workspace_path,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -45,13 +50,19 @@ def launch(
     ] = False,
 ) -> None:
     workspace = _workspace_from(workspace_path) if workspace_path is not None else None
+    recent_store_path = default_recent_store_path()
+    if workspace is not None:
+        try:
+            remember_workspace(recent_store_path, workspace)
+        except OSError as error:
+            _fail(f"Recent Workspace data could not be saved: {error}")
     host = "127.0.0.1"
     url = f"http://{host}:{port}"
 
     if not no_browser:
         threading.Timer(0.75, webbrowser.open, args=(url,)).start()
 
-    uvicorn.run(create_app(workspace), host=host, port=port)
+    uvicorn.run(create_app(workspace, recent_store_path=recent_store_path), host=host, port=port)
 
 
 def main() -> None:

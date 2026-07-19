@@ -120,6 +120,26 @@ footer {
   text-transform: uppercase;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+
+.launcher-return {
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: var(--cobalt-dark);
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.launcher-return:hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
 .local-status span {
   width: 8px;
   height: 8px;

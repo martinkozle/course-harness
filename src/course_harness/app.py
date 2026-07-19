@@ -113,6 +113,13 @@ def create_app(
         active = require_workspace()
         return WorkspaceResponse(name=active.name, path=str(active))
 
+    @app.post("/api/workspace/close", status_code=204)
+    async def close_workspace() -> Response:
+        nonlocal workspace
+        require_workspace()
+        workspace = None
+        return Response(status_code=204)
+
     @app.get("/api/workspace/files", response_model=list[WorkspaceEntry])
     async def workspace_files() -> list[WorkspaceEntry]:
         active = require_workspace()

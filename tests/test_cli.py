@@ -35,21 +35,25 @@ async def test_cli_with_dot_binds_the_current_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured: dict[str, Any] = {}
+    recent_store = tmp_path / "user-data" / "recent.json"
 
     def capture_server(application: Any, **options: Any) -> None:
         captured["application"] = application
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("course_harness.cli.uvicorn.run", capture_server)
+    monkeypatch.setattr("course_harness.cli.default_recent_store_path", lambda: recent_store)
 
     result = CliRunner().invoke(app, [".", "--no-browser"])
 
     assert result.exit_code == 0
     transport = httpx2.ASGITransport(app=captured["application"])
     async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/workspace")
-    assert response.status_code == 200
-    assert response.json()["path"] == str(tmp_path)
+        workspace_response = await client.get("/api/workspace")
+        recent_response = await client.get("/api/launcher/recent")
+    assert workspace_response.status_code == 200
+    assert workspace_response.json()["path"] == str(tmp_path)
+    assert [item["path"] for item in recent_response.json()] == [str(tmp_path)]
 
 
 def run_cli(workspace: Path) -> subprocess.CompletedProcess[str]:

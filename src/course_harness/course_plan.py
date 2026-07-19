@@ -23,8 +23,8 @@ class CoursePlanInput(BaseModel):
 
     title: str = Field(min_length=1, max_length=200)
     audience: str = Field(min_length=1, max_length=1000)
-    goals: list[Goal] = Field(min_length=1)
-    outcomes: list[Outcome] = Field(min_length=1)
+    goals: list[Goal] = Field(default_factory=list)
+    outcomes: list[Outcome] = Field(default_factory=list)
     lectures: list[LectureInput] = Field(min_length=1)
 
 
@@ -43,8 +43,8 @@ class CoursePlan(BaseModel):
     id: str = Field(pattern=r"^course-[0-9a-f]{12}$")
     title: str = Field(min_length=1, max_length=200)
     audience: str = Field(min_length=1, max_length=1000)
-    goals: list[Goal] = Field(min_length=1)
-    outcomes: list[Outcome] = Field(min_length=1)
+    goals: list[Goal] = Field(default_factory=list)
+    outcomes: list[Outcome] = Field(default_factory=list)
     lectures: list[Lecture] = Field(min_length=1)
 
     @model_validator(mode="after")

@@ -62,6 +62,31 @@ async def test_launcher_opens_one_workspace_through_the_native_picker(tmp_path: 
 
 
 @pytest.mark.anyio
+async def test_closing_a_workspace_returns_to_an_unbound_launcher(tmp_path: Path) -> None:
+    first_workspace = tmp_path / "first-course"
+    first_workspace.mkdir()
+    second_workspace = tmp_path / "second-course"
+    second_workspace.mkdir()
+    transport = httpx2.ASGITransport(
+        app=create_app(
+            first_workspace,
+            folder_picker=lambda: second_workspace,
+            recent_store_path=tmp_path / "recent.json",
+        )
+    )
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        close_response = await client.post("/api/workspace/close")
+        unbound_response = await client.get("/api/workspace")
+        open_response = await client.post("/api/launcher/open-folder")
+
+    assert close_response.status_code == 204
+    assert unbound_response.status_code == 409
+    assert open_response.status_code == 200
+    assert open_response.json()["path"] == str(second_workspace)
+
+
+@pytest.mark.anyio
 async def test_recent_store_failure_leaves_the_launcher_unbound(tmp_path: Path) -> None:
     workspace = tmp_path / "course"
     workspace.mkdir()
@@ -214,6 +239,27 @@ async def test_course_plan_is_created_once_and_restored_without_a_runtime_cache(
 
     assert reopened_response.status_code == 200
     assert reopened_response.json() == plan
+
+
+@pytest.mark.anyio
+async def test_course_can_be_created_without_goals_or_outcomes(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    transport = httpx2.ASGITransport(app=create_app(workspace))
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        create_response = await client.post(
+            "/api/course",
+            json={
+                "title": "Practical Statistics",
+                "audience": "Working analysts",
+                "lectures": [{"title": "Reasoning with variation"}],
+            },
+        )
+
+    assert create_response.status_code == 201
+    assert create_response.json()["goals"] == []
+    assert create_response.json()["outcomes"] == []
 
 
 @pytest.mark.anyio
