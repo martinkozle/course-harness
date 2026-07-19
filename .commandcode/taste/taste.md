@@ -35,3 +35,4 @@
 
 # ui
 - Don't show "no results" placeholder text in search until the user has explicitly submitted a search query. Confidence: 0.70
+- When displaying "no results" after a search, show the last-submitted query text (not the current live input value) so the message doesn't change as the user edits the input afterward. Confidence: 0.65

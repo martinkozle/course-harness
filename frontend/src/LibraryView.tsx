@@ -342,10 +342,7 @@ export function LibraryView({
 							value={searchQuery}
 							onChange={(e) => {
 								setSearchQuery(e.target.value);
-								if (!e.target.value.trim()) {
-									setSearchResults([]);
-									setHasSearched(false);
-								}
+								setHasSearched(false);
 							}}
 							placeholder="Search admitted sources…"
 							aria-label="Search source content"
