@@ -132,6 +132,21 @@ export function LibraryView({
 		}
 	}
 
+	async function handleRemoveSource(sourceId: string) {
+		try {
+			const response = await fetch(
+				`/api/sources/${encodeURIComponent(sourceId)}`,
+				{ method: "DELETE" },
+			);
+			if (!response.ok) throw new Error(await responseError(response));
+			const updated = await fetch("/api/sources");
+			if (!updated.ok) throw new Error(await responseError(updated));
+			onSourcesChange((await updated.json()) as Source[]);
+		} catch {
+			// Source removal failure is non-blocking
+		}
+	}
+
 	async function handleClearCache() {
 		try {
 			await fetch("/api/resources/cache", { method: "DELETE" });
@@ -261,9 +276,18 @@ export function LibraryView({
 											{statusBadge(resource.status)}
 										</strong>
 										{admitted ? (
-											<strong className="status-badge status-ready">
-												Admitted
-											</strong>
+											<>
+												<strong className="status-badge status-ready">
+													Admitted
+												</strong>
+												<button
+													className="quiet-action"
+													type="button"
+													onClick={() => void handleRemoveSource(admitted.id)}
+												>
+													Remove
+												</button>
+											</>
 										) : null}
 										<span className="library-name">
 											{resource.location ?? resource.resource_id}

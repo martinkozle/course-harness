@@ -145,15 +145,11 @@ def get_resource_state(data_dir: Path, cache_dir: Path, resource_id: str) -> Res
 
 
 def clear_processing_cache(cache_dir: Path) -> None:
+    import shutil
+
     derived = derived_dir(cache_dir)
     if derived.is_dir():
-        for child in derived.iterdir():
-            if child.is_dir():
-                for item in child.iterdir():
-                    item.unlink(missing_ok=True)
-                child.rmdir()
-            else:
-                child.unlink(missing_ok=True)
+        shutil.rmtree(derived)
     from course_harness.search import search_db_path  # noqa: PLC0415
 
     db_path = search_db_path(cache_dir)
