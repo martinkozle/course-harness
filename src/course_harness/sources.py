@@ -68,10 +68,7 @@ def admit_source(
     data_dir: Path,
     resource_id: str,
     label: str | None = None,
-    *,
-    cache_dir: Path | None = None,
 ) -> Source:
-    from course_harness.library import derived_dir  # noqa: PLC0415
     from course_harness.resources import read_library_index  # noqa: PLC0415
 
     index = read_library_index(data_dir / "registry.json")
@@ -82,13 +79,6 @@ def admit_source(
     if resource.snapshot_hash is None:
         raise ValueError(
             f"Resource {resource_id} has not been processed. Process it in the Library first."
-        )
-
-    effective_cache = cache_dir or derived_dir(None).parent
-    extracted = derived_dir(effective_cache) / resource.snapshot_hash / "extracted.md"
-    if not extracted.is_file():
-        raise ValueError(
-            f"Resource {resource_id} has no searchable content. Process it in the Library first."
         )
 
     existing_index = read_sources_index(workspace) or SourcesIndex()

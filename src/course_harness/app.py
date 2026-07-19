@@ -594,7 +594,6 @@ def create_app(
                     data_dir,
                     request.resource_id,
                     label=request.label,
-                    cache_dir=cache_dir,
                 )
             except ValueError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
@@ -641,6 +640,20 @@ def create_app(
             sources_by_version[s.source_version_id] = (s.id, s.resource_id, s.label)
 
         hits = search_module.search_raw(cache_dir, request.query, limit=request.limit or 10)
+        logger.info(
+            "Search '%s': %d FTS5 hits, %d sources (version keys: %s)",
+            request.query,
+            len(hits),
+            len(sources_by_version),
+            [k[:12] + "…" for k in sources_by_version],
+        )
+        for h in hits:
+            logger.info(
+                "  hit content_hash=%s… matched=%s",
+                h.content_hash[:12],
+                h.content_hash in sources_by_version,
+            )
+
         return search_module.enrich_search_results(hits, sources_by_version)
 
     @app.get("/api/sources/{source_id}/content")
