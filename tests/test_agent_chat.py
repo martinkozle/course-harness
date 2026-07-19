@@ -1,0 +1,346 @@
+import json
+import os
+from collections.abc import AsyncIterator
+from pathlib import Path
+from typing import Any
+
+import httpx2
+import pytest
+from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
+from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
+
+from course_harness.app import create_app
+
+
+def _provider_request() -> dict[str, object]:
+    return {
+        "kind": "openrouter",
+        "model": "openai/gpt-oss-20b:free",
+        "api_key": "openrouter-secret",
+        "capabilities": {
+            "tool_calling": True,
+            "structured_output": True,
+            "streaming": True,
+            "context_window": 131_072,
+            "vision": False,
+        },
+    }
+
+
+async def _post_stream(app: Any, path: str, payload: object) -> tuple[int, str]:
+    body = json.dumps(payload).encode()
+    request_sent = False
+    response_status = 0
+    response_parts: list[bytes] = []
+
+    async def receive() -> dict[str, object]:
+        nonlocal request_sent
+        if request_sent:
+            return {"type": "http.disconnect"}
+        request_sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        nonlocal response_status
+        if message["type"] == "http.response.start":
+            response_status = message["status"]
+        elif message["type"] == "http.response.body" and message.get("body"):
+            response_parts.append(message["body"])
+
+    await app(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.4"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode(),
+            "query_string": b"",
+            "root_path": "",
+            "headers": [
+                (b"accept", b"text/event-stream"),
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+            "client": ("127.0.0.1", 50000),
+            "server": ("test", 80),
+        },
+        receive,
+        send,
+    )
+    return response_status, b"".join(response_parts).decode()
+
+
+@pytest.mark.anyio
+async def test_provider_configuration_is_kept_outside_the_course_workspace(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    provider_store = tmp_path / "user-data" / "provider"
+    transport = httpx2.ASGITransport(app=create_app(workspace, provider_store_path=provider_store))
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        before = await client.get("/api/provider")
+        configured = await client.put(
+            "/api/provider",
+            json=_provider_request(),
+        )
+        after = await client.get("/api/provider")
+
+    assert before.status_code == 200
+    assert before.json() == {"configured": False}
+    assert configured.status_code == 200
+    assert configured.json() == {
+        "configured": True,
+        "kind": "openrouter",
+        "model": "openai/gpt-oss-20b:free",
+        "base_url": "https://openrouter.ai/api/v1",
+        "capabilities": {
+            "tool_calling": True,
+            "structured_output": True,
+            "streaming": True,
+            "context_window": 131_072,
+            "vision": False,
+        },
+        "diagnostics": [
+            "Vision input is unavailable; image attachments cannot be used with this model."
+        ],
+    }
+    assert after.json() == configured.json()
+    assert "openrouter-secret" not in repr(after.json())
+    assert list(workspace.iterdir()) == []
+    assert "openrouter-secret" not in "".join(
+        path.read_text(encoding="utf-8") for path in workspace.rglob("*") if path.is_file()
+    )
+    assert (provider_store / "provider.json").is_file()
+    assert (provider_store / "credentials.json").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.anyio
+async def test_provider_capability_failures_are_explained_before_a_run(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    provider_store = tmp_path / "user-data" / "provider"
+    transport = httpx2.ASGITransport(app=create_app(workspace, provider_store_path=provider_store))
+    request = _provider_request()
+    request["capabilities"] = {
+        "tool_calling": False,
+        "structured_output": False,
+        "streaming": False,
+        "context_window": 8_192,
+        "vision": False,
+    }
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.put("/api/provider", json=request)
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "Tool calling is required" in detail
+    assert "Structured output is required" in detail
+    assert "Streaming is required" in detail
+    assert "at least 16,384 tokens" in detail
+    assert not provider_store.exists()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("kind", "base_url", "expected_url"),
+    [
+        ("anthropic", None, "https://api.anthropic.com"),
+        ("openai-compatible", "http://127.0.0.1:11434/v1", "http://127.0.0.1:11434/v1"),
+    ],
+)
+async def test_direct_and_openai_compatible_providers_are_supported(
+    tmp_path: Path, kind: str, base_url: str | None, expected_url: str
+) -> None:
+    workspace = tmp_path / kind
+    workspace.mkdir()
+    request = _provider_request()
+    request.update({"kind": kind, "model": "course-planning-model", "base_url": base_url})
+    transport = httpx2.ASGITransport(
+        app=create_app(workspace, provider_store_path=tmp_path / "provider")
+    )
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.put("/api/provider", json=request)
+
+    assert response.status_code == 200
+    assert response.json()["kind"] == kind
+    assert response.json()["base_url"] == expected_url
+
+
+@pytest.mark.anyio
+async def test_chat_streams_a_validated_course_plan_and_survives_reopening(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    provider_store = tmp_path / "user-data" / "provider"
+    chat_store = tmp_path / "user-data" / "chat"
+
+    async def course_planning_model(
+        messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        tool_has_returned = any(
+            isinstance(message, ModelRequest)
+            and any(isinstance(part, ToolReturnPart) for part in message.parts)
+            for message in messages
+        )
+        if not tool_has_returned:
+            command = {
+                "title": "Causal Inference in Practice",
+                "audience": "Applied researchers who know regression",
+                "goals": ["Reason clearly about interventions"],
+                "outcomes": ["Draw and critique a causal graph"],
+                "lectures": [
+                    {"title": "From association to intervention", "group": "Foundations"},
+                    {"title": "Confounding and adjustment", "group": "Foundations"},
+                ],
+            }
+            yield {
+                0: DeltaToolCall(
+                    name="replace_course_plan",
+                    json_args=json.dumps({"command": command}),
+                    tool_call_id="course-plan-1",
+                )
+            }
+        else:
+            yield "I created a two-Lecture Course Plan."
+
+    model = FunctionModel(stream_function=course_planning_model)
+    app = create_app(
+        workspace,
+        provider_store_path=provider_store,
+        chat_store_path=chat_store,
+        agent_model=model,
+    )
+    run_input = {
+        "threadId": "course-agent",
+        "runId": "run-1",
+        "state": {},
+        "messages": [
+            {
+                "id": "user-1",
+                "role": "user",
+                "content": "Create a practical causal inference Course for applied researchers.",
+            }
+        ],
+        "tools": [],
+        "context": [],
+        "forwardedProps": {},
+    }
+
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        stream_status, stream_body = await _post_stream(app, "/api/agent", run_input)
+        course_response = await client.get("/api/course")
+        chat_response = await client.get("/api/chat")
+        await client.post("/api/workspace/close")
+
+    assert stream_status == 200
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in stream_body.splitlines()
+        if line.startswith("data: ")
+    ]
+    event_types = [event["type"] for event in events]
+    assert event_types[0] == "RUN_STARTED"
+    assert "TOOL_CALL_START" in event_types
+    assert "ACTIVITY_SNAPSHOT" in event_types
+    assert "STATE_SNAPSHOT" in event_types
+    assert "TEXT_MESSAGE_CONTENT" in event_types
+    assert event_types[-1] == "RUN_FINISHED"
+
+    assert course_response.status_code == 200
+    plan = course_response.json()
+    assert plan["title"] == "Causal Inference in Practice"
+    assert [lecture["title"] for lecture in plan["lectures"]] == [
+        "From association to intervention",
+        "Confounding and adjustment",
+    ]
+    assert "title: Causal Inference in Practice" in (workspace / "course.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert chat_response.json() == {
+        "messages": [
+            {
+                "id": chat_response.json()["messages"][0]["id"],
+                "role": "user",
+                "content": "Create a practical causal inference Course for applied researchers.",
+            },
+            {
+                "id": chat_response.json()["messages"][1]["id"],
+                "role": "assistant",
+                "content": "I created a two-Lecture Course Plan.",
+            },
+        ]
+    }
+
+    reopened = create_app(
+        workspace,
+        provider_store_path=provider_store,
+        chat_store_path=chat_store,
+        agent_model=model,
+    )
+    reopened_transport = httpx2.ASGITransport(app=reopened)
+    async with httpx2.AsyncClient(transport=reopened_transport, base_url="http://test") as client:
+        reopened_chat = await client.get("/api/chat")
+        reopened_course = await client.get("/api/course")
+
+    assert reopened_chat.json() == chat_response.json()
+    assert reopened_course.json() == plan
+
+
+@pytest.mark.anyio
+async def test_live_openrouter_smoke_uses_only_an_explicitly_free_model(
+    tmp_path: Path,
+) -> None:
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    model_name = os.environ.get("COURSE_HARNESS_LIVE_OPENROUTER_MODEL")
+    if not api_key or not model_name:
+        pytest.skip("set both live OpenRouter variables to run the optional smoke check")
+    if not model_name.endswith(":free"):
+        pytest.skip("COURSE_HARNESS_LIVE_OPENROUTER_MODEL must end in :free")
+
+    workspace = tmp_path / "live-course"
+    workspace.mkdir()
+    app = create_app(
+        workspace,
+        provider_store_path=tmp_path / "user-data" / "provider",
+        chat_store_path=tmp_path / "user-data" / "chat",
+    )
+    transport = httpx2.ASGITransport(app=app)
+    provider_request = _provider_request()
+    provider_request.update({"model": model_name, "api_key": api_key})
+    run_input = {
+        "threadId": "course-agent",
+        "runId": "live-free-smoke",
+        "state": {},
+        "messages": [
+            {
+                "id": "live-user",
+                "role": "user",
+                "content": "Create a one-Lecture Course Plan about careful statistical reasoning.",
+            }
+        ],
+        "tools": [],
+        "context": [],
+        "forwardedProps": {},
+    }
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        configured = await client.put("/api/provider", json=provider_request)
+        stream_status, stream_body = await _post_stream(app, "/api/agent", run_input)
+        created = await client.get("/api/course")
+
+    assert configured.status_code == 200
+    assert api_key not in repr(configured.json())
+    assert stream_status == 200
+    assert '"type":"RUN_FINISHED"' in stream_body
+    assert created.status_code == 200

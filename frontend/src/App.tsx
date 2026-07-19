@@ -1,5 +1,12 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 
+import {
+  AgentPanel,
+  type ChatMessage,
+  type CoursePlan,
+  type ProviderStatus,
+} from "./AgentPanel";
+
 type Workspace = {
   name: string;
   path: string;
@@ -16,16 +23,6 @@ type Lecture = {
 };
 
 type LectureDraft = Pick<Lecture, "id" | "title">;
-
-type CoursePlan = {
-  schema_version: 1;
-  id: string;
-  title: string;
-  audience: string;
-  goals: string[];
-  outcomes: string[];
-  lectures: Lecture[];
-};
 
 type WorkspaceEntry = {
   path: string;
@@ -163,6 +160,7 @@ type WorkspaceShellProps = {
   busy: boolean;
   sections: SectionLink[];
   onAllCourses: () => Promise<void>;
+  agent: React.ReactNode;
   children: React.ReactNode;
 };
 
@@ -171,6 +169,7 @@ function WorkspaceShell({
   busy,
   sections,
   onAllCourses,
+  agent,
   children,
 }: WorkspaceShellProps) {
   return (
@@ -203,7 +202,10 @@ function WorkspaceShell({
           </nav>
         ) : null}
       </aside>
-      {children}
+      <div className="workspace-stage">
+        {children}
+        {agent}
+      </div>
     </div>
   );
 }
@@ -617,11 +619,15 @@ function CourseView({
   );
 }
 
-const setupSections: SectionLink[] = [{ id: "course-setup", label: "Course setup" }];
+const setupSections: SectionLink[] = [
+  { id: "course-setup", label: "Course setup" },
+  { id: "agent", label: "Course Agent" },
+];
 const courseSections: SectionLink[] = [
   { id: "syllabus", label: "Syllabus" },
   { id: "intent", label: "Course intent" },
   { id: "files", label: "Files" },
+  { id: "agent", label: "Course Agent" },
 ];
 
 export function App() {
@@ -629,6 +635,8 @@ export function App() {
   const [recent, setRecent] = useState<RecentWorkspace[]>([]);
   const [course, setCourse] = useState<CoursePlan | null | undefined>(undefined);
   const [files, setFiles] = useState<WorkspaceEntry[]>([]);
+  const [provider, setProvider] = useState<ProviderStatus>({ configured: false });
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -636,9 +644,11 @@ export function App() {
     scrollToTop();
     setWorkspace(active);
     setCourse(undefined);
-    const [courseResponse, filesResponse] = await Promise.all([
+    const [courseResponse, filesResponse, providerResponse, chatResponse] = await Promise.all([
       fetch("/api/course", { signal }),
       fetch("/api/workspace/files", { signal }),
+      fetch("/api/provider", { signal }),
+      fetch("/api/chat", { signal }),
     ]);
     if (courseResponse.status === 404) {
       setCourse(null);
@@ -652,6 +662,15 @@ export function App() {
     } else {
       throw new Error(await responseError(filesResponse));
     }
+    if (!providerResponse.ok) {
+      throw new Error(await responseError(providerResponse));
+    }
+    setProvider((await providerResponse.json()) as ProviderStatus);
+    if (!chatResponse.ok) {
+      throw new Error(await responseError(chatResponse));
+    }
+    const transcript = (await chatResponse.json()) as { messages: ChatMessage[] };
+    setChatMessages(transcript.messages);
   }, []);
 
   useEffect(() => {
@@ -804,6 +823,7 @@ export function App() {
       setWorkspace(null);
       setCourse(null);
       setFiles([]);
+      setChatMessages([]);
 
       const recentResponse = await fetch("/api/launcher/recent");
       if (!recentResponse.ok) {
@@ -839,6 +859,21 @@ export function App() {
         busy={busy}
         sections={sections}
         onAllCourses={returnToCourses}
+        agent={
+          <AgentPanel
+            key={workspace.path}
+            course={course ?? null}
+            initialMessages={chatMessages}
+            initialProvider={provider}
+            onCourseChange={async (updated) => {
+              setCourse(updated);
+              const filesResponse = await fetch("/api/workspace/files");
+              if (filesResponse.ok) {
+                setFiles((await filesResponse.json()) as WorkspaceEntry[]);
+              }
+            }}
+          />
+        }
       >
         {course === undefined && error ? (
           <CourseReadError workspace={workspace} error={error} busy={busy} onRetry={retryCourse} />

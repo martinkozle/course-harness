@@ -5,7 +5,7 @@ export default defineConfig({
   outputDir: "test-results",
   reporter: "list",
   use: {
-    baseURL: "http://127.0.0.1:8765",
+    baseURL: "http://127.0.0.1:18765",
     launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
       ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
       : undefined,
@@ -13,7 +13,7 @@ export default defineConfig({
   },
   webServer: {
     command: "uv run python tests/e2e/run_smoke_server.py",
-    url: "http://127.0.0.1:8765/api/health",
+    url: "http://127.0.0.1:18765/api/health",
     env: { ...process.env, UV_CACHE_DIR: ".cache/uv" },
     reuseExistingServer: false,
     timeout: 30_000,

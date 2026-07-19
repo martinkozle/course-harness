@@ -1,12 +1,29 @@
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
+from pydantic_ai import AgentRunResult
+from pydantic_ai.models import Model
+from pydantic_ai.ui.ag_ui import AGUIAdapter
+from starlette.requests import Request
+from starlette.responses import Response as StarletteResponse
 from starlette.staticfiles import StaticFiles
 
+from course_harness.chat_history import (
+    ChatTranscript,
+    read_chat_history,
+    read_chat_transcript,
+    save_chat_history,
+)
+from course_harness.course_agent import (
+    CourseAgentDeps,
+    CourseAgentState,
+    build_provider_model,
+    create_course_agent,
+)
 from course_harness.course_plan import (
     CoursePlan,
     CoursePlanInput,
@@ -16,6 +33,17 @@ from course_harness.course_plan import (
     initialize_workspace_history,
     read_course_plan,
     write_course_plan,
+)
+from course_harness.providers import (
+    ProviderCapabilityError,
+    ProviderConfigurationRequest,
+    ProviderStatus,
+    default_provider_store_path,
+    provider_status,
+    read_provider_api_key,
+    read_provider_configuration,
+    require_planning_capabilities,
+    save_provider_configuration,
 )
 from course_harness.workspaces import (
     WorkspaceSelectionError,
@@ -58,10 +86,16 @@ def create_app(
     *,
     folder_picker: Callable[[], Path | None] = native_folder_picker,
     recent_store_path: Path | None = None,
+    provider_store_path: Path | None = None,
+    chat_store_path: Path | None = None,
+    agent_model: Model | None = None,
 ) -> FastAPI:
     """Create the HTTP application, optionally bound to one Course Workspace."""
     app = FastAPI(title="Course Harness")
     recent_path = recent_store_path or default_recent_store_path()
+    provider_path = provider_store_path or default_provider_store_path()
+    chat_path = chat_store_path or recent_path.parent / "chat"
+    course_agent = create_course_agent()
 
     def require_workspace() -> Path:
         if workspace is None:
@@ -205,6 +239,64 @@ def create_app(
     async def course_plan() -> CoursePlan:
         _, plan = require_course_plan()
         return plan
+
+    @app.get("/api/provider", response_model=ProviderStatus, response_model_exclude_none=True)
+    async def configured_provider() -> ProviderStatus:
+        return provider_status(provider_path)
+
+    @app.put("/api/provider", response_model=ProviderStatus, response_model_exclude_none=True)
+    async def configure_provider(request: ProviderConfigurationRequest) -> ProviderStatus:
+        try:
+            require_planning_capabilities(request.capabilities)
+        except ProviderCapabilityError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        save_provider_configuration(provider_path, request)
+        return provider_status(provider_path)
+
+    @app.get("/api/chat", response_model=ChatTranscript)
+    async def chat_transcript() -> ChatTranscript:
+        active = require_workspace()
+        return read_chat_transcript(chat_path, active)
+
+    @app.post("/api/agent")
+    async def run_course_agent(request: Request) -> StarletteResponse:
+        active = require_workspace()
+        configuration = read_provider_configuration(provider_path)
+        api_key = read_provider_api_key(provider_path)
+        if configuration is None or api_key is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Configure a model provider before starting the Course Agent.",
+            )
+        try:
+            require_planning_capabilities(configuration.capabilities)
+        except ProviderCapabilityError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+        try:
+            plan = read_course_plan(active)
+        except InvalidCoursePlan as error:
+            raise HTTPException(
+                status_code=422, detail=f"course.yaml is invalid: {error}"
+            ) from error
+        deps = CourseAgentDeps(state=CourseAgentState(course=plan), workspace=active)
+        history = read_chat_history(chat_path, active)
+        model = agent_model or build_provider_model(configuration, api_key)
+
+        async def persist(result: object) -> None:
+            completed = cast(AgentRunResult[str], result)
+            save_chat_history(chat_path, active, completed.all_messages())
+
+        return await AGUIAdapter.dispatch_request(
+            request,
+            agent=course_agent,
+            model=model,
+            deps=deps,
+            message_history=history,
+            conversation_id="course-agent",
+            on_complete=persist,
+            allowed_file_url_schemes=frozenset(),
+        )
 
     @app.post("/api/course", response_model=CoursePlan, status_code=201)
     async def create_course(course_input: CoursePlanInput) -> CoursePlan:

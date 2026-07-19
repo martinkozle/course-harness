@@ -1,20 +1,21 @@
 import { expect, test } from "@playwright/test";
 
-test("Course Author creates and revises a Course from Courses", async ({ page }) => {
+test("Course Author creates a Course through chat and revises its Syllabus", async ({ page }) => {
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "Your courses" })).toBeVisible();
   await page.getByRole("button", { name: "New course" }).click();
 
   await expect(page.getByRole("heading", { name: "Give the course a clear shape." })).toBeVisible();
-  await page.getByLabel("Course title").fill("Causal Inference in Practice");
-  await page.getByLabel("Audience").fill("Applied researchers who know regression");
+  await page.getByLabel("API key").fill("deterministic-test-key");
+  await page.getByRole("button", { name: "Save connection" }).click();
   await page
-    .getByLabel("Lectures in teaching order")
-    .fill("From association to intervention\nConfounding and adjustment");
-  await page.getByRole("button", { name: "Create course" }).click();
+    .getByLabel("Message the Course Agent")
+    .fill("Create a practical causal inference Course for applied researchers.");
+  await page.getByRole("button", { name: "Send message" }).click();
 
   await expect(page.getByRole("heading", { name: "Causal Inference in Practice" })).toBeVisible();
+  await expect(page.getByText("I created a two-Lecture Course Plan.")).toBeVisible();
   const lectureSpine = page.getByRole("region", { name: "Lecture spine" });
   await expect(lectureSpine.getByRole("listitem")).toHaveCount(2);
   await expect(page.getByRole("region", { name: "Course files" }).getByText(/course\.yaml/)).toBeVisible();

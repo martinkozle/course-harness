@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [
   "fastapi",
-  "pydantic-ai-slim[ag-ui]",
+  "pydantic-ai-slim[ag-ui,anthropic,openai]",
   "pyyaml>=6.0.3",
   "typer",
   "uvicorn[standard]",
