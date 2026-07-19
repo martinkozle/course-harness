@@ -17,6 +17,8 @@ from starlette.staticfiles import StaticFiles
 
 from course_harness import library
 from course_harness import resources as res
+from course_harness import search as search_module
+from course_harness import sources as sources_module
 from course_harness.chat_history import (
     ChatTranscript,
     read_chat_history,
@@ -403,6 +405,8 @@ def create_app(
                 status_code=422, detail=f"course.yaml is invalid: {error}"
             ) from error
 
+        sources_index = sources_module.read_sources_index(active)
+
         import json as _json_mod
 
         body = await request.body()
@@ -415,7 +419,15 @@ def create_app(
             pass
         mode = AgentMode(props.get("mode", AgentMode.GUIDED))
 
-        deps = CourseAgentDeps(course_state=CourseAgentState(course=plan), workspace=active)
+        deps = CourseAgentDeps(
+            course_state=CourseAgentState(
+                course=plan,
+                sources=sources_index.sources if sources_index else [],
+            ),
+            workspace=active,
+            data_dir=data_dir,
+            cache_dir=cache_dir,
+        )
         history = read_chat_history(chat_path, active)
 
         async def persist_if_not_cancelled(result: object) -> None:
@@ -508,6 +520,124 @@ def create_app(
             )
             write_course_plan(active, updated)
             return updated
+
+    @app.get("/api/sources", response_model=list[sources_module.Source])
+    async def list_sources() -> list[sources_module.Source]:
+        active = require_workspace()
+        index = sources_module.read_sources_index(active)
+        if index is None:
+            return []
+        return index.sources
+
+    @app.post(
+        "/api/sources",
+        response_model=sources_module.Source,
+        status_code=201,
+    )
+    async def admit_source_route(
+        request: sources_module.SourceAdmissionRequest,
+    ) -> sources_module.Source:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            try:
+                return sources_module.admit_source(
+                    active,
+                    data_dir,
+                    request.resource_id,
+                    label=request.label,
+                    cache_dir=cache_dir,
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.get("/api/sources/{source_id}", response_model=sources_module.Source)
+    async def source_detail(source_id: str) -> sources_module.Source:
+        active = require_workspace()
+        index = sources_module.read_sources_index(active)
+        if index is None:
+            raise HTTPException(status_code=404, detail="Source was not found")
+        source = next((s for s in index.sources if s.id == source_id), None)
+        if source is None:
+            raise HTTPException(status_code=404, detail="Source was not found")
+        return source
+
+    @app.delete("/api/sources/{source_id}", status_code=204)
+    async def remove_source(source_id: str) -> Response:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            index = sources_module.read_sources_index(active)
+            if index is None:
+                raise HTTPException(status_code=404, detail="Source was not found")
+            remaining = [s for s in index.sources if s.id != source_id]
+            if len(remaining) == len(index.sources):
+                raise HTTPException(status_code=404, detail="Source was not found")
+            updated = sources_module.SourcesIndex(version=index.version, sources=remaining)
+            sources_module.write_sources_index(active, updated)
+            return Response(status_code=204)
+
+    @app.post(
+        "/api/sources/search",
+        response_model=list[search_module.SearchResult],
+    )
+    async def search_sources(
+        request: search_module.SearchRequest,
+    ) -> list[search_module.SearchResult]:
+        active = require_workspace()
+        index = sources_module.read_sources_index(active)
+        if index is None or not index.sources:
+            return []
+
+        sources_by_version: dict[str, tuple[str, str, str]] = {}
+        for s in index.sources:
+            sources_by_version[s.source_version_id] = (s.id, s.resource_id, s.label)
+
+        hits = search_module.search_raw(cache_dir, request.query, limit=request.limit or 10)
+        return search_module.enrich_search_results(hits, sources_by_version)
+
+    @app.get("/api/sources/{source_id}/content")
+    async def source_content(
+        source_id: str,
+        max_chars: int = 4000,
+        line_start: int | None = None,
+        line_end: int | None = None,
+    ) -> StarletteResponse:
+        active = require_workspace()
+        index = sources_module.read_sources_index(active)
+        if index is None:
+            raise HTTPException(status_code=404, detail="Source was not found")
+        source = next((s for s in index.sources if s.id == source_id), None)
+        if source is None:
+            raise HTTPException(status_code=404, detail="Source was not found")
+
+        extracted = library.derived_dir(cache_dir) / source.source_version_id / "extracted.md"
+        if not extracted.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "Extracted content is not available. Try processing the underlying Resource."
+                ),
+            )
+
+        try:
+            content = extracted.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            raise HTTPException(
+                status_code=500,
+                detail="Could not read extracted content",
+            ) from error
+
+        if line_start is not None or line_end is not None:
+            lines = content.split("\n")
+            start = max(0, line_start or 0)
+            end = min(len(lines), line_end or len(lines))
+            if start >= len(lines) or end <= start:
+                raise HTTPException(status_code=422, detail="Invalid coordinate range")
+            content = "\n".join(lines[start:end])
+
+        if len(content) > max_chars:
+            content = content[:max_chars]
+
+        return StarletteResponse(content=content, media_type="text/plain")
 
     @app.get("/api/resources", response_model=list[res.ResourceState])
     async def list_resources() -> list[res.ResourceState]:

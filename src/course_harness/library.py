@@ -61,6 +61,8 @@ def register_and_snapshot(
     snapshot = create_snapshot(snapshots_dir(data_dir), resource.id, content)
     state = process_snapshot(cache_dir, snapshot.content_hash, resource.media_type, content)
     update_resource_snapshot(registry, resource.id, snapshot.content_hash)
+    if state.status == "ready":
+        _index_if_ready(cache_dir, snapshot.content_hash)
     return (
         resource,
         snapshot,
@@ -73,6 +75,17 @@ def register_and_snapshot(
             snapshot=snapshot,
         ),
     )
+
+
+def _index_if_ready(cache_dir: Path, content_hash: str) -> None:
+    from contextlib import suppress
+
+    from course_harness.search import index_resource  # noqa: PLC0415
+
+    extracted = derived_dir(cache_dir) / content_hash / "extracted.md"
+    if extracted.is_file():
+        with suppress(OSError, UnicodeError):
+            index_resource(cache_dir, content_hash, extracted.read_text(encoding="utf-8"))
 
 
 def process_existing_resource(
@@ -88,6 +101,8 @@ def process_existing_resource(
     snapshot = create_snapshot(snapshots_dir(data_dir), resource.id, content)
     state = process_snapshot(cache_dir, snapshot.content_hash, resource.media_type, content)
     update_resource_snapshot(registry_path(data_dir), resource.id, snapshot.content_hash)
+    if state.status == "ready":
+        _index_if_ready(cache_dir, snapshot.content_hash)
     return ResourceState(
         resource_id=resource.id,
         kind=resource.kind,
@@ -139,6 +154,12 @@ def clear_processing_cache(cache_dir: Path) -> None:
                 child.rmdir()
             else:
                 child.unlink(missing_ok=True)
+    from course_harness.search import search_db_path  # noqa: PLC0415
+
+    db_path = search_db_path(cache_dir)
+    db_path.unlink(missing_ok=True)
+    for wal_path in sorted(cache_dir.glob("fts/search.db-*")):
+        wal_path.unlink(missing_ok=True)
 
 
 def _read_snapshot(snapshots_base: Path, resource: Resource) -> Snapshot | None:

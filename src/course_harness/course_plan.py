@@ -16,6 +16,7 @@ class LectureInput(BaseModel):
 
     title: str = Field(min_length=1, max_length=200)
     group: str | None = Field(default=None, min_length=1, max_length=100)
+    source_focus: list[str] | None = Field(default=None)
 
 
 class CoursePlanInput(BaseModel):
@@ -34,6 +35,7 @@ class Lecture(BaseModel):
     id: str = Field(pattern=r"^lecture-[0-9a-f]{12}$")
     title: str = Field(min_length=1, max_length=200)
     group: str | None = Field(default=None, min_length=1, max_length=100)
+    source_focus: list[str] | None = Field(default=None)
 
 
 class CoursePlan(BaseModel):
@@ -67,7 +69,12 @@ def create_course_plan(course_input: CoursePlanInput) -> CoursePlan:
         goals=course_input.goals,
         outcomes=course_input.outcomes,
         lectures=[
-            Lecture(id=f"lecture-{uuid4().hex[:12]}", title=lecture.title, group=lecture.group)
+            Lecture(
+                id=f"lecture-{uuid4().hex[:12]}",
+                title=lecture.title,
+                group=lecture.group,
+                source_focus=lecture.source_focus,
+            )
             for lecture in course_input.lectures
         ],
     )
