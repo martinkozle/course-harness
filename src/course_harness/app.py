@@ -22,9 +22,11 @@ from course_harness.chat_history import (
     save_chat_history,
 )
 from course_harness.course_agent import (
+    AgentMode,
     CourseAgentDeps,
     CourseAgentState,
     build_provider_model,
+    create_autonomous_course_agent,
     create_course_agent,
 )
 from course_harness.course_plan import (
@@ -121,7 +123,9 @@ def create_app(
     provider_path = provider_store_path or default_provider_store_path()
     chat_path = chat_store_path or recent_path.parent / "chat"
     course_agent = create_course_agent()
+    autonomous_agent = create_autonomous_course_agent()
     mutation_locks: dict[Path, asyncio.Lock] = {}
+    cancel_events: dict[Path, asyncio.Event] = {}
 
     def require_workspace() -> Path:
         if workspace is None:
@@ -142,6 +146,9 @@ def create_app(
 
     def mutation_lock(active: Path) -> asyncio.Lock:
         return mutation_locks.setdefault(active.resolve(), asyncio.Lock())
+
+    def cancel_event(active: Path) -> asyncio.Event:
+        return cancel_events.setdefault(active.resolve(), asyncio.Event())
 
     @asynccontextmanager
     async def exclusive_mutation(active: Path):
@@ -199,6 +206,7 @@ def create_app(
                 status_code=409,
                 detail="Wait for the active Course Agent run before closing this Workspace.",
             )
+        cancel_events.pop(active.resolve(), None)
         workspace = None
         return Response(status_code=204)
 
@@ -344,6 +352,12 @@ def create_app(
         active = require_workspace()
         return read_chat_transcript(chat_path, active)
 
+    @app.post("/api/agent/cancel", status_code=204)
+    async def cancel_agent_run() -> Response:
+        active = require_workspace()
+        cancel_event(active).set()
+        return Response(status_code=204)
+
     @app.post("/api/agent")
     async def run_course_agent(request: Request) -> StarletteResponse:
         active = require_workspace()
@@ -354,6 +368,9 @@ def create_app(
                 detail="Another Course change is already running in this Workspace.",
             )
         await lock.acquire()
+        cancel = cancel_event(active)
+        cancel.clear()
+
         selected_model = resolve_selected_model(provider_path)
         if selected_model is None:
             configuration = read_provider_configuration(provider_path)
@@ -379,24 +396,39 @@ def create_app(
             raise HTTPException(
                 status_code=422, detail=f"course.yaml is invalid: {error}"
             ) from error
+
+        import json as _json_mod
+
+        body = await request.body()
+        props: dict[str, object] = {}
+        try:
+            body_json = _json_mod.loads(body) if body else {}
+            if isinstance(body_json, dict):
+                props = cast(dict[str, object], body_json.get("forwardedProps", {}))
+        except _json_mod.JSONDecodeError:
+            pass
+        mode = AgentMode(props.get("mode", AgentMode.GUIDED))
+
         deps = CourseAgentDeps(course_state=CourseAgentState(course=plan), workspace=active)
         history = read_chat_history(chat_path, active)
 
-        async def persist(result: object) -> None:
-            completed = cast(AgentRunResult[str], result)
-            save_chat_history(chat_path, active, completed.all_messages())
+        async def persist_if_not_cancelled(result: object) -> None:
+            if not cancel.is_set():
+                completed = cast(AgentRunResult[str], result)
+                save_chat_history(chat_path, active, completed.all_messages())
 
         try:
             model = agent_model or build_provider_model(configuration, api_key)
+            active_agent = autonomous_agent if mode == AgentMode.AUTONOMOUS else course_agent
             response = await AGUIAdapter.dispatch_request(
                 request,
-                agent=course_agent,
+                agent=active_agent,
                 model=model,
                 deps=deps,
                 output_type=[str, DeferredToolRequests],
                 message_history=history,
                 conversation_id="course-agent",
-                on_complete=persist,
+                on_complete=persist_if_not_cancelled,
                 allowed_file_url_schemes=frozenset(),
             )
         except Exception:

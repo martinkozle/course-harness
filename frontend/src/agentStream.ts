@@ -13,12 +13,20 @@ type AgentStreamHandlers = {
   onInterrupt: (interrupt: AgentInterrupt) => void;
 };
 
-export async function streamAgentRun(payload: object, handlers: AgentStreamHandlers) {
+export async function streamAgentRun(
+  payload: object,
+  handlers: AgentStreamHandlers,
+  signal?: AbortSignal,
+) {
   const response = await fetch("/api/agent", {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
     body: JSON.stringify(payload),
+    signal,
   });
+  if (response.status === 499) {
+    return { cancelled: true } as const;
+  }
   if (!response.ok) {
     throw new Error(await responseError(response));
   }
@@ -30,6 +38,7 @@ export async function streamAgentRun(payload: object, handlers: AgentStreamHandl
   const decoder = new TextDecoder();
   let buffer = "";
   while (true) {
+    if (signal?.aborted) return { cancelled: true } as const;
     const { done, value } = await reader.read();
     buffer += decoder.decode(value, { stream: !done });
     const frames = buffer.split("\n\n");
@@ -56,4 +65,5 @@ export async function streamAgentRun(payload: object, handlers: AgentStreamHandl
     }
     if (done) break;
   }
+  return { cancelled: false } as const;
 }

@@ -1193,6 +1193,34 @@ h1 {
   white-space: nowrap;
 }
 
+.agent-mode-toggle {
+  display: grid;
+  gap: 0.35rem;
+  margin: 1rem 0;
+}
+
+.agent-mode-toggle label {
+  font-size: 0.7rem;
+  font-weight: 750;
+}
+
+.agent-mode-toggle select {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 0.6rem;
+  border: 1px solid #aebbd2;
+  background: white;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.agent-mode-toggle small {
+  color: var(--muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.62rem;
+  line-height: 1.35;
+}
+
 .agent-model-empty {
   display: grid;
   gap: 0.7rem;

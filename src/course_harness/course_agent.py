@@ -1,3 +1,4 @@
+import enum
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,11 @@ from course_harness.course_plan import (
     read_course_plan,
     write_course_plan,
 )
+
+
+class AgentMode(enum.StrEnum):
+    GUIDED = "guided"
+    AUTONOMOUS = "autonomous"
 
 
 class CoursePlanLectureCommand(BaseModel):
@@ -106,7 +112,7 @@ def apply_course_plan_command(workspace: Path, command: ReplaceCoursePlanCommand
     return updated
 
 
-def create_course_agent() -> Agent[CourseAgentDeps, str]:
+def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, str]:
     agent = Agent(
         deps_type=CourseAgentDeps,
         name="course-agent",
@@ -130,7 +136,7 @@ def create_course_agent() -> Agent[CourseAgentDeps, str]:
             f"{ctx.deps.course_state.course.model_dump_json(indent=2)}"
         )
 
-    @agent.tool(requires_approval=True)
+    @agent.tool(requires_approval=requires_approval)
     async def replace_course_plan(
         ctx: RunContext[CourseAgentDeps], command: ReplaceCoursePlanCommand
     ) -> ToolReturn:
@@ -157,6 +163,14 @@ def create_course_agent() -> Agent[CourseAgentDeps, str]:
         )
 
     return agent
+
+
+def create_course_agent() -> Agent[CourseAgentDeps, str]:
+    return _build_course_agent(requires_approval=True)
+
+
+def create_autonomous_course_agent() -> Agent[CourseAgentDeps, str]:
+    return _build_course_agent(requires_approval=False)
 
 
 def build_provider_model(configuration: object, api_key: str) -> Model:

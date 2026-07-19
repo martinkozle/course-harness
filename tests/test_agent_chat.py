@@ -7,7 +7,14 @@ from typing import Any
 
 import httpx2
 import pytest
-from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from course_harness.app import create_app
@@ -628,3 +635,212 @@ async def test_live_openrouter_smoke_uses_only_an_explicitly_free_model(
     assert stream_status == 200
     assert '"type":"RUN_FINISHED"' in stream_body
     assert created.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_autonomous_mode_applies_course_plan_changes_without_interrupt(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "auto-course"
+    workspace.mkdir()
+    provider_store = tmp_path / "user-data" / "provider"
+    chat_store = tmp_path / "user-data" / "chat"
+
+    model_calls = []
+
+    async def course_planning_model(
+        messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        model_calls.append("stream")
+        tool_has_returned = any(
+            isinstance(message, ModelRequest)
+            and any(isinstance(part, ToolReturnPart) for part in message.parts)
+            for message in messages
+        )
+        if not tool_has_returned:
+            command = {
+                "title": "Self-driving Course",
+                "audience": "ML practitioners",
+                "lectures": [{"title": "Why automate?"}, {"title": "Safety first"}],
+            }
+            yield {
+                0: DeltaToolCall(
+                    name="replace_course_plan",
+                    json_args=json.dumps({"command": command}),
+                    tool_call_id="auto-plan-1",
+                )
+            }
+        else:
+            yield "I created a two-Lecture Course Plan automatically."
+
+    def model_sync(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        model_calls.append("sync")
+        tool_has_returned = any(
+            isinstance(message, ModelRequest)
+            and any(isinstance(part, ToolReturnPart) for part in message.parts)
+            for message in messages
+        )
+        if tool_has_returned:
+            return ModelResponse(
+                parts=[TextPart(content="I created a two-Lecture Course Plan automatically.")]
+            )
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="replace_course_plan",
+                    args=json.dumps(
+                        {
+                            "command": {
+                                "title": "Self-driving Course",
+                                "audience": "ML practitioners",
+                                "lectures": [
+                                    {"title": "Why automate?"},
+                                    {"title": "Safety first"},
+                                ],
+                            }
+                        }
+                    ),
+                    tool_call_id="auto-plan-1",
+                )
+            ]
+        )
+
+    model = FunctionModel(stream_function=course_planning_model, function=model_sync)
+    app = create_app(
+        workspace,
+        provider_store_path=provider_store,
+        chat_store_path=chat_store,
+        agent_model=model,
+        provider_validator=_verified_capabilities,
+    )
+    autonomous_input = {
+        "threadId": "course-agent",
+        "runId": "auto-run",
+        "state": {},
+        "messages": [{"id": "auto-user", "role": "user", "content": "Plan a Course."}],
+        "tools": [],
+        "context": [],
+        "forwardedProps": {"mode": "autonomous"},
+    }
+
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        stream_status, stream_body = await _post_stream(app, "/api/agent", autonomous_input)
+        course_response = await client.get("/api/course")
+        chat_response = await client.get("/api/chat")
+
+    assert stream_status == 200
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in stream_body.splitlines()
+        if line.startswith("data: ")
+    ]
+    event_types = [event["type"] for event in events]
+    assert event_types[-1] == "RUN_FINISHED"
+    outcome = events[-1].get("outcome", {})
+    assert not outcome.get("interrupts"), "autonomous mode should not produce interrupts"
+
+    assert course_response.status_code == 200
+    plan = course_response.json()
+    assert plan["title"] == "Self-driving Course"
+    assert len(plan["lectures"]) == 2
+    assert chat_response.json()["approval"] is None
+    app = create_app(
+        workspace,
+        provider_store_path=provider_store,
+        chat_store_path=chat_store,
+        agent_model=model,
+        provider_validator=_verified_capabilities,
+    )
+    autonomous_input = {
+        "threadId": "course-agent",
+        "runId": "auto-run",
+        "state": {},
+        "messages": [{"id": "auto-user", "role": "user", "content": "Plan a Course."}],
+        "tools": [],
+        "context": [],
+        "forwardedProps": {"mode": "autonomous"},
+    }
+
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        stream_status, stream_body = await _post_stream(app, "/api/agent", autonomous_input)
+        course_response = await client.get("/api/course")
+        chat_response = await client.get("/api/chat")
+
+    assert stream_status == 200
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in stream_body.splitlines()
+        if line.startswith("data: ")
+    ]
+    event_types = [event["type"] for event in events]
+    assert event_types[-1] == "RUN_FINISHED"
+    outcome = events[-1].get("outcome", {})
+    assert not outcome.get("interrupts"), "autonomous mode should not produce interrupts"
+
+    assert course_response.status_code == 200
+    plan = course_response.json()
+    assert plan["title"] == "Self-driving Course"
+    assert len(plan["lectures"]) == 2
+    assert chat_response.json()["approval"] is None
+
+
+@pytest.mark.anyio
+async def test_cancelling_an_active_agent_run_preserves_partial_state(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "cancel-course"
+    workspace.mkdir()
+    server_started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def long_running_model(
+        _messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        server_started.set()
+        await finish.wait()
+        yield "The Course Agent thought about your request but made no changes."
+
+    app = create_app(
+        workspace,
+        provider_store_path=tmp_path / "provider",
+        agent_model=FunctionModel(stream_function=long_running_model),
+        provider_validator=_verified_capabilities,
+    )
+    run_input = {
+        "threadId": "course-agent",
+        "runId": "cancel-me",
+        "state": {},
+        "messages": [{"id": "user-cancel", "role": "user", "content": "Do something long."}],
+        "tools": [],
+        "context": [],
+        "forwardedProps": {},
+    }
+
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        running = asyncio.create_task(_post_stream(app, "/api/agent", run_input))
+        await server_started.wait()
+        cancel_response = await client.post("/api/agent/cancel")
+        finish.set()
+        stream_status, _ = await running
+        course_response = await client.get("/api/course")
+
+    assert cancel_response.status_code == 204
+    assert not (workspace / "course.yaml").exists()
+    assert course_response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_cancel_endpoint_is_unavailable_when_no_workspace_is_bound() -> None:
+    transport = httpx2.ASGITransport(app=create_app())
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/agent/cancel")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "No Course Workspace is active"}

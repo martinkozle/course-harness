@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useRef, useState, useEffect } from "react";
 
 import { type AgentInterrupt, streamAgentRun } from "./agentStream";
 import type { ModelCatalog } from "./models";
@@ -24,6 +24,8 @@ type CoursePlanProposal = {
 };
 
 type Activity = { id: string; title: string; detail: string };
+
+type AgentMode = "guided" | "autonomous";
 
 type AgentPanelProps = {
   initialMessages: ChatMessage[];
@@ -127,6 +129,8 @@ export function AgentPanel({
   const [approval, setApproval] = useState<AgentInterrupt | null>(initialApproval);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<AgentMode>("guided");
+  const abortRef = useRef<AbortController | null>(null);
   const selected = catalog.model_presets.find(
     (preset) => preset.id === catalog.selected_model_id,
   );
@@ -137,7 +141,19 @@ export function AgentPanel({
   useEffect(() => setMessages(initialMessages), [initialMessages]);
   useEffect(() => setApproval(initialApproval), [initialApproval]);
   useEffect(() => onRunningChange(running), [onRunningChange, running]);
-  useEffect(() => () => onRunningChange(false), [onRunningChange]);
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    onRunningChange(false);
+  }, [onRunningChange]);
+
+  function isContinueUntilDone(text: string): boolean {
+    const lower = text.toLowerCase().trim();
+    return (
+      lower === "continue until done" ||
+      lower === "continue until finished" ||
+      lower === "carry on until done"
+    );
+  }
 
   async function selectModel(modelId: string) {
     setError(null);
@@ -158,8 +174,10 @@ export function AgentPanel({
     setError(null);
     setRunning(true);
     let assistantId: string | null = null;
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      await streamAgentRun(
+      const result = await streamAgentRun(
         {
           threadId: "course-agent",
           runId: crypto.randomUUID(),
@@ -167,7 +185,7 @@ export function AgentPanel({
           messages: messagesForRun,
           tools: [],
           context: [],
-          forwardedProps: {},
+          forwardedProps: { mode },
           ...(resume ? { resume } : {}),
         },
         {
@@ -188,7 +206,9 @@ export function AgentPanel({
           },
           onInterrupt: setApproval,
         },
+        controller.signal,
       );
+      if (result.cancelled) return;
       const transcriptResponse = await fetch("/api/chat");
       if (transcriptResponse.ok) {
         const transcript = (await transcriptResponse.json()) as {
@@ -199,9 +219,24 @@ export function AgentPanel({
         setApproval(transcript.approval);
       }
     } catch (caught) {
+      if (
+        caught instanceof DOMException &&
+        caught.name === "AbortError"
+      ) {
+        return;
+      }
       setError(caught instanceof Error ? caught.message : "The Course Agent run failed.");
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function cancelRun() {
+    abortRef.current?.abort();
+    try {
+      await fetch("/api/agent/cancel", { method: "POST" });
+    } catch {
+      // Best-effort; the abort already stops the frontend stream
     }
   }
 
@@ -214,6 +249,9 @@ export function AgentPanel({
       role: "user",
       content,
     };
+    if (isContinueUntilDone(content)) {
+      setMode("autonomous");
+    }
     setMessages((current) => [...current, userMessage]);
     setPrompt("");
     setApproval(null);
@@ -224,9 +262,10 @@ export function AgentPanel({
     if (!approval || running) return;
     const pending = approval;
     setApproval(null);
-    void run([], [
-      { interruptId: pending.id, status: "resolved", payload: { approved } },
-    ]);
+    void run(
+      [],
+      [{ interruptId: pending.id, status: "resolved", payload: { approved } }],
+    );
   }
 
   return (
@@ -240,6 +279,28 @@ export function AgentPanel({
           <span className={`agent-status${running ? " is-running" : ""}`}>
             {running ? "Working" : selected ? "Ready" : "Needs model"}
           </span>
+        </div>
+        {running ? (
+          <button className="secondary-action compact-action" type="button" onClick={cancelRun}>
+            Cancel run
+          </button>
+        ) : null}
+        <div className="agent-mode-toggle">
+          <label htmlFor="agent-mode">Behaviour</label>
+          <select
+            id="agent-mode"
+            value={mode}
+            disabled={running}
+            onChange={(event) => setMode(event.target.value as AgentMode)}
+          >
+            <option value="guided">Guided</option>
+            <option value="autonomous">Autonomous</option>
+          </select>
+          <small>
+            {mode === "guided"
+              ? "Course Plan changes wait for your approval."
+              : "Course Plan changes apply automatically."}
+          </small>
         </div>
         {selected ? (
           <div className="agent-model-picker">
@@ -323,7 +384,11 @@ export function AgentPanel({
           aria-describedby="course-agent-help"
         />
         <div>
-          <small id="course-agent-help">Course Plan changes wait for your approval.</small>
+          <small id="course-agent-help">
+            {mode === "guided"
+              ? "Course Plan changes wait for your approval."
+              : "Course Plan changes apply automatically."}
+          </small>
           <button
             className="primary-action compact-action"
             type="submit"
