@@ -50,6 +50,7 @@ export function LibraryView({
 	);
 	const [searching, setSearching] = useState(false);
 	const [hasSearched, setHasSearched] = useState(false);
+	const [lastSubmittedQuery, setLastSubmittedQuery] = useState("");
 	const [viewingSource, setViewingSource] = useState<string | null>(null);
 	const [sourceContent, setSourceContent] = useState("");
 	const [loadingContent, setLoadingContent] = useState(false);
@@ -149,6 +150,7 @@ export function LibraryView({
 		}
 		setSearching(true);
 		setHasSearched(true);
+		setLastSubmittedQuery(q);
 		try {
 			const response = await fetch("/api/sources/search", {
 				method: "POST",
@@ -417,10 +419,9 @@ export function LibraryView({
 							))}
 						</ul>
 					) : searchResults.length === 0 &&
-						searchQuery.trim() &&
 						hasSearched &&
 						!searching ? (
-						<p className="empty-note">No results for "{searchQuery}".</p>
+						<p className="empty-note">No results for "{lastSubmittedQuery}".</p>
 					) : null}
 				</section>
 			) : null}
