@@ -29,3 +29,28 @@ export type ModelCatalog = {
   model_presets: ModelPreset[];
   selected_model_id: string | null;
 };
+
+export type ResourceKind = "local-file" | "upload";
+
+export type ProcessingStatus =
+  | "unprocessed"
+  | "processing"
+  | "ready"
+  | "failed"
+  | "retrying";
+
+export type Snapshot = {
+  resource_id: string;
+  content_hash: string;
+  byte_count: number;
+  captured_at: string;
+};
+
+export type ResourceState = {
+  resource_id: string;
+  kind: ResourceKind | null;
+  location: string | null;
+  status: ProcessingStatus;
+  error: string | null;
+  snapshot: Snapshot | null;
+};

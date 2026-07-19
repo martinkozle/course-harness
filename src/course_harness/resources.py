@@ -1,0 +1,193 @@
+import hashlib
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Literal
+from uuid import uuid4
+
+from pydantic import BaseModel, ConfigDict, Field
+
+ResourceKind = Literal["local-file", "upload"]
+ProcessingStatus = Literal["unprocessed", "processing", "ready", "failed", "retrying"]
+
+
+class ResourceRegistrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    kind: ResourceKind
+    location: str = Field(min_length=1, max_length=2000)
+    media_type: str = Field(min_length=1, max_length=100)
+
+
+class Resource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^resource-[0-9a-f]{12}$")
+    kind: ResourceKind
+    location: str
+    media_type: str
+    registered_at: str
+    snapshot_hash: str | None = None
+
+
+class Snapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str
+    content_hash: str = Field(min_length=64, max_length=64)
+    byte_count: int = Field(ge=0)
+    captured_at: str
+
+
+class ResourceState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str
+    kind: ResourceKind | None = None
+    location: str | None = None
+    status: ProcessingStatus
+    error: str | None = None
+    snapshot: Snapshot | None = None
+
+
+class LibraryIndex(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[1] = 1
+    resources: list[Resource] = Field(default_factory=list)
+
+
+MEDIA_TYPE_PROCESSORS: dict[str, str] = {
+    "text/plain": "text",
+    "text/markdown": "text",
+    "text/x-markdown": "text",
+    "text/csv": "text",
+    "text/x-python": "code",
+    "text/x-python-script": "code",
+    "application/x-python-code": "code",
+    "application/javascript": "code",
+    "text/javascript": "code",
+    "application/typescript": "code",
+    "application/x-typescript": "code",
+    "application/json": "code",
+    "text/x-yaml": "code",
+    "application/x-yaml": "code",
+    "application/toml": "code",
+}
+
+
+def content_hash(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def identify_media_type(path_or_name: str, content: bytes | None = None) -> str:
+    suffix = Path(path_or_name).suffix.lower()
+    mapping: dict[str, str] = {
+        ".md": "text/markdown",
+        ".txt": "text/plain",
+        ".csv": "text/csv",
+        ".py": "text/x-python",
+        ".js": "application/javascript",
+        ".ts": "application/typescript",
+        ".tsx": "application/x-typescript",
+        ".json": "application/json",
+        ".yaml": "text/x-yaml",
+        ".yml": "text/x-yaml",
+        ".toml": "application/toml",
+        ".pdf": "application/pdf",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".ipynb": "application/x-ipynb+json",
+        ".html": "text/html",
+    }
+    return mapping.get(suffix, "application/octet-stream")
+
+
+def resolve_processor(media_type: str) -> str | None:
+    return MEDIA_TYPE_PROCESSORS.get(media_type)
+
+
+def register_resource(registry_path: Path, request: ResourceRegistrationRequest) -> Resource:
+    index = read_library_index(registry_path)
+    resource = Resource(
+        id=f"resource-{uuid4().hex[:12]}",
+        kind=request.kind,
+        location=request.location,
+        media_type=request.media_type,
+        registered_at=datetime.now(UTC).isoformat(),
+    )
+    index.resources.append(resource)
+    write_library_index(registry_path, index)
+    return resource
+
+
+def update_resource_snapshot(
+    registry_path: Path, resource_id: str, snapshot_hash: str
+) -> Resource | None:
+    index = read_library_index(registry_path)
+    for idx, resource in enumerate(index.resources):
+        if resource.id == resource_id:
+            updated = resource.model_copy(update={"snapshot_hash": snapshot_hash})
+            index.resources[idx] = updated
+            write_library_index(registry_path, index)
+            return updated
+    return None
+
+
+def create_snapshot(snapshots_dir: Path, resource_id: str, content: bytes) -> Snapshot:
+    hash_value = content_hash(content)
+    snapshot_path = snapshots_dir / hash_value
+    if not snapshot_path.exists():
+        snapshots_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_bytes(content)
+    return Snapshot(
+        resource_id=resource_id,
+        content_hash=hash_value,
+        byte_count=len(content),
+        captured_at=datetime.now(UTC).isoformat(),
+    )
+
+
+def process_snapshot(
+    cache_dir: Path, content_hash: str, media_type: str, content: bytes
+) -> ResourceState:
+    processor_name = resolve_processor(media_type)
+    derived_dir = cache_dir / "derived" / content_hash
+    derived_dir.mkdir(parents=True, exist_ok=True)
+
+    if processor_name == "text":
+        derived_dir.mkdir(parents=True, exist_ok=True)
+        (derived_dir / "extracted.md").write_bytes(content)
+        return ResourceState(
+            resource_id="",
+            status="ready",
+        )
+
+    if processor_name == "code":
+        derived_dir.mkdir(parents=True, exist_ok=True)
+        raw = content.decode("utf-8", errors="replace")
+        fenced = f"```\n{raw}\n```\n"
+        (derived_dir / "extracted.md").write_text(fenced, encoding="utf-8")
+        return ResourceState(
+            resource_id="",
+            status="ready",
+        )
+
+    return ResourceState(
+        resource_id="",
+        status="unprocessed",
+        error=f"No processor available for {media_type}; content stored as immutable Snapshot.",
+    )
+
+
+def read_library_index(registry_path: Path) -> LibraryIndex:
+    if not registry_path.is_file():
+        return LibraryIndex()
+    try:
+        return LibraryIndex.model_validate_json(registry_path.read_text(encoding="utf-8"))
+    except OSError, ValueError:
+        return LibraryIndex()
+
+
+def write_library_index(registry_path: Path, index: LibraryIndex) -> None:
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(index.model_dump_json(indent=2) + "\n", encoding="utf-8")

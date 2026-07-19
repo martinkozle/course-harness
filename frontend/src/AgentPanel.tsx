@@ -377,6 +377,12 @@ export function AgentPanel({
           id="course-agent-message"
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              sendMessage(event as unknown as FormEvent<HTMLFormElement>);
+            }
+          }}
           rows={4}
           placeholder="Create a four-Lecture Course Plan for…"
           maxLength={4000}
@@ -386,8 +392,8 @@ export function AgentPanel({
         <div>
           <small id="course-agent-help">
             {mode === "guided"
-              ? "Course Plan changes wait for your approval."
-              : "Course Plan changes apply automatically."}
+              ? "Course Plan changes wait for your approval. Enter to send, Shift+Enter for newline."
+              : "Course Plan changes apply automatically. Enter to send, Shift+Enter for newline."}
           </small>
           <button
             className="primary-action compact-action"

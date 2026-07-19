@@ -951,7 +951,9 @@ h1 {
 .agent-panel {
   position: sticky;
   top: 88px;
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
   max-height: calc(100vh - 112px);
   min-height: 560px;
   margin: 24px 24px 24px 0;
@@ -966,6 +968,7 @@ h1 {
 }
 
 .agent-panel-heading {
+  flex-shrink: 0;
   padding: 22px 22px 18px;
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.94);
@@ -1019,9 +1022,10 @@ h1 {
 
 .chat-messages {
   display: grid;
+  flex: 1 1 0;
+  min-height: 0;
   align-content: start;
   gap: 16px;
-  min-height: 220px;
   margin: 0;
   padding: 22px;
   overflow-y: auto;
@@ -1074,6 +1078,7 @@ h1 {
 }
 
 .agent-activity {
+  flex-shrink: 0;
   min-height: 34px;
   padding: 0 22px;
   color: var(--muted);
@@ -1091,6 +1096,7 @@ h1 {
 }
 
 .approval-card {
+  flex-shrink: 0;
   margin: 0 22px 1rem;
   padding: 1rem;
   border: 1px solid color-mix(in srgb, var(--cobalt) 36%, var(--line));
@@ -1332,6 +1338,7 @@ h1 {
 }
 
 .chat-composer {
+  flex-shrink: 0;
   display: grid;
   gap: 8px;
   padding: 17px 22px 20px;
@@ -1446,6 +1453,12 @@ h1 {
     max-height: none;
     min-height: 520px;
     margin: 0 28px 56px;
+    align-self: auto;
+  }
+
+  .agent-panel .chat-messages {
+    flex: none;
+    min-height: 220px;
   }
 }
 
@@ -1498,6 +1511,11 @@ h1 {
 
   .agent-panel {
     margin: 0 24px 48px;
+  }
+
+  .agent-panel .chat-messages {
+    flex: none;
+    min-height: 220px;
   }
 
   .launcher-heading {
@@ -1587,6 +1605,11 @@ h1 {
   .agent-panel {
     min-height: 500px;
     margin: 0 16px 40px;
+  }
+
+  .agent-panel .chat-messages {
+    flex: none;
+    min-height: 220px;
   }
 
   .chat-composer > div {
@@ -1687,4 +1710,107 @@ h1 {
       transform: translateY(6px);
     }
   }
+}
+
+.library-stats {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.stats-detail {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.library-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 1.2rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.library-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: white;
+}
+
+.library-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1.5;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.status-ready {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, white);
+}
+
+.status-unprocessed {
+  color: var(--muted);
+  background: var(--canvas);
+}
+
+.status-failed {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, white);
+}
+
+.status-processing,
+.status-retrying {
+  color: var(--cobalt-dark);
+  background: var(--cobalt-soft);
+}
+
+.library-id {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.6rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-snapshot {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.library-error {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  color: var(--danger);
+  font-size: 0.72rem;
+}
+
+.library-list li button {
+  margin-bottom: auto;
+}
+
+.upload-label {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
 }

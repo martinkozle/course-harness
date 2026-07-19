@@ -5,10 +5,11 @@ import {
   type ChatMessage,
   type CoursePlan,
 } from "./AgentPanel";
+import { LibraryView } from "./LibraryView";
 import { ModelsView } from "./ProviderSetup";
 import { responseError } from "./api";
 import type { AgentInterrupt } from "./agentStream";
-import type { ModelCatalog } from "./models";
+import type { ModelCatalog, ResourceState } from "./models";
 
 type Workspace = {
   name: string;
@@ -40,7 +41,7 @@ type CourseRequest = {
   lectures: { title: string }[];
 };
 
-type WorkspaceView = "course" | "files" | "models";
+type WorkspaceView = "course" | "files" | "models" | "library";
 
 type SectionLink = {
   id: WorkspaceView;
@@ -201,7 +202,13 @@ function WorkspaceShell({
                 onClick={() => onNavigate(section.id)}
               >
                 <span aria-hidden="true">
-                  {section.id === "course" ? "CP" : section.id === "files" ? "FL" : "MD"}
+                  {section.id === "course"
+                    ? "CP"
+                    : section.id === "files"
+                    ? "FL"
+                    : section.id === "library"
+                    ? "LB"
+                    : "MD"}
                 </span>
                 {section.label}
               </button>
@@ -632,6 +639,7 @@ function FilesView({ workspace, files }: { workspace: Workspace; files: Workspac
 const workspaceViews: SectionLink[] = [
   { id: "course", label: "Course Plan" },
   { id: "files", label: "Files" },
+  { id: "library", label: "Library" },
   { id: "models", label: "Models" },
 ];
 
@@ -645,6 +653,7 @@ export function App() {
     model_presets: [],
     selected_model_id: null,
   });
+  const [resources, setResources] = useState<ResourceState[]>([]);
   const [activeView, setActiveView] = useState<WorkspaceView>("course");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatApproval, setChatApproval] = useState<AgentInterrupt | null>(null);
@@ -657,12 +666,14 @@ export function App() {
     setActiveView("course");
     setWorkspace(active);
     setCourse(undefined);
-    const [courseResponse, filesResponse, modelsResponse, chatResponse] = await Promise.all([
-      fetch("/api/course", { signal }),
-      fetch("/api/workspace/files", { signal }),
-      fetch("/api/models", { signal }),
-      fetch("/api/chat", { signal }),
-    ]);
+    const [courseResponse, filesResponse, modelsResponse, chatResponse, resourcesResponse] =
+      await Promise.all([
+        fetch("/api/course", { signal }),
+        fetch("/api/workspace/files", { signal }),
+        fetch("/api/models", { signal }),
+        fetch("/api/chat", { signal }),
+        fetch("/api/resources", { signal }),
+      ]);
     if (courseResponse.status === 404) {
       setCourse(null);
     } else if (courseResponse.ok) {
@@ -688,6 +699,9 @@ export function App() {
     };
     setChatMessages(transcript.messages);
     setChatApproval(transcript.approval);
+    if (resourcesResponse.ok) {
+      setResources((await resourcesResponse.json()) as ResourceState[]);
+    }
   }, []);
 
   useEffect(() => {
@@ -902,6 +916,8 @@ export function App() {
       >
         {activeView === "models" ? (
           <ModelsView catalog={catalog} onCatalogChange={setCatalog} />
+        ) : activeView === "library" ? (
+          <LibraryView resources={resources} onResourcesChange={setResources} />
         ) : activeView === "files" ? (
           <FilesView workspace={workspace} files={files} />
         ) : course === undefined && error ? (

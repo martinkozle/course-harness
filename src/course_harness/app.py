@@ -15,6 +15,8 @@ from starlette.requests import Request
 from starlette.responses import Response as StarletteResponse
 from starlette.staticfiles import StaticFiles
 
+from course_harness import library
+from course_harness import resources as res
 from course_harness.chat_history import (
     ChatTranscript,
     read_chat_history,
@@ -113,6 +115,8 @@ def create_app(
     recent_store_path: Path | None = None,
     provider_store_path: Path | None = None,
     chat_store_path: Path | None = None,
+    library_data_path: Path | None = None,
+    library_cache_path: Path | None = None,
     agent_model: Model | None = None,
     provider_validator: ProviderCapabilityValidator = validate_provider_capabilities,
     provider_account_validator: ProviderAccountValidator = validate_provider_account,
@@ -121,6 +125,8 @@ def create_app(
     app = FastAPI(title="Course Harness")
     recent_path = recent_store_path or default_recent_store_path()
     provider_path = provider_store_path or default_provider_store_path()
+    data_dir = library_data_path or library.library_data_dir()
+    cache_dir = library_cache_path or library.library_cache_dir()
     chat_path = chat_store_path or recent_path.parent / "chat"
     course_agent = create_course_agent()
     autonomous_agent = create_autonomous_course_agent()
@@ -502,6 +508,108 @@ def create_app(
             )
             write_course_plan(active, updated)
             return updated
+
+    @app.get("/api/resources", response_model=list[res.ResourceState])
+    async def list_resources() -> list[res.ResourceState]:
+        require_workspace()
+        return library.list_resources_with_state(data_dir, cache_dir)
+
+    @app.get("/api/resources/{resource_id}", response_model=res.ResourceState)
+    async def resource_detail(resource_id: str) -> res.ResourceState:
+        require_workspace()
+        state = library.get_resource_state(data_dir, cache_dir, resource_id)
+        if state is None:
+            raise HTTPException(status_code=404, detail="Resource was not found")
+        return state
+
+    @app.post("/api/resources", response_model=res.Resource, status_code=201)
+    async def register_resource_route(request: res.ResourceRegistrationRequest) -> res.Resource:
+        require_workspace()
+        registry = library.registry_path(data_dir)
+        return res.register_resource(registry, request)
+
+    @app.post("/api/resources/{resource_id}/process", response_model=res.ResourceState)
+    async def process_resource(resource_id: str) -> res.ResourceState:
+        require_workspace()
+        index = res.read_library_index(library.registry_path(data_dir))
+        resource = next((r for r in index.resources if r.id == resource_id), None)
+        if resource is None:
+            raise HTTPException(status_code=404, detail="Resource was not found")
+
+        from pathlib import Path as _Path
+
+        if resource.kind == "local-file":
+            location = _Path(resource.location)
+            if not location.is_file():
+                raise HTTPException(
+                    status_code=422,
+                    detail="The registered file is no longer accessible.",
+                )
+            content = location.read_bytes()
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail="Uploaded Resources must be processed with their content payload.",
+            )
+
+        result = library.process_existing_resource(data_dir, cache_dir, resource_id, content)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Resource was not found")
+        if result.status != "ready":
+            raise HTTPException(status_code=422, detail=result.error or "Processing failed.")
+        return result
+
+    @app.post("/api/resources/upload", response_model=res.ResourceState, status_code=201)
+    async def upload_resource(request: Request) -> res.ResourceState:
+        require_workspace()
+        form = await request.form()
+        uploaded_file = form.get("file")
+        if uploaded_file is None:
+            raise HTTPException(status_code=422, detail="A file attachment is required.")
+        if isinstance(uploaded_file, str):
+            raise HTTPException(status_code=422, detail="A file attachment is required.")
+
+        filename = getattr(uploaded_file, "filename", "upload")
+        if not isinstance(filename, str) or not filename:
+            filename = "uploaded-file"
+        content = await uploaded_file.read()
+        if not isinstance(content, bytes):
+            raise HTTPException(status_code=422, detail="File content must be binary.")
+
+        media_type = getattr(uploaded_file, "content_type", None)
+        if not isinstance(media_type, str) or not media_type:
+            media_type = res.identify_media_type(str(filename), content)
+
+        record = res.ResourceRegistrationRequest(
+            kind="upload",
+            location=str(filename),
+            media_type=media_type,
+        )
+        _, _, state = library.register_and_snapshot(data_dir, cache_dir, record, content)
+        return state
+
+    @app.delete("/api/resources/cache", status_code=204)
+    async def clear_resource_cache() -> Response:
+        require_workspace()
+        library.clear_processing_cache(cache_dir)
+        return Response(status_code=204)
+
+    @app.get("/api/resources/{resource_id}/content")
+    async def resource_content(resource_id: str) -> StarletteResponse:
+        require_workspace()
+        index = res.read_library_index(library.registry_path(data_dir))
+        resource = next((r for r in index.resources if r.id == resource_id), None)
+        if resource is None or resource.snapshot_hash is None:
+            raise HTTPException(status_code=404, detail="Resource content is not available.")
+
+        snapshot_path = library.snapshots_dir(data_dir) / resource.snapshot_hash
+        if not snapshot_path.is_file():
+            raise HTTPException(status_code=404, detail="Snapshot content is missing.")
+
+        return StarletteResponse(
+            content=snapshot_path.read_bytes(),
+            media_type=resource.media_type,
+        )
 
     static_directory = Path(__file__).with_name("static")
     if static_directory.is_dir():
