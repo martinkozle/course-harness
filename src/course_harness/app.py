@@ -38,17 +38,30 @@ from course_harness.course_plan import (
     write_course_plan,
 )
 from course_harness.providers import (
+    ModelCatalog,
+    ModelPreset,
+    ModelPresetRequest,
+    ProviderAccount,
+    ProviderAccountRequest,
+    ProviderAccountValidator,
     ProviderCapabilityError,
     ProviderCapabilityValidator,
     ProviderConfigurationRequest,
     ProviderStatus,
     ProviderValidationError,
     default_provider_store_path,
+    provider_request_for_model,
     provider_status,
+    read_model_catalog,
     read_provider_api_key,
     read_provider_configuration,
     require_planning_capabilities,
+    resolve_selected_model,
+    save_model_preset,
+    save_provider_account,
     save_provider_configuration,
+    select_model_preset,
+    validate_provider_account,
     validate_provider_capabilities,
 )
 from course_harness.workspaces import (
@@ -87,6 +100,10 @@ class WorkspaceEntry(BaseModel):
     kind: Literal["file", "directory"]
 
 
+class ModelSelection(BaseModel):
+    model_id: str = Field(min_length=1)
+
+
 def create_app(
     workspace: Path | None = None,
     *,
@@ -96,6 +113,7 @@ def create_app(
     chat_store_path: Path | None = None,
     agent_model: Model | None = None,
     provider_validator: ProviderCapabilityValidator = validate_provider_capabilities,
+    provider_account_validator: ProviderAccountValidator = validate_provider_account,
 ) -> FastAPI:
     """Create the HTTP application, optionally bound to one Course Workspace."""
     app = FastAPI(title="Course Harness")
@@ -286,6 +304,41 @@ def create_app(
         save_provider_configuration(provider_path, request, capabilities)
         return provider_status(provider_path)
 
+    @app.get("/api/models", response_model=ModelCatalog)
+    async def model_catalog() -> ModelCatalog:
+        require_workspace()
+        return read_model_catalog(provider_path)
+
+    @app.post("/api/provider-accounts", response_model=ProviderAccount, status_code=201)
+    async def create_provider_account(request: ProviderAccountRequest) -> ProviderAccount:
+        require_workspace()
+        try:
+            await provider_account_validator(request)
+        except ProviderValidationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return save_provider_account(provider_path, request)
+
+    @app.post("/api/models", response_model=ModelPreset, status_code=201)
+    async def create_model_preset(request: ModelPresetRequest) -> ModelPreset:
+        require_workspace()
+        try:
+            provider_request = provider_request_for_model(provider_path, request)
+            capabilities = await provider_validator(provider_request)
+            require_planning_capabilities(capabilities)
+            return save_model_preset(provider_path, request, capabilities)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Provider Account was not found") from error
+        except (ProviderCapabilityError, ProviderValidationError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.put("/api/models/selected", response_model=ModelCatalog)
+    async def choose_model_preset(selection: ModelSelection) -> ModelCatalog:
+        require_workspace()
+        try:
+            return select_model_preset(provider_path, selection.model_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Model Preset was not found") from error
+
     @app.get("/api/chat", response_model=ChatTranscript)
     async def chat_transcript() -> ChatTranscript:
         active = require_workspace()
@@ -301,8 +354,12 @@ def create_app(
                 detail="Another Course change is already running in this Workspace.",
             )
         await lock.acquire()
-        configuration = read_provider_configuration(provider_path)
-        api_key = read_provider_api_key(provider_path)
+        selected_model = resolve_selected_model(provider_path)
+        if selected_model is None:
+            configuration = read_provider_configuration(provider_path)
+            api_key = read_provider_api_key(provider_path)
+        else:
+            configuration, api_key = selected_model
         if configuration is None or api_key is None:
             lock.release()
             raise HTTPException(

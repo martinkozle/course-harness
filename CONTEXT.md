@@ -136,6 +136,14 @@ _Avoid_: Slide, Artifact, browser reimplementation of PowerPoint
 The persistent conversational agent accountable to the Course Author for planning and changing a Course.
 _Avoid_: Pipeline, orchestrator, chatbot
 
+**Provider Account**:
+A reusable connection to a model provider, consisting of an endpoint and one private credential.
+_Avoid_: Model, connection, provider configuration
+
+**Model Preset**:
+A named model choice with verified capabilities that uses one Provider Account; multiple Model Presets may share the same Provider Account.
+_Avoid_: Provider, connection, model configuration
+
 **Worker Agent**:
 A temporary delegate that returns research, Evidence, or a draft proposal to the Course Agent without directly changing authoritative Course state.
 _Avoid_: Course Agent, pipeline node

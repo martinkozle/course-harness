@@ -4,10 +4,11 @@ import {
   AgentPanel,
   type ChatMessage,
   type CoursePlan,
-  type ProviderStatus,
 } from "./AgentPanel";
+import { ModelsView } from "./ProviderSetup";
 import { responseError } from "./api";
 import type { AgentInterrupt } from "./agentStream";
+import type { ModelCatalog } from "./models";
 
 type Workspace = {
   name: string;
@@ -39,8 +40,10 @@ type CourseRequest = {
   lectures: { title: string }[];
 };
 
+type WorkspaceView = "course" | "files" | "models";
+
 type SectionLink = {
-  id: string;
+  id: WorkspaceView;
   label: string;
 };
 
@@ -152,6 +155,8 @@ type WorkspaceShellProps = {
   workspace: Workspace;
   busy: boolean;
   sections: SectionLink[];
+  activeView: WorkspaceView;
+  onNavigate: (view: WorkspaceView) => void;
   onAllCourses: () => Promise<void>;
   agent: React.ReactNode;
   children: React.ReactNode;
@@ -161,6 +166,8 @@ function WorkspaceShell({
   workspace,
   busy,
   sections,
+  activeView,
+  onNavigate,
   onAllCourses,
   agent,
   children,
@@ -185,17 +192,24 @@ function WorkspaceShell({
         </div>
 
         {sections.length > 0 ? (
-          <nav className="section-nav" aria-label="Course sections">
-            {sections.map((section, index) => (
-              <a key={section.id} href={`#${section.id}`}>
-                <span aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
+          <nav className="section-nav" aria-label="Workspace views">
+            {sections.map((section) => (
+              <button
+                key={section.id}
+                type="button"
+                aria-current={activeView === section.id ? "page" : undefined}
+                onClick={() => onNavigate(section.id)}
+              >
+                <span aria-hidden="true">
+                  {section.id === "course" ? "CP" : section.id === "files" ? "FL" : "MD"}
+                </span>
                 {section.label}
-              </a>
+              </button>
             ))}
           </nav>
         ) : null}
       </aside>
-      <div className="workspace-stage">
+      <div className={`workspace-stage view-${activeView}`}>
         {children}
         {agent}
       </div>
@@ -382,18 +396,14 @@ function CourseReadError({ workspace, error, busy, onRetry }: CourseReadErrorPro
 }
 
 type CourseViewProps = {
-  workspace: Workspace;
   course: CoursePlan;
-  files: WorkspaceEntry[];
   busy: boolean;
   error: string | null;
   onSaveLectures: (lectures: LectureDraft[]) => Promise<boolean>;
 };
 
 function CourseView({
-  workspace,
   course,
-  files,
   busy,
   error,
   onSaveLectures,
@@ -582,19 +592,26 @@ function CourseView({
         </div>
       </section>
 
-      <section
-        className="content-section files-section"
-        id="files"
-        aria-labelledby="files-heading"
-      >
+    </main>
+  );
+}
+
+function FilesView({ workspace, files }: { workspace: Workspace; files: WorkspaceEntry[] }) {
+  return (
+    <main className="page-main files-main" aria-labelledby="files-heading">
+      <header className="page-heading">
+        <p className="eyebrow">Course Workspace</p>
+        <h1 id="files-heading">Files</h1>
+        <p className="workspace-location">{workspace.path}</p>
+      </header>
+      <section className="content-section files-section" aria-label="Course files">
         <div className="content-section-heading">
           <div>
             <p className="section-kicker">On disk</p>
-            <h2 id="files-heading">Course files</h2>
+            <h2>Visible Course files</h2>
           </div>
           <span className="count-badge">{files.length}</span>
         </div>
-        <p className="workspace-location">{workspace.path}</p>
         {files.length === 0 ? (
           <p className="empty-note">This Course folder has no visible files yet.</p>
         ) : (
@@ -612,15 +629,10 @@ function CourseView({
   );
 }
 
-const setupSections: SectionLink[] = [
-  { id: "course-setup", label: "Course setup" },
-  { id: "agent", label: "Course Agent" },
-];
-const courseSections: SectionLink[] = [
-  { id: "syllabus", label: "Syllabus" },
-  { id: "intent", label: "Course intent" },
+const workspaceViews: SectionLink[] = [
+  { id: "course", label: "Course Plan" },
   { id: "files", label: "Files" },
-  { id: "agent", label: "Course Agent" },
+  { id: "models", label: "Models" },
 ];
 
 export function App() {
@@ -628,7 +640,12 @@ export function App() {
   const [recent, setRecent] = useState<RecentWorkspace[]>([]);
   const [course, setCourse] = useState<CoursePlan | null | undefined>(undefined);
   const [files, setFiles] = useState<WorkspaceEntry[]>([]);
-  const [provider, setProvider] = useState<ProviderStatus>({ configured: false });
+  const [catalog, setCatalog] = useState<ModelCatalog>({
+    provider_accounts: [],
+    model_presets: [],
+    selected_model_id: null,
+  });
+  const [activeView, setActiveView] = useState<WorkspaceView>("course");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatApproval, setChatApproval] = useState<AgentInterrupt | null>(null);
   const [agentRunning, setAgentRunning] = useState(false);
@@ -637,12 +654,13 @@ export function App() {
 
   const loadWorkspace = useCallback(async (active: Workspace, signal?: AbortSignal) => {
     scrollToTop();
+    setActiveView("course");
     setWorkspace(active);
     setCourse(undefined);
-    const [courseResponse, filesResponse, providerResponse, chatResponse] = await Promise.all([
+    const [courseResponse, filesResponse, modelsResponse, chatResponse] = await Promise.all([
       fetch("/api/course", { signal }),
       fetch("/api/workspace/files", { signal }),
-      fetch("/api/provider", { signal }),
+      fetch("/api/models", { signal }),
       fetch("/api/chat", { signal }),
     ]);
     if (courseResponse.status === 404) {
@@ -657,10 +675,10 @@ export function App() {
     } else {
       throw new Error(await responseError(filesResponse));
     }
-    if (!providerResponse.ok) {
-      throw new Error(await responseError(providerResponse));
+    if (!modelsResponse.ok) {
+      throw new Error(await responseError(modelsResponse));
     }
-    setProvider((await providerResponse.json()) as ProviderStatus);
+    setCatalog((await modelsResponse.json()) as ModelCatalog);
     if (!chatResponse.ok) {
       throw new Error(await responseError(chatResponse));
     }
@@ -824,6 +842,8 @@ export function App() {
       setFiles([]);
       setChatMessages([]);
       setChatApproval(null);
+      setCatalog({ provider_accounts: [], model_presets: [], selected_model_id: null });
+      setActiveView("course");
 
       const recentResponse = await fetch("/api/launcher/recent");
       if (!recentResponse.ok) {
@@ -852,19 +872,23 @@ export function App() {
       />
     );
   } else {
-    const sections = course ? courseSections : course === null ? setupSections : [];
     content = (
       <WorkspaceShell
         workspace={workspace}
         busy={busy || agentRunning}
-        sections={sections}
+        sections={workspaceViews}
+        activeView={activeView}
+        onNavigate={setActiveView}
         onAllCourses={returnToCourses}
         agent={
           <AgentPanel
             key={workspace.path}
             initialMessages={chatMessages}
             initialApproval={chatApproval}
-            initialProvider={provider}
+            catalog={catalog}
+            onCatalogChange={setCatalog}
+            onOpenModels={() => setActiveView("models")}
+            modelsOpen={activeView === "models"}
             onRunningChange={setAgentRunning}
             onCourseChange={async (updated) => {
               setCourse(updated);
@@ -876,7 +900,11 @@ export function App() {
           />
         }
       >
-        {course === undefined && error ? (
+        {activeView === "models" ? (
+          <ModelsView catalog={catalog} onCatalogChange={setCatalog} />
+        ) : activeView === "files" ? (
+          <FilesView workspace={workspace} files={files} />
+        ) : course === undefined && error ? (
           <CourseReadError
             workspace={workspace}
             error={error}
@@ -896,9 +924,7 @@ export function App() {
           />
         ) : (
           <CourseView
-            workspace={workspace}
             course={course}
-            files={files}
             busy={busy || agentRunning}
             error={error}
             onSaveLectures={saveLectureChanges}

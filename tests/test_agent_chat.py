@@ -34,6 +34,10 @@ async def _verified_capabilities(_request: object) -> ProviderCapabilities:
     )
 
 
+async def _verified_account(_request: object) -> None:
+    return None
+
+
 def _provider_request() -> dict[str, object]:
     return {
         "kind": "openrouter",
@@ -169,6 +173,66 @@ async def test_provider_configuration_is_kept_outside_the_course_workspace(
     )
     assert (provider_store / "provider.json").is_file()
     assert (provider_store / "credentials.json").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.anyio
+async def test_one_provider_account_can_back_multiple_selectable_model_presets(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    provider_store = tmp_path / "user-data" / "providers"
+    transport = httpx2.ASGITransport(
+        app=create_app(
+            workspace,
+            provider_store_path=provider_store,
+            provider_validator=_verified_capabilities,
+            provider_account_validator=_verified_account,
+        )
+    )
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        account = await client.post(
+            "/api/provider-accounts",
+            json={
+                "name": "My OpenRouter",
+                "kind": "openrouter",
+                "api_key": "one-reusable-secret",
+            },
+        )
+        account_id = account.json()["id"]
+        first = await client.post(
+            "/api/models",
+            json={
+                "name": "Nemotron",
+                "provider_account_id": account_id,
+                "model": "nvidia/llama-3.3-nemotron-super-49b-v1:free",
+            },
+        )
+        second = await client.post(
+            "/api/models",
+            json={
+                "name": "HY 3",
+                "provider_account_id": account_id,
+                "model": "tencent/hy3:free",
+            },
+        )
+        selected = await client.put("/api/models/selected", json={"model_id": second.json()["id"]})
+        catalog = await client.get("/api/models")
+
+    assert account.status_code == 201
+    assert "api_key" not in account.json()
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert selected.status_code == 200
+    assert len(catalog.json()["provider_accounts"]) == 1
+    assert [preset["name"] for preset in catalog.json()["model_presets"]] == [
+        "Nemotron",
+        "HY 3",
+    ]
+    assert catalog.json()["selected_model_id"] == second.json()["id"]
+    credentials = (provider_store / "credentials.json").read_text(encoding="utf-8")
+    assert credentials.count("one-reusable-secret") == 1
 
 
 @pytest.mark.anyio

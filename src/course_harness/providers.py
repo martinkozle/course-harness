@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import httpx2
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
@@ -67,6 +68,69 @@ class ProviderConfigurationRequest(BaseModel):
         )
 
 
+class ProviderAccountRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=100)
+    kind: ProviderKind
+    api_key: SecretStr = Field(min_length=1)
+    base_url: str | None = None
+
+    @model_validator(mode="after")
+    def endpoint_matches_provider(self) -> ProviderAccountRequest:
+        if self.kind in {"openrouter", "anthropic"} and self.base_url is not None:
+            raise ValueError(f"{self.kind} uses its fixed API endpoint; omit base_url")
+        if self.kind == "openai-compatible" and self.base_url is None:
+            raise ValueError("An OpenAI-compatible provider requires base_url")
+        if self.base_url is not None:
+            validate_provider_url(self.base_url)
+        return self
+
+    def resolved_base_url(self) -> str:
+        if self.kind == "openrouter":
+            return "https://openrouter.ai/api/v1"
+        if self.kind == "anthropic":
+            return "https://api.anthropic.com"
+        assert self.base_url is not None
+        return self.base_url.rstrip("/")
+
+
+class ProviderAccount(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    kind: ProviderKind
+    base_url: str
+
+
+class ModelPresetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=100)
+    provider_account_id: str = Field(min_length=1)
+    model: str = Field(min_length=1, max_length=300)
+
+
+class ModelPreset(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    provider_account_id: str
+    model: str
+    capabilities: ProviderCapabilities
+    diagnostics: list[str]
+
+
+class ModelCatalog(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_accounts: list[ProviderAccount] = Field(default_factory=list)
+    model_presets: list[ModelPreset] = Field(default_factory=list)
+    selected_model_id: str | None = None
+
+
 class ProviderStatus(BaseModel):
     configured: bool
     kind: ProviderKind | None = None
@@ -87,6 +151,7 @@ class ProviderValidationError(ValueError):
 ProviderCapabilityValidator = Callable[
     [ProviderConfigurationRequest], Awaitable[ProviderCapabilities]
 ]
+ProviderAccountValidator = Callable[[ProviderAccountRequest], Awaitable[None]]
 
 
 def validate_provider_url(value: str) -> None:
@@ -170,6 +235,51 @@ def save_provider_configuration(
         mode=0o600,
     )
     return configuration
+
+
+async def validate_provider_account(
+    request: ProviderAccountRequest,
+    *,
+    http_client: httpx2.AsyncClient | None = None,
+) -> None:
+    if http_client is not None:
+        await _validate_provider_account(request, http_client)
+        return
+    async with httpx2.AsyncClient(timeout=15) as client:
+        await _validate_provider_account(request, client)
+
+
+async def _validate_provider_account(
+    request: ProviderAccountRequest, client: httpx2.AsyncClient
+) -> None:
+    api_key = request.api_key.get_secret_value()
+    try:
+        if request.kind == "openrouter":
+            response = await client.get(
+                "https://openrouter.ai/api/v1/key",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        elif request.kind == "anthropic":
+            response = await client.get(
+                "https://api.anthropic.com/v1/models?limit=1",
+                headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            )
+        else:
+            response = await client.get(
+                f"{request.resolved_base_url()}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        if response.status_code == 401:
+            raise ProviderValidationError(
+                f"The {request.name} credential was rejected. Check the API key and try again."
+            )
+        response.raise_for_status()
+    except ProviderValidationError:
+        raise
+    except httpx2.HTTPError as error:
+        raise ProviderValidationError(
+            f"Course Harness could not authenticate with {request.name}."
+        ) from error
 
 
 async def validate_provider_capabilities(
@@ -284,6 +394,192 @@ def _capabilities_from_metadata(metadata: object) -> ProviderCapabilities:
     )
 
 
+def read_model_catalog(store_path: Path) -> ModelCatalog:
+    path = store_path / "catalog.json"
+    if path.is_file():
+        try:
+            return ModelCatalog.model_validate_json(path.read_text(encoding="utf-8"))
+        except OSError, ValueError:
+            return ModelCatalog()
+    return _migrate_legacy_catalog(store_path)
+
+
+def save_provider_account(store_path: Path, request: ProviderAccountRequest) -> ProviderAccount:
+    catalog = read_model_catalog(store_path)
+    account = ProviderAccount(
+        id=f"provider-{uuid4().hex[:12]}",
+        name=request.name,
+        kind=request.kind,
+        base_url=request.resolved_base_url(),
+    )
+    catalog.provider_accounts.append(account)
+    credentials = _read_credentials(store_path)
+    credentials[account.id] = request.api_key.get_secret_value()
+    _write_catalog(store_path, catalog, credentials)
+    return account
+
+
+def save_model_preset(
+    store_path: Path,
+    request: ModelPresetRequest,
+    capabilities: ProviderCapabilities,
+) -> ModelPreset:
+    catalog = read_model_catalog(store_path)
+    if all(account.id != request.provider_account_id for account in catalog.provider_accounts):
+        raise KeyError(request.provider_account_id)
+    preset = ModelPreset(
+        id=f"model-{uuid4().hex[:12]}",
+        name=request.name,
+        provider_account_id=request.provider_account_id,
+        model=request.model,
+        capabilities=capabilities,
+        diagnostics=provider_diagnostics(capabilities),
+    )
+    catalog.model_presets.append(preset)
+    if catalog.selected_model_id is None:
+        catalog.selected_model_id = preset.id
+    _write_catalog(store_path, catalog, _read_credentials(store_path))
+    return preset
+
+
+def select_model_preset(store_path: Path, model_id: str) -> ModelCatalog:
+    catalog = read_model_catalog(store_path)
+    if all(preset.id != model_id for preset in catalog.model_presets):
+        raise KeyError(model_id)
+    catalog.selected_model_id = model_id
+    _write_catalog(store_path, catalog, _read_credentials(store_path))
+    return catalog
+
+
+def provider_request_for_model(
+    store_path: Path, request: ModelPresetRequest
+) -> ProviderConfigurationRequest:
+    catalog = read_model_catalog(store_path)
+    account = next(
+        (
+            candidate
+            for candidate in catalog.provider_accounts
+            if candidate.id == request.provider_account_id
+        ),
+        None,
+    )
+    api_key = _read_credentials(store_path).get(request.provider_account_id)
+    if account is None or api_key is None:
+        raise KeyError(request.provider_account_id)
+    return ProviderConfigurationRequest(
+        kind=account.kind,
+        model=request.model,
+        api_key=SecretStr(api_key),
+        base_url=account.base_url if account.kind == "openai-compatible" else None,
+    )
+
+
+def resolve_selected_model(
+    store_path: Path,
+) -> tuple[ProviderConfiguration, str] | None:
+    catalog = read_model_catalog(store_path)
+    preset = next(
+        (
+            candidate
+            for candidate in catalog.model_presets
+            if candidate.id == catalog.selected_model_id
+        ),
+        None,
+    )
+    if preset is None:
+        return None
+    account = next(
+        (
+            candidate
+            for candidate in catalog.provider_accounts
+            if candidate.id == preset.provider_account_id
+        ),
+        None,
+    )
+    api_key = _read_credentials(store_path).get(preset.provider_account_id)
+    if account is None or api_key is None:
+        return None
+    return (
+        ProviderConfiguration(
+            kind=account.kind,
+            model=preset.model,
+            base_url=account.base_url,
+            capabilities=preset.capabilities,
+        ),
+        api_key,
+    )
+
+
+def _migrate_legacy_catalog(store_path: Path) -> ModelCatalog:
+    configuration = read_provider_configuration(store_path)
+    api_key = _read_legacy_api_key(store_path)
+    if configuration is None or api_key is None:
+        return ModelCatalog()
+    account = ProviderAccount(
+        id="provider-legacy",
+        name={
+            "openrouter": "OpenRouter",
+            "anthropic": "Anthropic",
+            "openai-compatible": "OpenAI-compatible",
+        }[configuration.kind],
+        kind=configuration.kind,
+        base_url=configuration.base_url,
+    )
+    preset = ModelPreset(
+        id="model-legacy",
+        name=configuration.model,
+        provider_account_id=account.id,
+        model=configuration.model,
+        capabilities=configuration.capabilities,
+        diagnostics=provider_diagnostics(configuration.capabilities),
+    )
+    catalog = ModelCatalog(
+        provider_accounts=[account],
+        model_presets=[preset],
+        selected_model_id=preset.id,
+    )
+    _write_catalog(store_path, catalog, {account.id: api_key})
+    return catalog
+
+
+def _write_catalog(store_path: Path, catalog: ModelCatalog, credentials: dict[str, str]) -> None:
+    store_path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(store_path, 0o700)
+    _write_private_json(store_path / "catalog.json", catalog.model_dump(mode="json"), mode=0o600)
+    _write_private_json(store_path / "credentials.json", credentials, mode=0o600)
+
+
+def _read_credentials(store_path: Path) -> dict[str, str]:
+    path = store_path / "credentials.json"
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError, json.JSONDecodeError:
+        return {}
+    if isinstance(payload, dict) and isinstance(payload.get("api_key"), str):
+        return {"provider-legacy": payload["api_key"]}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        key: value
+        for key, value in payload.items()
+        if isinstance(key, str) and isinstance(value, str) and value
+    }
+
+
+def _read_legacy_api_key(store_path: Path) -> str | None:
+    path = store_path / "credentials.json"
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        api_key = payload.get("api_key")
+        return api_key if isinstance(api_key, str) and api_key else None
+    except OSError, json.JSONDecodeError, AttributeError:
+        return None
+
+
 def _write_private_json(path: Path, payload: object, *, mode: int) -> None:
     temporary_path = path.with_suffix(f"{path.suffix}.tmp")
     descriptor = os.open(temporary_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
@@ -310,19 +606,19 @@ def read_provider_configuration(store_path: Path) -> ProviderConfiguration | Non
 
 
 def read_provider_api_key(store_path: Path) -> str | None:
-    path = store_path / "credentials.json"
-    if not path.is_file():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        api_key = payload.get("api_key")
-        return api_key if isinstance(api_key, str) and api_key else None
-    except OSError, json.JSONDecodeError, AttributeError:
-        return None
+    legacy = _read_legacy_api_key(store_path)
+    if legacy is not None:
+        return legacy
+    selected = resolve_selected_model(store_path)
+    return selected[1] if selected is not None else None
 
 
 def provider_status(store_path: Path) -> ProviderStatus:
-    configuration = read_provider_configuration(store_path)
+    selected = resolve_selected_model(store_path)
+    if selected is not None:
+        configuration, _ = selected
+    else:
+        configuration = read_provider_configuration(store_path)
     if configuration is None or read_provider_api_key(store_path) is None:
         return ProviderStatus(configured=False)
     return ProviderStatus(

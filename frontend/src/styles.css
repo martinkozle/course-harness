@@ -473,26 +473,29 @@ h1 {
   margin-top: 24px;
 }
 
-.section-nav a {
+.section-nav button {
   display: grid;
+  width: 100%;
   grid-template-columns: 30px minmax(0, 1fr);
   gap: 4px;
   align-items: center;
   min-height: 40px;
   padding: 0 10px;
+  border: 0;
   border-radius: 7px;
+  background: transparent;
   color: var(--muted);
   font-size: 0.82rem;
   font-weight: 700;
   text-decoration: none;
 }
 
-.section-nav a:hover {
+.section-nav button:hover {
   background: rgba(255, 255, 255, 0.72);
   color: var(--ink);
 }
 
-.section-nav a:first-child {
+.section-nav button[aria-current="page"] {
   background: var(--paper);
   color: var(--cobalt-dark);
   box-shadow: 0 5px 18px rgba(31, 48, 86, 0.06);
@@ -588,6 +591,7 @@ h1 {
 }
 
 .field input,
+.field select,
 .field textarea,
 .lecture-editor input {
   width: 100%;
@@ -596,7 +600,8 @@ h1 {
   color: var(--ink);
 }
 
-.field input {
+.field input,
+.field select {
   min-height: 46px;
   padding: 0 12px;
 }
@@ -1098,10 +1103,204 @@ h1 {
   margin: 0 0 0.55rem;
 }
 
-.approval-card > div {
+.approval-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.55rem;
+}
+
+.proposal-sheet {
+  margin: 0.8rem 0;
+  overflow: hidden;
+  border: 1px solid #b8c5ee;
+  border-radius: 0.55rem;
+  background: white;
+}
+
+.proposal-sheet > div {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.8rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.proposal-sheet > div strong {
+  font-family: "Charter", "Bitstream Charter", Georgia, serif;
+  font-size: 1rem;
+}
+
+.proposal-sheet > div span,
+.approval-scope {
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.proposal-sheet ol {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proposal-sheet li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 0.4rem;
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.76rem;
+}
+
+.proposal-sheet li:last-child {
+  border-bottom: 0;
+}
+
+.proposal-sheet li span {
+  color: var(--cobalt);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.62rem;
+}
+
+.agent-model-picker {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 1rem;
+}
+
+.agent-model-picker label {
+  font-size: 0.7rem;
+  font-weight: 750;
+}
+
+.agent-model-picker select {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 0.6rem;
+  border: 1px solid #aebbd2;
+  background: white;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.agent-model-picker small {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.62rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-model-empty {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 1rem;
+}
+
+.agent-model-empty p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.agent-model-empty button {
+  justify-self: start;
+}
+
+.models-heading > p:last-child {
+  max-width: 680px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.model-settings-section {
+  margin-top: 2rem;
+  padding: clamp(22px, 4vw, 32px);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 10px 35px rgba(31, 48, 86, 0.05);
+}
+
+.provider-account-list,
+.model-preset-list {
+  display: grid;
+  gap: 0.65rem;
+  margin: 1.2rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.provider-account-list li,
+.model-preset-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.25rem 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: white;
+}
+
+.provider-account-list strong,
+.model-preset-list strong {
+  display: block;
+}
+
+.provider-account-list span,
+.model-preset-list span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.provider-account-list small,
+.model-preset-list small {
+  align-self: center;
+  color: var(--cobalt-dark);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.66rem;
+}
+
+.provider-account-list small {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+}
+
+.settings-form-card {
+  margin-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.settings-form-card summary {
+  padding: 1rem 0 0;
+  color: var(--cobalt-dark);
+  font-size: 0.82rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.settings-form-card form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+  padding: 1rem;
+  border-radius: 10px;
+  background: var(--canvas);
+}
+
+.settings-form-card .form-help {
+  align-self: center;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.settings-form-card button {
+  justify-self: end;
 }
 
 .chat-composer {
@@ -1210,6 +1409,10 @@ h1 {
     grid-template-columns: 1fr;
   }
 
+  .workspace-stage.view-course .agent-panel {
+    order: -1;
+  }
+
   .agent-panel {
     position: static;
     max-height: none;
@@ -1252,8 +1455,9 @@ h1 {
     overflow-x: auto;
   }
 
-  .section-nav a {
+  .section-nav button {
     display: flex;
+    width: auto;
     flex: 0 0 auto;
     gap: 6px;
     padding: 0 10px;
@@ -1338,6 +1542,14 @@ h1 {
   .section-nav {
     margin: 0 -16px;
     padding: 3px 16px 10px;
+  }
+
+  .settings-form-card form {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-form-card button {
+    width: 100%;
   }
 
   .page-main {
