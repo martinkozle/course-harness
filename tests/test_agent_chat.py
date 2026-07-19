@@ -16,7 +16,12 @@ from course_harness.course_agent import (
     ReplaceCoursePlanCommand,
     apply_course_plan_command,
 )
-from course_harness.providers import ProviderCapabilities
+from course_harness.providers import (
+    ProviderCapabilities,
+    ProviderConfigurationRequest,
+    ProviderValidationError,
+    validate_provider_capabilities,
+)
 
 
 async def _verified_capabilities(_request: object) -> ProviderCapabilities:
@@ -216,10 +221,68 @@ async def test_provider_capability_failures_are_explained_before_a_run(
     assert response.status_code == 422
     detail = response.json()["detail"]
     assert "Tool calling is required" in detail
-    assert "Structured output is required" in detail
     assert "Streaming is required" in detail
     assert "at least 16,384 tokens" in detail
     assert not provider_store.exists()
+
+
+@pytest.mark.anyio
+async def test_structured_output_is_informational_when_typed_tools_are_supported(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+
+    async def tool_capable(_request: object) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            tool_calling=True,
+            structured_output=False,
+            streaming=True,
+            context_window=131_072,
+            vision=False,
+        )
+
+    transport = httpx2.ASGITransport(
+        app=create_app(
+            workspace,
+            provider_store_path=tmp_path / "provider",
+            provider_validator=tool_capable,
+        )
+    )
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.put("/api/provider", json=_provider_request())
+
+    assert response.status_code == 200
+    assert response.json()["capabilities"]["structured_output"] is False
+    assert any(
+        "native structured output" in item.lower() for item in response.json()["diagnostics"]
+    )
+
+
+@pytest.mark.anyio
+async def test_openrouter_configuration_rejects_an_unauthenticated_key() -> None:
+    def openrouter(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/api/v1/key":
+            return httpx2.Response(
+                401,
+                json={"error": {"message": "Missing Authentication header", "code": 401}},
+            )
+        return httpx2.Response(
+            200,
+            json={
+                "data": {
+                    "id": "tencent/hy3:free",
+                    "context_length": 262_144,
+                    "supported_parameters": ["tools", "structured_outputs"],
+                    "architecture": {"input_modalities": ["text"]},
+                }
+            },
+        )
+
+    request = ProviderConfigurationRequest.model_validate(_provider_request())
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(openrouter)) as client:
+        with pytest.raises(ProviderValidationError, match="API key was rejected"):
+            await validate_provider_capabilities(request, http_client=client)
 
 
 @pytest.mark.anyio

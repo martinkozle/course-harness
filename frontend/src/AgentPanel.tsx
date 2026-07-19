@@ -193,6 +193,14 @@ export function AgentPanel({
         <p>
           {provider.model} · {provider.kind}
         </p>
+        <button
+          className="secondary-action compact-action"
+          type="button"
+          disabled={running}
+          onClick={() => setProvider({ configured: false })}
+        >
+          Change connection
+        </button>
       </div>
 
       <ol className="chat-messages" aria-label="Course Agent conversation">

@@ -107,10 +107,6 @@ def _capability_findings(capabilities: ProviderCapabilities) -> list[tuple[str, 
             not capabilities.tool_calling,
         ),
         (
-            "Structured output is required for typed Course Plan commands.",
-            not capabilities.structured_output,
-        ),
-        (
             "Streaming is required to show Course Agent progress.",
             not capabilities.streaming,
         ),
@@ -130,6 +126,11 @@ def provider_diagnostics(capabilities: ProviderCapabilities) -> list[str]:
     if not capabilities.vision:
         findings.append(
             "Vision input is unavailable; image attachments cannot be used with this model."
+        )
+    if not capabilities.structured_output:
+        findings.append(
+            "Native structured output is unavailable; Course Plan commands remain validated "
+            "through typed tool calls."
         )
     return findings
 
@@ -173,66 +174,80 @@ def save_provider_configuration(
 
 async def validate_provider_capabilities(
     request: ProviderConfigurationRequest,
+    *,
+    http_client: httpx2.AsyncClient | None = None,
 ) -> ProviderCapabilities:
     """Verify model metadata through the configured provider adapter."""
+    if http_client is not None:
+        return await _validate_provider_capabilities(request, http_client)
+    async with httpx2.AsyncClient(timeout=15) as client:
+        return await _validate_provider_capabilities(request, client)
+
+
+async def _validate_provider_capabilities(
+    request: ProviderConfigurationRequest,
+    client: httpx2.AsyncClient,
+) -> ProviderCapabilities:
     api_key = request.api_key.get_secret_value()
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
-        async with httpx2.AsyncClient(timeout=15) as client:
-            if request.kind == "openrouter":
-                response = await client.get(
-                    f"https://openrouter.ai/api/v1/model/{request.model}", headers=headers
-                )
-                response.raise_for_status()
-                metadata = response.json()["data"]
-                return _capabilities_from_metadata(metadata)
-
-            if request.kind == "anthropic":
-                response = await client.get(
-                    f"https://api.anthropic.com/v1/models/{request.model}",
-                    headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
-                )
-                response.raise_for_status()
-                from course_harness.course_agent import build_provider_model
-
-                model = build_provider_model(
-                    request.configuration(
-                        ProviderCapabilities(
-                            tool_calling=True,
-                            structured_output=True,
-                            streaming=True,
-                            context_window=200_000,
-                            vision=True,
-                        )
-                    ),
-                    api_key,
-                )
-                profile = model.profile
-                return ProviderCapabilities(
-                    tool_calling=bool(profile.get("supports_tools")),
-                    structured_output=bool(profile.get("supports_json_schema_output")),
-                    streaming=True,
-                    context_window=200_000,
-                    vision=request.model.startswith("claude-"),
-                )
-
-            assert request.base_url is not None
-            response = await client.get(f"{request.base_url.rstrip('/')}/models", headers=headers)
-            response.raise_for_status()
-            models = response.json().get("data", [])
-            metadata = next(
-                (
-                    item
-                    for item in models
-                    if isinstance(item, dict) and item.get("id") == request.model
-                ),
-                None,
-            )
-            if metadata is None:
+        if request.kind == "openrouter":
+            authentication = await client.get("https://openrouter.ai/api/v1/key", headers=headers)
+            if authentication.status_code == 401:
                 raise ProviderValidationError(
-                    "The OpenAI-compatible endpoint did not report the selected model."
+                    "The OpenRouter API key was rejected. Create or copy an OpenRouter key and "
+                    "try again."
                 )
+            authentication.raise_for_status()
+            response = await client.get(
+                f"https://openrouter.ai/api/v1/model/{request.model}", headers=headers
+            )
+            response.raise_for_status()
+            metadata = response.json()["data"]
             return _capabilities_from_metadata(metadata)
+
+        if request.kind == "anthropic":
+            response = await client.get(
+                f"https://api.anthropic.com/v1/models/{request.model}",
+                headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            )
+            response.raise_for_status()
+            from course_harness.course_agent import build_provider_model
+
+            model = build_provider_model(
+                request.configuration(
+                    ProviderCapabilities(
+                        tool_calling=True,
+                        structured_output=True,
+                        streaming=True,
+                        context_window=200_000,
+                        vision=True,
+                    )
+                ),
+                api_key,
+            )
+            profile = model.profile
+            return ProviderCapabilities(
+                tool_calling=bool(profile.get("supports_tools")),
+                structured_output=bool(profile.get("supports_json_schema_output")),
+                streaming=True,
+                context_window=200_000,
+                vision=request.model.startswith("claude-"),
+            )
+
+        assert request.base_url is not None
+        response = await client.get(f"{request.base_url.rstrip('/')}/models", headers=headers)
+        response.raise_for_status()
+        models = response.json().get("data", [])
+        metadata = next(
+            (item for item in models if isinstance(item, dict) and item.get("id") == request.model),
+            None,
+        )
+        if metadata is None:
+            raise ProviderValidationError(
+                "The OpenAI-compatible endpoint did not report the selected model."
+            )
+        return _capabilities_from_metadata(metadata)
     except ProviderValidationError:
         raise
     except (httpx2.HTTPError, KeyError, TypeError, ValueError) as error:
