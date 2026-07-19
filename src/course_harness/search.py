@@ -129,7 +129,7 @@ def search_raw(
         rows = conn.execute(
             """
             SELECT content_hash, line_number,
-                   snippet(source_content, 2, '<mark>', '</mark>', '…', 32) AS snippet,
+                   snippet(source_content, 2, '<mark>', '</mark>', '…', 64) AS snippet,
                    bm25(source_content, 0) AS rank
             FROM source_content
             WHERE source_content MATCH ?
@@ -143,16 +143,11 @@ def search_raw(
         return []
 
     hits: list[_RawHit] = []
-    seen_hashes: set[str] = set()
     for row in rows:
         content_hash = row["content_hash"]
         line_number = int(row["line_number"])
         snippet = row["snippet"] or ""
         rank = float(row["rank"])
-
-        if content_hash in seen_hashes:
-            continue
-        seen_hashes.add(content_hash)
 
         hits.append(
             _RawHit(

@@ -23,5 +23,11 @@
 - Use a Nix flake with direnv for the development environment (system Python, Chromium, Bun, uv, Node.js). Confidence: 0.60
 - Use git-hooks.nix for pre-commit hooks (Biome, Ruff, ty, nixfmt, uv-check, common hygiene hooks). Confidence: 0.60
 
+# course-harness
+- Treat goals and outcomes as optional fields in the Course Plan model. Confidence: 0.70
+- Use typer for CLI argument parsing (not argparse). Confidence: 0.50
+- Use uv's native build system (not hatchling or setuptools). Confidence: 0.50
+- Include surrounding line context in FTS5 search result snippets, not just the single matching line. Confidence: 0.55
+
 # debugging
 - Set up FastAPI logging so API errors (422, 500, etc.) produce visible server-side logs with request details, not just silent HTTP status codes. Confidence: 0.60
