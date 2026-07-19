@@ -22,3 +22,6 @@
 # nix
 - Use a Nix flake with direnv for the development environment (system Python, Chromium, Bun, uv, Node.js). Confidence: 0.60
 - Use git-hooks.nix for pre-commit hooks (Biome, Ruff, ty, nixfmt, uv-check, common hygiene hooks). Confidence: 0.60
+
+# debugging
+- Set up FastAPI logging so API errors (422, 500, etc.) produce visible server-side logs with request details, not just silent HTTP status codes. Confidence: 0.60

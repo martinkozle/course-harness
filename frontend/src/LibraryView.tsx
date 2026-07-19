@@ -99,7 +99,7 @@ export function LibraryView({
 	async function handleAdmit(resourceId: string) {
 		const resource = resources.find((r) => r.resource_id === resourceId);
 		if (!resource) return;
-		const label = resource.location ?? resourceId;
+		const label = (resource.location ?? resourceId).slice(0, 200);
 		setAdmitting((current) => new Set(current).add(resourceId));
 		try {
 			const response = await fetch("/api/sources", {

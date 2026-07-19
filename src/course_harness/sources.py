@@ -99,7 +99,7 @@ def admit_source(
         id=_generate_source_id(),
         resource_id=resource_id,
         source_version_id=resource.snapshot_hash,
-        label=label or resource.location.rsplit("/", 1)[-1].rsplit("\\", 1)[-1],
+        label=label or resource.location.rsplit("/", 1)[-1].rsplit("\\", 1)[-1][:200],
         admitted_at=datetime.now(UTC).isoformat(),
     )
     existing_index.sources.append(source)

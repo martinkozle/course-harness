@@ -1,4 +1,6 @@
 import asyncio
+import json
+import logging
 import subprocess
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -6,6 +8,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from fastapi import FastAPI, HTTPException, Response
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
 from pydantic_ai import AgentRunResult, DeferredToolRequests
 from pydantic_ai.models import Model
@@ -124,7 +127,53 @@ def create_app(
     provider_account_validator: ProviderAccountValidator = validate_provider_account,
 ) -> FastAPI:
     """Create the HTTP application, optionally bound to one Course Workspace."""
+    if not logging.getLogger("course-harness").handlers:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logger = logging.getLogger("course-harness")
+
     app = FastAPI(title="Course Harness")
+
+    @app.exception_handler(HTTPException)
+    async def _log_http_exception(request: Request, exc: HTTPException) -> StarletteResponse:
+        if exc.status_code >= 500:
+            logger.exception(
+                "HTTP %d on %s %s: %s",
+                exc.status_code,
+                request.method,
+                request.url.path,
+                exc.detail,
+            )
+        elif exc.status_code >= 400:
+            logger.warning(
+                "HTTP %d on %s %s: %s",
+                exc.status_code,
+                request.method,
+                request.url.path,
+                exc.detail,
+            )
+        return StarletteResponse(
+            content=json.dumps({"detail": exc.detail}).encode("utf-8"),
+            status_code=exc.status_code,
+            media_type="application/json",
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def _log_validation_error(
+        request: Request,
+        exc: RequestValidationError,
+    ) -> StarletteResponse:
+        logger.warning(
+            "Validation error on %s %s: %s",
+            request.method,
+            request.url.path,
+            exc.errors(),
+        )
+        return StarletteResponse(
+            content=json.dumps({"detail": exc.errors()}).encode("utf-8"),
+            status_code=422,
+            media_type="application/json",
+        )
+
     recent_path = recent_store_path or default_recent_store_path()
     provider_path = provider_store_path or default_provider_store_path()
     data_dir = library_data_path or library.library_data_dir()
