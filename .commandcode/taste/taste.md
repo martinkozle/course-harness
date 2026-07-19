@@ -32,3 +32,6 @@
 
 # debugging
 - Set up FastAPI logging so API errors (422, 500, etc.) produce visible server-side logs with request details, not just silent HTTP status codes. Confidence: 0.60
+
+# ui
+- Don't show "no results" placeholder text in search until the user has explicitly submitted a search query. Confidence: 0.70

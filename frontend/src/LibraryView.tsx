@@ -49,6 +49,7 @@ export function LibraryView({
 		[],
 	);
 	const [searching, setSearching] = useState(false);
+	const [hasSearched, setHasSearched] = useState(false);
 	const [viewingSource, setViewingSource] = useState<string | null>(null);
 	const [sourceContent, setSourceContent] = useState("");
 	const [loadingContent, setLoadingContent] = useState(false);
@@ -143,9 +144,11 @@ export function LibraryView({
 		const q = searchQuery.trim();
 		if (!q) {
 			setSearchResults([]);
+			setHasSearched(false);
 			return;
 		}
 		setSearching(true);
+		setHasSearched(true);
 		try {
 			const response = await fetch("/api/sources/search", {
 				method: "POST",
@@ -337,7 +340,13 @@ export function LibraryView({
 							type="search"
 							className="search-input"
 							value={searchQuery}
-							onChange={(e) => setSearchQuery(e.target.value)}
+							onChange={(e) => {
+								setSearchQuery(e.target.value);
+								if (!e.target.value.trim()) {
+									setSearchResults([]);
+									setHasSearched(false);
+								}
+							}}
 							placeholder="Search admitted sources…"
 							aria-label="Search source content"
 						/>
@@ -412,6 +421,7 @@ export function LibraryView({
 						</ul>
 					) : searchResults.length === 0 &&
 						searchQuery.trim() &&
+						hasSearched &&
 						!searching ? (
 						<p className="empty-note">No results for "{searchQuery}".</p>
 					) : null}
