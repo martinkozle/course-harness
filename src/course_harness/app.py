@@ -1,13 +1,16 @@
+import asyncio
 import subprocess
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal, cast
 
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
-from pydantic_ai import AgentRunResult
+from pydantic_ai import AgentRunResult, DeferredToolRequests
 from pydantic_ai.models import Model
 from pydantic_ai.ui.ag_ui import AGUIAdapter
+from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import Response as StarletteResponse
 from starlette.staticfiles import StaticFiles
@@ -36,14 +39,17 @@ from course_harness.course_plan import (
 )
 from course_harness.providers import (
     ProviderCapabilityError,
+    ProviderCapabilityValidator,
     ProviderConfigurationRequest,
     ProviderStatus,
+    ProviderValidationError,
     default_provider_store_path,
     provider_status,
     read_provider_api_key,
     read_provider_configuration,
     require_planning_capabilities,
     save_provider_configuration,
+    validate_provider_capabilities,
 )
 from course_harness.workspaces import (
     WorkspaceSelectionError,
@@ -89,6 +95,7 @@ def create_app(
     provider_store_path: Path | None = None,
     chat_store_path: Path | None = None,
     agent_model: Model | None = None,
+    provider_validator: ProviderCapabilityValidator = validate_provider_capabilities,
 ) -> FastAPI:
     """Create the HTTP application, optionally bound to one Course Workspace."""
     app = FastAPI(title="Course Harness")
@@ -96,6 +103,7 @@ def create_app(
     provider_path = provider_store_path or default_provider_store_path()
     chat_path = chat_store_path or recent_path.parent / "chat"
     course_agent = create_course_agent()
+    mutation_locks: dict[Path, asyncio.Lock] = {}
 
     def require_workspace() -> Path:
         if workspace is None:
@@ -113,6 +121,23 @@ def create_app(
         if plan is None:
             raise HTTPException(status_code=404, detail="This Workspace does not contain a Course")
         return active, plan
+
+    def mutation_lock(active: Path) -> asyncio.Lock:
+        return mutation_locks.setdefault(active.resolve(), asyncio.Lock())
+
+    @asynccontextmanager
+    async def exclusive_mutation(active: Path):
+        lock = mutation_lock(active)
+        if lock.locked():
+            raise HTTPException(
+                status_code=409,
+                detail="Another Course change is already running in this Workspace.",
+            )
+        await lock.acquire()
+        try:
+            yield
+        finally:
+            lock.release()
 
     def bind_workspace(selection: Path) -> WorkspaceResponse:
         nonlocal workspace
@@ -150,7 +175,12 @@ def create_app(
     @app.post("/api/workspace/close", status_code=204)
     async def close_workspace() -> Response:
         nonlocal workspace
-        require_workspace()
+        active = require_workspace()
+        if mutation_lock(active).locked():
+            raise HTTPException(
+                status_code=409,
+                detail="Wait for the active Course Agent run before closing this Workspace.",
+            )
         workspace = None
         return Response(status_code=204)
 
@@ -242,15 +272,18 @@ def create_app(
 
     @app.get("/api/provider", response_model=ProviderStatus, response_model_exclude_none=True)
     async def configured_provider() -> ProviderStatus:
+        require_workspace()
         return provider_status(provider_path)
 
     @app.put("/api/provider", response_model=ProviderStatus, response_model_exclude_none=True)
     async def configure_provider(request: ProviderConfigurationRequest) -> ProviderStatus:
+        require_workspace()
         try:
-            require_planning_capabilities(request.capabilities)
-        except ProviderCapabilityError as error:
+            capabilities = await provider_validator(request)
+            require_planning_capabilities(capabilities)
+        except (ProviderCapabilityError, ProviderValidationError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        save_provider_configuration(provider_path, request)
+        save_provider_configuration(provider_path, request, capabilities)
         return provider_status(provider_path)
 
     @app.get("/api/chat", response_model=ChatTranscript)
@@ -261,9 +294,17 @@ def create_app(
     @app.post("/api/agent")
     async def run_course_agent(request: Request) -> StarletteResponse:
         active = require_workspace()
+        lock = mutation_lock(active)
+        if lock.locked():
+            raise HTTPException(
+                status_code=409,
+                detail="Another Course change is already running in this Workspace.",
+            )
+        await lock.acquire()
         configuration = read_provider_configuration(provider_path)
         api_key = read_provider_api_key(provider_path)
         if configuration is None or api_key is None:
+            lock.release()
             raise HTTPException(
                 status_code=409,
                 detail="Configure a model provider before starting the Course Agent.",
@@ -271,87 +312,107 @@ def create_app(
         try:
             require_planning_capabilities(configuration.capabilities)
         except ProviderCapabilityError as error:
+            lock.release()
             raise HTTPException(status_code=422, detail=str(error)) from error
 
         try:
             plan = read_course_plan(active)
         except InvalidCoursePlan as error:
+            lock.release()
             raise HTTPException(
                 status_code=422, detail=f"course.yaml is invalid: {error}"
             ) from error
-        deps = CourseAgentDeps(state=CourseAgentState(course=plan), workspace=active)
+        deps = CourseAgentDeps(course_state=CourseAgentState(course=plan), workspace=active)
         history = read_chat_history(chat_path, active)
-        model = agent_model or build_provider_model(configuration, api_key)
 
         async def persist(result: object) -> None:
             completed = cast(AgentRunResult[str], result)
             save_chat_history(chat_path, active, completed.all_messages())
 
-        return await AGUIAdapter.dispatch_request(
-            request,
-            agent=course_agent,
-            model=model,
-            deps=deps,
-            message_history=history,
-            conversation_id="course-agent",
-            on_complete=persist,
-            allowed_file_url_schemes=frozenset(),
-        )
+        try:
+            model = agent_model or build_provider_model(configuration, api_key)
+            response = await AGUIAdapter.dispatch_request(
+                request,
+                agent=course_agent,
+                model=model,
+                deps=deps,
+                output_type=[str, DeferredToolRequests],
+                message_history=history,
+                conversation_id="course-agent",
+                on_complete=persist,
+                allowed_file_url_schemes=frozenset(),
+            )
+        except Exception:
+            lock.release()
+            raise
+
+        async def release_lock() -> None:
+            lock.release()
+
+        response.background = BackgroundTask(release_lock)
+        return response
 
     @app.post("/api/course", response_model=CoursePlan, status_code=201)
     async def create_course(course_input: CoursePlanInput) -> CoursePlan:
         active = require_workspace()
-        if (active / "course.yaml").exists():
-            raise HTTPException(status_code=409, detail="This Workspace already contains a Course")
-        plan = create_course_plan(course_input)
-        try:
-            initialize_workspace_history(active)
-            create_course_plan_file(active, plan)
-        except FileExistsError as error:
-            raise HTTPException(
-                status_code=409, detail="This Workspace already contains a Course"
-            ) from error
-        except subprocess.CalledProcessError as error:
-            raise HTTPException(
-                status_code=500, detail="Course history could not be initialized"
-            ) from error
-        return plan
+        async with exclusive_mutation(active):
+            if (active / "course.yaml").exists():
+                raise HTTPException(
+                    status_code=409, detail="This Workspace already contains a Course"
+                )
+            plan = create_course_plan(course_input)
+            try:
+                initialize_workspace_history(active)
+                create_course_plan_file(active, plan)
+            except FileExistsError as error:
+                raise HTTPException(
+                    status_code=409, detail="This Workspace already contains a Course"
+                ) from error
+            except subprocess.CalledProcessError as error:
+                raise HTTPException(
+                    status_code=500, detail="Course history could not be initialized"
+                ) from error
+            return plan
 
     @app.patch("/api/course/lectures/{lecture_id}", response_model=CoursePlan)
     async def rename_lecture(lecture_id: str, rename: LectureRename) -> CoursePlan:
         active, plan = require_course_plan()
-        if not rename.title.strip():
-            raise HTTPException(status_code=422, detail="Lecture title cannot be empty")
-        if all(lecture.id != lecture_id for lecture in plan.lectures):
-            raise HTTPException(status_code=404, detail="Lecture was not found")
-        updated = plan.model_copy(
-            update={
-                "lectures": [
-                    lecture.model_copy(update={"title": rename.title.strip()})
-                    if lecture.id == lecture_id
-                    else lecture
-                    for lecture in plan.lectures
-                ]
-            }
-        )
-        write_course_plan(active, updated)
-        return updated
+        async with exclusive_mutation(active):
+            if not rename.title.strip():
+                raise HTTPException(status_code=422, detail="Lecture title cannot be empty")
+            if all(lecture.id != lecture_id for lecture in plan.lectures):
+                raise HTTPException(status_code=404, detail="Lecture was not found")
+            updated = plan.model_copy(
+                update={
+                    "lectures": [
+                        lecture.model_copy(update={"title": rename.title.strip()})
+                        if lecture.id == lecture_id
+                        else lecture
+                        for lecture in plan.lectures
+                    ]
+                }
+            )
+            write_course_plan(active, updated)
+            return updated
 
     @app.put("/api/course/lectures/order", response_model=CoursePlan)
     async def reorder_lectures(order: LectureOrder) -> CoursePlan:
         active, plan = require_course_plan()
-        current_ids = [lecture.id for lecture in plan.lectures]
-        if len(order.lecture_ids) != len(current_ids) or set(order.lecture_ids) != set(current_ids):
-            raise HTTPException(
-                status_code=422,
-                detail="Lecture order must contain every Lecture ID exactly once",
+        async with exclusive_mutation(active):
+            current_ids = [lecture.id for lecture in plan.lectures]
+            if len(order.lecture_ids) != len(current_ids) or set(order.lecture_ids) != set(
+                current_ids
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Lecture order must contain every Lecture ID exactly once",
+                )
+            lectures_by_id = {lecture.id: lecture for lecture in plan.lectures}
+            updated = plan.model_copy(
+                update={"lectures": [lectures_by_id[identity] for identity in order.lecture_ids]}
             )
-        lectures_by_id = {lecture.id: lecture for lecture in plan.lectures}
-        updated = plan.model_copy(
-            update={"lectures": [lectures_by_id[identity] for identity in order.lecture_ids]}
-        )
-        write_course_plan(active, updated)
-        return updated
+            write_course_plan(active, updated)
+            return updated
 
     static_directory = Path(__file__).with_name("static")
     if static_directory.is_dir():

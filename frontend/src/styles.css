@@ -1085,6 +1085,25 @@ h1 {
   color: var(--success);
 }
 
+.approval-card {
+  margin: 0 22px 1rem;
+  padding: 1rem;
+  border: 1px solid color-mix(in srgb, var(--cobalt) 36%, var(--line));
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--cobalt) 7%, white);
+}
+
+.approval-card h3,
+.approval-card p {
+  margin: 0 0 0.55rem;
+}
+
+.approval-card > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
 .chat-composer {
   display: grid;
   gap: 8px;

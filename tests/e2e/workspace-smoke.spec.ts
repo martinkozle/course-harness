@@ -14,6 +14,10 @@ test("Course Author creates a Course through chat and revises its Syllabus", asy
     .fill("Create a practical causal inference Course for applied researchers.");
   await page.getByRole("button", { name: "Send message" }).click();
 
+  await expect(page.getByRole("heading", { name: "Apply this Course Plan?" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Causal Inference in Practice" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Approve plan" }).click();
+
   await expect(page.getByRole("heading", { name: "Causal Inference in Practice" })).toBeVisible();
   await expect(page.getByText("I created a two-Lecture Course Plan.")).toBeVisible();
   const lectureSpine = page.getByRole("region", { name: "Lecture spine" });

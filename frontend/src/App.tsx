@@ -6,6 +6,8 @@ import {
   type CoursePlan,
   type ProviderStatus,
 } from "./AgentPanel";
+import { responseError } from "./api";
+import type { AgentInterrupt } from "./agentStream";
 
 type Workspace = {
   name: string;
@@ -41,15 +43,6 @@ type SectionLink = {
   id: string;
   label: string;
 };
-
-async function responseError(response: Response): Promise<string> {
-  try {
-    const payload = (await response.json()) as { detail?: string };
-    return payload.detail ?? "Course Harness could not complete that action.";
-  } catch {
-    return "Course Harness could not complete that action.";
-  }
-}
 
 function splitLines(value: string): string[] {
   return value
@@ -637,6 +630,8 @@ export function App() {
   const [files, setFiles] = useState<WorkspaceEntry[]>([]);
   const [provider, setProvider] = useState<ProviderStatus>({ configured: false });
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatApproval, setChatApproval] = useState<AgentInterrupt | null>(null);
+  const [agentRunning, setAgentRunning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -669,8 +664,12 @@ export function App() {
     if (!chatResponse.ok) {
       throw new Error(await responseError(chatResponse));
     }
-    const transcript = (await chatResponse.json()) as { messages: ChatMessage[] };
+    const transcript = (await chatResponse.json()) as {
+      messages: ChatMessage[];
+      approval: AgentInterrupt | null;
+    };
     setChatMessages(transcript.messages);
+    setChatApproval(transcript.approval);
   }, []);
 
   useEffect(() => {
@@ -824,6 +823,7 @@ export function App() {
       setCourse(null);
       setFiles([]);
       setChatMessages([]);
+      setChatApproval(null);
 
       const recentResponse = await fetch("/api/launcher/recent");
       if (!recentResponse.ok) {
@@ -844,7 +844,7 @@ export function App() {
     content = (
       <Launcher
         recent={recent}
-        busy={busy}
+        busy={busy || agentRunning}
         error={error}
         onNew={() => selectWorkspace("new-course")}
         onOpen={() => selectWorkspace("open-folder")}
@@ -856,15 +856,16 @@ export function App() {
     content = (
       <WorkspaceShell
         workspace={workspace}
-        busy={busy}
+        busy={busy || agentRunning}
         sections={sections}
         onAllCourses={returnToCourses}
         agent={
           <AgentPanel
             key={workspace.path}
-            course={course ?? null}
             initialMessages={chatMessages}
+            initialApproval={chatApproval}
             initialProvider={provider}
+            onRunningChange={setAgentRunning}
             onCourseChange={async (updated) => {
               setCourse(updated);
               const filesResponse = await fetch("/api/workspace/files");
@@ -876,7 +877,12 @@ export function App() {
         }
       >
         {course === undefined && error ? (
-          <CourseReadError workspace={workspace} error={error} busy={busy} onRetry={retryCourse} />
+          <CourseReadError
+            workspace={workspace}
+            error={error}
+            busy={busy || agentRunning}
+            onRetry={retryCourse}
+          />
         ) : course === undefined ? (
           <main className="loading-main" aria-busy="true">
             <p>Reading your Course…</p>
@@ -884,7 +890,7 @@ export function App() {
         ) : course === null ? (
           <CourseSetup
             workspace={workspace}
-            busy={busy}
+            busy={busy || agentRunning}
             error={error}
             onCreate={createCourse}
           />
@@ -893,7 +899,7 @@ export function App() {
             workspace={workspace}
             course={course}
             files={files}
-            busy={busy}
+            busy={busy || agentRunning}
             error={error}
             onSaveLectures={saveLectureChanges}
           />

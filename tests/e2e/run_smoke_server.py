@@ -8,6 +8,17 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from course_harness.app import create_app
+from course_harness.providers import ProviderCapabilities
+
+
+async def verified_capabilities(_request: object) -> ProviderCapabilities:
+    return ProviderCapabilities(
+        tool_calling=True,
+        structured_output=True,
+        streaming=True,
+        context_window=131_072,
+        vision=False,
+    )
 
 
 async def course_planning_model(
@@ -52,6 +63,7 @@ uvicorn.run(
         provider_store_path=root / "user-data" / "provider",
         chat_store_path=root / "user-data" / "chat",
         agent_model=FunctionModel(stream_function=course_planning_model),
+        provider_validator=verified_capabilities,
     ),
     host="127.0.0.1",
     port=18765,

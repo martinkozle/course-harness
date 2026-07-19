@@ -36,6 +36,7 @@ class ReplaceCoursePlanCommand(BaseModel):
     goals: list[str] = Field(default_factory=list)
     outcomes: list[str] = Field(default_factory=list)
     lectures: list[CoursePlanLectureCommand] = Field(min_length=1)
+    replace_all_lectures: bool = False
 
 
 class CourseAgentState(BaseModel):
@@ -44,7 +45,7 @@ class CourseAgentState(BaseModel):
 
 @dataclass
 class CourseAgentDeps:
-    state: CourseAgentState
+    course_state: CourseAgentState
     workspace: Path
 
 
@@ -71,6 +72,14 @@ def apply_course_plan_command(workspace: Path, command: ReplaceCoursePlanCommand
         return draft
 
     existing_by_id = {lecture.id: lecture for lecture in existing.lectures}
+    supplied_existing_ids = {
+        lecture.id for lecture in command.lectures if lecture.id in existing_by_id
+    }
+    if existing.lectures and not supplied_existing_ids and not command.replace_all_lectures:
+        raise ValueError(
+            "Revising a Course Plan must preserve existing Lecture IDs. Set "
+            "replace_all_lectures only when the Course Author explicitly approves replacing them."
+        )
     used_ids: set[str] = set()
     lectures: list[Lecture] = []
     for command_lecture, draft_lecture in zip(command.lectures, draft.lectures, strict=True):
@@ -103,29 +112,31 @@ def create_course_agent() -> Agent[CourseAgentDeps, str]:
         name="course-agent",
         instructions=(
             "You are the persistent Course Agent. Collaborate with the Course Author to create "
-            "and revise one Course Plan. Apply every authoritative change with "
-            "replace_course_plan. Preserve existing Lecture IDs supplied in shared state when "
-            "revising a Lecture. Explain the result clearly and concisely."
+            "and revise one Course Plan. Propose every authoritative change with "
+            "replace_course_plan; the Course Author must approve it before it is applied. "
+            "Preserve existing Lecture IDs supplied in shared state when revising a Lecture. "
+            "Never set replace_all_lectures unless the Course Author explicitly asks to replace "
+            "the entire Lecture spine. Explain the result clearly and concisely."
         ),
     )
 
     @agent.instructions
     async def current_course_plan(ctx: RunContext[CourseAgentDeps]) -> str:
-        if ctx.deps.state.course is None:
+        if ctx.deps.course_state.course is None:
             return "This Workspace does not have a Course Plan yet."
         return (
             "The current validated Course Plan follows. Preserve its Course and Lecture IDs "
             "when revising existing entities:\n"
-            f"{ctx.deps.state.course.model_dump_json(indent=2)}"
+            f"{ctx.deps.course_state.course.model_dump_json(indent=2)}"
         )
 
-    @agent.tool
+    @agent.tool(requires_approval=True)
     async def replace_course_plan(
         ctx: RunContext[CourseAgentDeps], command: ReplaceCoursePlanCommand
     ) -> ToolReturn:
         """Replace the Course Plan through one validated application command."""
         plan = apply_course_plan_command(ctx.deps.workspace, command)
-        ctx.deps.state = CourseAgentState(course=plan)
+        ctx.deps.course_state = CourseAgentState(course=plan)
         return ToolReturn(
             return_value="The validated Course Plan was saved.",
             metadata=[
@@ -140,7 +151,7 @@ def create_course_agent() -> Agent[CourseAgentDeps, str]:
                 ),
                 StateSnapshotEvent(
                     type=EventType.STATE_SNAPSHOT,
-                    snapshot=ctx.deps.state.model_dump(mode="json"),
+                    snapshot=ctx.deps.course_state.model_dump(mode="json"),
                 ),
             ],
         )

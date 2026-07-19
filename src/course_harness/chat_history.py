@@ -4,7 +4,14 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
-from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelResponse,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 
 from course_harness.workspaces import workspace_identity
@@ -18,8 +25,14 @@ class ChatMessage(BaseModel):
     content: str
 
 
+class PendingApproval(BaseModel):
+    id: str
+    message: str
+
+
 class ChatTranscript(BaseModel):
     messages: list[ChatMessage]
+    approval: PendingApproval | None = None
 
 
 def chat_session_path(store_path: Path, workspace: Path) -> Path:
@@ -43,9 +56,32 @@ def read_chat_transcript(store_path: Path, workspace: Path) -> ChatTranscript:
         return ChatTranscript(messages=[])
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        return ChatTranscript.model_validate({"messages": payload["messages"]})
+        history = ModelMessagesTypeAdapter.validate_python(payload["history"])
+        return ChatTranscript.model_validate(
+            {"messages": payload["messages"], "approval": _pending_approval(history)}
+        )
     except OSError, ValueError, KeyError, TypeError, json.JSONDecodeError:
         return ChatTranscript(messages=[])
+
+
+def _pending_approval(history: list[ModelMessage]) -> PendingApproval | None:
+    returned_ids = {
+        part.tool_call_id
+        for message in history
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart)
+    }
+    for message in reversed(history):
+        if not isinstance(message, ModelResponse):
+            continue
+        for part in reversed(message.parts):
+            if isinstance(part, ToolCallPart) and part.tool_call_id not in returned_ids:
+                return PendingApproval(
+                    id=f"int-{part.tool_call_id}",
+                    message=(f"Approve {part.tool_name}({part.args_as_json_str()})?"),
+                )
+    return None
 
 
 def save_chat_history(store_path: Path, workspace: Path, history: list[ModelMessage]) -> None:

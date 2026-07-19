@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from collections.abc import AsyncIterator
@@ -10,6 +11,22 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from course_harness.app import create_app
+from course_harness.course_agent import (
+    CoursePlanLectureCommand,
+    ReplaceCoursePlanCommand,
+    apply_course_plan_command,
+)
+from course_harness.providers import ProviderCapabilities
+
+
+async def _verified_capabilities(_request: object) -> ProviderCapabilities:
+    return ProviderCapabilities(
+        tool_calling=True,
+        structured_output=True,
+        streaming=True,
+        context_window=131_072,
+        vision=False,
+    )
 
 
 def _provider_request() -> dict[str, object]:
@@ -17,14 +34,39 @@ def _provider_request() -> dict[str, object]:
         "kind": "openrouter",
         "model": "openai/gpt-oss-20b:free",
         "api_key": "openrouter-secret",
-        "capabilities": {
-            "tool_calling": True,
-            "structured_output": True,
-            "streaming": True,
-            "context_window": 131_072,
-            "vision": False,
-        },
     }
+
+
+def _plan_command(**changes: object) -> ReplaceCoursePlanCommand:
+    values: dict[str, object] = {
+        "title": "Causal Inference",
+        "audience": "Applied researchers",
+        "lectures": [{"title": "Foundations"}],
+    }
+    values.update(changes)
+    return ReplaceCoursePlanCommand.model_validate(values)
+
+
+def test_course_plan_revisions_cannot_silently_replace_lecture_identity(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    original = apply_course_plan_command(workspace, _plan_command())
+
+    with pytest.raises(ValueError, match="must preserve existing Lecture IDs"):
+        apply_course_plan_command(
+            workspace,
+            _plan_command(lectures=[{"title": "Renamed foundations"}]),
+        )
+
+    updated = apply_course_plan_command(
+        workspace,
+        _plan_command(
+            lectures=[
+                CoursePlanLectureCommand(id=original.lectures[0].id, title="Renamed foundations")
+            ]
+        ),
+    )
+    assert updated.lectures[0].id == original.lectures[0].id
 
 
 async def _post_stream(app: Any, path: str, payload: object) -> tuple[int, str]:
@@ -79,7 +121,13 @@ async def test_provider_configuration_is_kept_outside_the_course_workspace(
     workspace = tmp_path / "course"
     workspace.mkdir()
     provider_store = tmp_path / "user-data" / "provider"
-    transport = httpx2.ASGITransport(app=create_app(workspace, provider_store_path=provider_store))
+    transport = httpx2.ASGITransport(
+        app=create_app(
+            workspace,
+            provider_store_path=provider_store,
+            provider_validator=_verified_capabilities,
+        )
+    )
 
     async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
         before = await client.get("/api/provider")
@@ -119,21 +167,48 @@ async def test_provider_configuration_is_kept_outside_the_course_workspace(
 
 
 @pytest.mark.anyio
+async def test_provider_settings_are_unavailable_until_a_workspace_is_bound(
+    tmp_path: Path,
+) -> None:
+    transport = httpx2.ASGITransport(
+        app=create_app(
+            provider_store_path=tmp_path / "provider",
+            provider_validator=_verified_capabilities,
+        )
+    )
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        status = await client.get("/api/provider")
+        configured = await client.put("/api/provider", json=_provider_request())
+
+    assert status.status_code == 409
+    assert configured.status_code == 409
+    assert not (tmp_path / "provider").exists()
+
+
+@pytest.mark.anyio
 async def test_provider_capability_failures_are_explained_before_a_run(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "course"
     workspace.mkdir()
     provider_store = tmp_path / "user-data" / "provider"
-    transport = httpx2.ASGITransport(app=create_app(workspace, provider_store_path=provider_store))
+
+    async def unsupported(_request: object) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            tool_calling=False,
+            structured_output=False,
+            streaming=False,
+            context_window=8_192,
+            vision=False,
+        )
+
+    transport = httpx2.ASGITransport(
+        app=create_app(
+            workspace, provider_store_path=provider_store, provider_validator=unsupported
+        )
+    )
     request = _provider_request()
-    request["capabilities"] = {
-        "tool_calling": False,
-        "structured_output": False,
-        "streaming": False,
-        "context_window": 8_192,
-        "vision": False,
-    }
 
     async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.put("/api/provider", json=request)
@@ -163,7 +238,11 @@ async def test_direct_and_openai_compatible_providers_are_supported(
     request = _provider_request()
     request.update({"kind": kind, "model": "course-planning-model", "base_url": base_url})
     transport = httpx2.ASGITransport(
-        app=create_app(workspace, provider_store_path=tmp_path / "provider")
+        app=create_app(
+            workspace,
+            provider_store_path=tmp_path / "provider",
+            provider_validator=_verified_capabilities,
+        )
     )
 
     async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -218,6 +297,7 @@ async def test_chat_streams_a_validated_course_plan_and_survives_reopening(
         provider_store_path=provider_store,
         chat_store_path=chat_store,
         agent_model=model,
+        provider_validator=_verified_capabilities,
     )
     run_input = {
         "threadId": "course-agent",
@@ -238,11 +318,36 @@ async def test_chat_streams_a_validated_course_plan_and_survives_reopening(
     transport = httpx2.ASGITransport(app=app)
     async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
         await client.put("/api/provider", json=_provider_request())
-        stream_status, stream_body = await _post_stream(app, "/api/agent", run_input)
+        proposal_status, proposal_body = await _post_stream(app, "/api/agent", run_input)
+        before_approval = await client.get("/api/course")
+        pending_chat = await client.get("/api/chat")
+        proposal_events = [
+            json.loads(line.removeprefix("data: "))
+            for line in proposal_body.splitlines()
+            if line.startswith("data: ")
+        ]
+        interrupt = proposal_events[-1]["outcome"]["interrupts"][0]
+        approval_input = {
+            **run_input,
+            "runId": "run-2",
+            "messages": [],
+            "resume": [
+                {
+                    "interruptId": interrupt["id"],
+                    "status": "resolved",
+                    "payload": {"approved": True},
+                }
+            ],
+        }
+        stream_status, stream_body = await _post_stream(app, "/api/agent", approval_input)
         course_response = await client.get("/api/course")
         chat_response = await client.get("/api/chat")
         await client.post("/api/workspace/close")
 
+    assert proposal_status == 200
+    assert before_approval.status_code == 404
+    assert pending_chat.json()["approval"]["id"] == "int-course-plan-1"
+    assert "TOOL_CALL_START" in [event["type"] for event in proposal_events]
     assert stream_status == 200
     events = [
         json.loads(line.removeprefix("data: "))
@@ -251,7 +356,7 @@ async def test_chat_streams_a_validated_course_plan_and_survives_reopening(
     ]
     event_types = [event["type"] for event in events]
     assert event_types[0] == "RUN_STARTED"
-    assert "TOOL_CALL_START" in event_types
+    assert "TOOL_CALL_RESULT" in event_types
     assert "ACTIVITY_SNAPSHOT" in event_types
     assert "STATE_SNAPSHOT" in event_types
     assert "TEXT_MESSAGE_CONTENT" in event_types
@@ -268,6 +373,7 @@ async def test_chat_streams_a_validated_course_plan_and_survives_reopening(
         encoding="utf-8"
     )
     assert chat_response.json() == {
+        "approval": None,
         "messages": [
             {
                 "id": chat_response.json()["messages"][0]["id"],
@@ -279,7 +385,7 @@ async def test_chat_streams_a_validated_course_plan_and_survives_reopening(
                 "role": "assistant",
                 "content": "I created a two-Lecture Course Plan.",
             },
-        ]
+        ],
     }
 
     reopened = create_app(
@@ -287,6 +393,7 @@ async def test_chat_streams_a_validated_course_plan_and_survives_reopening(
         provider_store_path=provider_store,
         chat_store_path=chat_store,
         agent_model=model,
+        provider_validator=_verified_capabilities,
     )
     reopened_transport = httpx2.ASGITransport(app=reopened)
     async with httpx2.AsyncClient(transport=reopened_transport, base_url="http://test") as client:
@@ -295,6 +402,56 @@ async def test_chat_streams_a_validated_course_plan_and_survives_reopening(
 
     assert reopened_chat.json() == chat_response.json()
     assert reopened_course.json() == plan
+
+
+@pytest.mark.anyio
+async def test_active_agent_run_locks_competing_workspace_mutations(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def waiting_model(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+        started.set()
+        await finish.wait()
+        yield "No Course changes were proposed."
+
+    app = create_app(
+        workspace,
+        provider_store_path=tmp_path / "provider",
+        agent_model=FunctionModel(stream_function=waiting_model),
+        provider_validator=_verified_capabilities,
+    )
+    run_input = {
+        "threadId": "course-agent",
+        "runId": "locked-run",
+        "state": {},
+        "messages": [{"id": "user-lock", "role": "user", "content": "Think about this."}],
+        "tools": [],
+        "context": [],
+        "forwardedProps": {},
+    }
+
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        running = asyncio.create_task(_post_stream(app, "/api/agent", run_input))
+        await started.wait()
+        competing = await client.post(
+            "/api/course",
+            json={
+                "title": "Racing Course",
+                "audience": "Anyone",
+                "lectures": [{"title": "One"}],
+            },
+        )
+        finish.set()
+        stream_status, _ = await running
+
+    assert competing.status_code == 409
+    assert "already running" in competing.json()["detail"]
+    assert stream_status == 200
+    assert not (workspace / "course.yaml").exists()
 
 
 @pytest.mark.anyio
