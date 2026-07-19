@@ -280,7 +280,9 @@ async def test_search_fts5_finds_known_content(tmp_path: Path) -> None:
     results = search_resp.json()
     assert len(results) >= 1
     assert results[0]["label"] == "Causal Ch1"
-    assert "counterfactual" in results[0]["snippet"].lower()
+    chunks = results[0]["chunks"]
+    assert len(chunks) >= 1
+    assert "counterfactual" in chunks[0]["snippet"].lower()
 
 
 @pytest.mark.anyio
@@ -307,7 +309,10 @@ async def test_search_fts5_returns_snippets_and_coordinates(tmp_path: Path) -> N
     assert search_resp.status_code == 200
     results = search_resp.json()
     assert len(results) >= 1
-    result = results[0]
+    group = results[0]
+    assert "chunks" in group
+    assert len(group["chunks"]) >= 1
+    result = group["chunks"][0]
     assert "snippet" in result
     assert "coordinates" in result
     assert result["coordinates"]["line_start"] is not None

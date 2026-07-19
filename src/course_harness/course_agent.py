@@ -235,8 +235,11 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             return ToolReturn(return_value=f"No results found for query: {query}")
 
         lines: list[str] = [f"Search results for '{query}':"]
-        for r in results:
-            lines.append(f"- {r.source_id} ({r.label}): {r.snippet}")
+        for group in results:
+            lines.append(f"\n### {group.label} ({len(group.chunks)} matches)")
+            for chunk in group.chunks:
+                line_no = chunk.coordinates.line_start
+                lines.append(f"- L{line_no + 1 if line_no is not None else '?'}: {chunk.snippet}")
         return ToolReturn(
             return_value="\n".join(lines),
             metadata=[
@@ -246,7 +249,10 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
                     activity_type="sources-search",
                     content={
                         "title": f"Search: {query}",
-                        "detail": f"Found {len(results)} result(s)",
+                        "detail": (
+                            f"Found {sum(len(g.chunks) for g in results)} "
+                            f"match(es) across {len(results)} source(s)"
+                        ),
                     },
                 ),
             ],

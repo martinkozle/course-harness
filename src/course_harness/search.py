@@ -24,6 +24,16 @@ class SearchResult(BaseModel):
     rank: float
 
 
+class GroupedSearchResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str
+    resource_id: str
+    label: str
+    max_rank: float
+    chunks: list[SearchResult]
+
+
 class SearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -165,27 +175,45 @@ def search_raw(
 def enrich_search_results(
     hits: list[_RawHit],
     sources_by_version: dict[str, tuple[str, str, str]],
-) -> list[SearchResult]:
-    results: list[SearchResult] = []
+) -> list[GroupedSearchResult]:
+    by_source: dict[str, list[SearchResult]] = {}
+    source_info: dict[str, tuple[str, str, str]] = {}
     for hit in hits:
         match = sources_by_version.get(hit.content_hash)
         if match is None:
             continue
         source_id, resource_id, label = match
-        results.append(
-            SearchResult(
-                source_id=source_id,
-                resource_id=resource_id,
-                label=label,
-                snippet=hit.snippet,
-                coordinates=ContentCoordinates(
-                    line_start=hit.line_number,
-                    line_end=hit.line_number,
-                ),
-                rank=hit.rank,
+        source_info[source_id] = match
+        result = SearchResult(
+            source_id=source_id,
+            resource_id=resource_id,
+            label=label,
+            snippet=hit.snippet,
+            coordinates=ContentCoordinates(
+                line_start=hit.line_number,
+                line_end=hit.line_number,
+            ),
+            rank=hit.rank,
+        )
+        by_source.setdefault(source_id, []).append(result)
+
+    grouped: list[GroupedSearchResult] = []
+    for source_id, chunks in by_source.items():
+        chunks.sort(key=lambda c: c.coordinates.line_start or 0)
+        sid, rid, lbl = source_info[source_id]
+        max_rank = max(c.rank for c in chunks)
+        grouped.append(
+            GroupedSearchResult(
+                source_id=sid,
+                resource_id=rid,
+                label=lbl,
+                max_rank=max_rank,
+                chunks=chunks,
             )
         )
-    return results
+
+    grouped.sort(key=lambda g: g.max_rank)
+    return grouped
 
 
 def rebuild_index(cache_dir: Path, data_dir: Path) -> None:

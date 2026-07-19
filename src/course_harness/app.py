@@ -625,11 +625,11 @@ def create_app(
 
     @app.post(
         "/api/sources/search",
-        response_model=list[search_module.SearchResult],
+        response_model=list[search_module.GroupedSearchResult],
     )
     async def search_sources(
         request: search_module.SearchRequest,
-    ) -> list[search_module.SearchResult]:
+    ) -> list[search_module.GroupedSearchResult]:
         active = require_workspace()
         index = sources_module.read_sources_index(active)
         if index is None or not index.sources:

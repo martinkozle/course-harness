@@ -71,3 +71,11 @@ export type SearchResult = {
 	coordinates: { line_start: number | null; line_end: number | null };
 	rank: number;
 };
+
+export type GroupedSearchResult = {
+	source_id: string;
+	resource_id: string;
+	label: string;
+	max_rank: number;
+	chunks: SearchResult[];
+};

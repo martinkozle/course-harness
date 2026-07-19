@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { responseError } from "./api";
-import type { ResourceState, SearchResult, Source } from "./models";
+import type {
+	GroupedSearchResult,
+	ResourceState,
+	SearchResult,
+	Source,
+} from "./models";
 
 type LibraryViewProps = {
 	resources: ResourceState[];
@@ -40,8 +45,13 @@ export function LibraryView({
 	const [processing, setProcessing] = useState<Set<string>>(new Set());
 	const [admitting, setAdmitting] = useState<Set<string>>(new Set());
 	const [searchQuery, setSearchQuery] = useState("");
-	const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+	const [searchResults, setSearchResults] = useState<GroupedSearchResult[]>(
+		[],
+	);
 	const [searching, setSearching] = useState(false);
+	const [viewingSource, setViewingSource] = useState<string | null>(null);
+	const [sourceContent, setSourceContent] = useState("");
+	const [loadingContent, setLoadingContent] = useState(false);
 
 	const sourceByResource = Object.fromEntries(
 		sources.map((s) => [s.resource_id, s]),
@@ -140,14 +150,36 @@ export function LibraryView({
 			const response = await fetch("/api/sources/search", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ query: q, limit: 10 }),
+				body: JSON.stringify({ query: q, limit: 20 }),
 			});
 			if (!response.ok) throw new Error(await responseError(response));
-			setSearchResults((await response.json()) as SearchResult[]);
+			setSearchResults((await response.json()) as GroupedSearchResult[]);
 		} catch {
 			setSearchResults([]);
 		} finally {
 			setSearching(false);
+		}
+	}
+
+	async function handleViewSource(sourceId: string) {
+		if (viewingSource === sourceId) {
+			setViewingSource(null);
+			setSourceContent("");
+			return;
+		}
+		setViewingSource(sourceId);
+		setLoadingContent(true);
+		setSourceContent("");
+		try {
+			const response = await fetch(
+				`/api/sources/${encodeURIComponent(sourceId)}/content?max_chars=8000`,
+			);
+			if (!response.ok) throw new Error(await responseError(response));
+			setSourceContent(await response.text());
+		} catch {
+			setSourceContent("Could not load source content.");
+		} finally {
+			setLoadingContent(false);
 		}
 	}
 
@@ -250,7 +282,9 @@ export function LibraryView({
 											<button
 												className="compact-action secondary-action"
 												type="button"
-												onClick={() => void handleProcess(resource.resource_id)}
+												onClick={() =>
+													void handleProcess(resource.resource_id)
+												}
 												disabled={processing.has(resource.resource_id)}
 											>
 												{processing.has(resource.resource_id)
@@ -262,7 +296,9 @@ export function LibraryView({
 											<button
 												className="compact-action secondary-action"
 												type="button"
-												onClick={() => void handleAdmit(resource.resource_id)}
+												onClick={() =>
+													void handleAdmit(resource.resource_id)
+												}
 												disabled={admitting.has(resource.resource_id)}
 											>
 												{admitting.has(resource.resource_id)
@@ -299,6 +335,7 @@ export function LibraryView({
 					<form className="search-form" onSubmit={handleSearch}>
 						<input
 							type="search"
+							className="search-input"
 							value={searchQuery}
 							onChange={(e) => setSearchQuery(e.target.value)}
 							placeholder="Search admitted sources…"
@@ -306,7 +343,7 @@ export function LibraryView({
 						/>
 						<button
 							type="submit"
-							className="compact-action primary-action"
+							className="search-submit primary-action"
 							disabled={searching || !searchQuery.trim()}
 						>
 							{searching ? "Searching…" : "Search"}
@@ -315,26 +352,67 @@ export function LibraryView({
 
 					{searchResults.length > 0 ? (
 						<ul className="search-results">
-							{searchResults.map((result) => (
-								<li key={`${result.source_id}-${result.snippet}`}>
-									<p className="search-result-label">{result.label}</p>
-									<p className="search-result-snippet">
-										{result.snippet}
-									</p>
-									{result.coordinates.line_start != null ? (
-										<p className="search-result-coordinates">
-											Line {result.coordinates.line_start + 1}
-											{result.coordinates.line_end != null &&
-											result.coordinates.line_end !==
-												result.coordinates.line_start
-												? `–${result.coordinates.line_end + 1}`
-												: ""}
-										</p>
+							{searchResults.map((group) => (
+								<li className="search-group" key={group.source_id}>
+									<button
+										type="button"
+										className="search-group-label"
+										onClick={() => void handleViewSource(group.source_id)}
+									>
+										{group.label}
+										<span className="search-group-count">
+											{group.chunks.length}{" "}
+											{group.chunks.length === 1 ? "match" : "matches"}
+										</span>
+									</button>
+
+									{viewingSource === group.source_id ? (
+										<div className="source-content-panel">
+											{loadingContent ? (
+												<p className="empty-note">Loading…</p>
+											) : (
+												<pre className="source-content-body">
+													{sourceContent}
+												</pre>
+											)}
+											<button
+												type="button"
+												className="quiet-action"
+												onClick={() => {
+													setViewingSource(null);
+													setSourceContent("");
+												}}
+											>
+												Close
+											</button>
+										</div>
 									) : null}
+
+									<ul className="search-chunks">
+										{group.chunks.map((chunk: SearchResult) => (
+											<li key={`${group.source_id}-${chunk.coordinates.line_start ?? 0}`}>
+												<p className="search-result-snippet">
+													{chunk.snippet}
+												</p>
+												{chunk.coordinates.line_start != null ? (
+													<p className="search-result-coordinates">
+														Line {chunk.coordinates.line_start + 1}
+														{chunk.coordinates.line_end != null &&
+														chunk.coordinates.line_end !==
+															chunk.coordinates.line_start
+															? `–${chunk.coordinates.line_end + 1}`
+															: ""}
+													</p>
+												) : null}
+											</li>
+										))}
+									</ul>
 								</li>
 							))}
 						</ul>
-					) : searchResults.length === 0 && searchQuery.trim() && !searching ? (
+					) : searchResults.length === 0 &&
+						searchQuery.trim() &&
+						!searching ? (
 						<p className="empty-note">No results for "{searchQuery}".</p>
 					) : null}
 				</section>
