@@ -1783,6 +1783,16 @@ h1 {
 	background: var(--cobalt-soft);
 }
 
+.status-indexed {
+	color: var(--success);
+	background: color-mix(in srgb, var(--cobalt) 10%, white);
+}
+
+.status-unindexed {
+	color: var(--muted);
+	background: var(--canvas);
+}
+
 .library-id {
 	overflow: hidden;
 	color: var(--muted);

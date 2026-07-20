@@ -751,6 +751,18 @@ def create_app(
             raise HTTPException(status_code=422, detail=result.error or "Processing failed.")
         return result
 
+    @app.post("/api/resources/{resource_id}/reprocess", response_model=res.ResourceState)
+    async def reprocess_resource(resource_id: str) -> res.ResourceState:
+        require_workspace()
+        result = library.reprocess_resource(data_dir, cache_dir, resource_id)
+        if result is None:
+            raise HTTPException(
+                status_code=404, detail="Resource was not found or has no Snapshot."
+            )
+        if result.status != "ready":
+            raise HTTPException(status_code=422, detail=result.error or "Reprocessing failed.")
+        return result
+
     @app.post("/api/resources/upload", response_model=res.ResourceState, status_code=201)
     async def upload_resource(request: Request) -> res.ResourceState:
         require_workspace()

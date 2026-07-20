@@ -51,6 +51,7 @@ export type ResourceState = {
 	kind: ResourceKind | null;
 	location: string | null;
 	status: ProcessingStatus;
+	indexed: boolean;
 	error: string | null;
 	snapshot: Snapshot | null;
 };

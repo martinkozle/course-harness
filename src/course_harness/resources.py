@@ -45,6 +45,7 @@ class ResourceState(BaseModel):
     kind: ResourceKind | None = None
     location: str | None = None
     status: ProcessingStatus
+    indexed: bool = False
     error: str | None = None
     snapshot: Snapshot | None = None
 

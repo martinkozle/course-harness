@@ -43,11 +43,11 @@ export function LibraryView({
 }: LibraryViewProps) {
 	const [uploading, setUploading] = useState(false);
 	const [processing, setProcessing] = useState<Set<string>>(new Set());
+	const [reprocessing, setReprocessing] = useState<Set<string>>(new Set());
 	const [admitting, setAdmitting] = useState<Set<string>>(new Set());
+	const [regenerating, setRegenerating] = useState(false);
 	const [searchQuery, setSearchQuery] = useState("");
-	const [searchResults, setSearchResults] = useState<GroupedSearchResult[]>(
-		[],
-	);
+	const [searchResults, setSearchResults] = useState<GroupedSearchResult[]>([]);
 	const [searching, setSearching] = useState(false);
 	const [hasSearched, setHasSearched] = useState(false);
 	const [lastSubmittedQuery, setLastSubmittedQuery] = useState("");
@@ -108,6 +108,26 @@ export function LibraryView({
 		}
 	}
 
+	async function handleReprocess(resourceId: string) {
+		setReprocessing((current) => new Set(current).add(resourceId));
+		try {
+			const response = await fetch(
+				`/api/resources/${encodeURIComponent(resourceId)}/reprocess`,
+				{ method: "POST" },
+			);
+			if (!response.ok) throw new Error(await responseError(response));
+			const updated = await fetch("/api/resources");
+			if (!updated.ok) throw new Error(await responseError(updated));
+			onResourcesChange((await updated.json()) as ResourceState[]);
+		} finally {
+			setReprocessing((current) => {
+				const next = new Set(current);
+				next.delete(resourceId);
+				return next;
+			});
+		}
+	}
+
 	async function handleAdmit(resourceId: string) {
 		const resource = resources.find((r) => r.resource_id === resourceId);
 		if (!resource) return;
@@ -147,11 +167,17 @@ export function LibraryView({
 		}
 	}
 
-	async function handleClearCache() {
+	async function handleRegenerateIndex() {
+		setRegenerating(true);
 		try {
 			await fetch("/api/resources/cache", { method: "DELETE" });
+			const updated = await fetch("/api/resources");
+			if (!updated.ok) throw new Error(await responseError(updated));
+			onResourcesChange((await updated.json()) as ResourceState[]);
 		} catch {
-			// Cache clearing failure is non-blocking
+			// Regeneration failure is non-blocking
+		} finally {
+			setRegenerating(false);
 		}
 	}
 
@@ -227,9 +253,10 @@ export function LibraryView({
 						<button
 							className="quiet-action"
 							type="button"
-							onClick={handleClearCache}
+							onClick={handleRegenerateIndex}
+							disabled={regenerating}
 						>
-							Clear cache
+							{regenerating ? "Regenerating…" : "Regenerate search index"}
 						</button>
 						<label className="primary-action compact-action upload-label">
 							Upload file
@@ -251,6 +278,9 @@ export function LibraryView({
 							? ` · ${statusCounts.unprocessed} unprocessed`
 							: ""}
 						{statusCounts.failed ? ` · ${statusCounts.failed} failed` : ""}
+						{resources.filter((r) => r.indexed).length > 0
+							? ` · ${resources.filter((r) => r.indexed).length} indexed`
+							: ""}
 						{sources.length > 0 ? ` · ${sources.length} admitted` : ""}
 					</span>
 				</div>
@@ -275,6 +305,15 @@ export function LibraryView({
 										>
 											{statusBadge(resource.status)}
 										</strong>
+										{resource.status === "ready" && resource.indexed ? (
+											<strong className="status-badge status-indexed">
+												Indexed
+											</strong>
+										) : resource.status === "ready" && !resource.indexed ? (
+											<strong className="status-badge status-unindexed">
+												Not indexed
+											</strong>
+										) : null}
 										{admitted ? (
 											<>
 												<strong className="status-badge status-ready">
@@ -311,28 +350,38 @@ export function LibraryView({
 											<button
 												className="compact-action secondary-action"
 												type="button"
-												onClick={() =>
-													void handleProcess(resource.resource_id)
-												}
+												onClick={() => void handleProcess(resource.resource_id)}
 												disabled={processing.has(resource.resource_id)}
 											>
 												{processing.has(resource.resource_id)
 													? "Processing…"
-													: "Process"}
+													: "Make searchable"}
+											</button>
+										) : null}
+										{resource.status === "ready" ? (
+											<button
+												className="compact-action secondary-action"
+												type="button"
+												onClick={() =>
+													void handleReprocess(resource.resource_id)
+												}
+												disabled={reprocessing.has(resource.resource_id)}
+											>
+												{reprocessing.has(resource.resource_id)
+													? "Reprocessing…"
+													: "Reprocess"}
 											</button>
 										) : null}
 										{resource.status === "ready" && !admitted ? (
 											<button
 												className="compact-action secondary-action"
 												type="button"
-												onClick={() =>
-													void handleAdmit(resource.resource_id)
-												}
+												onClick={() => void handleAdmit(resource.resource_id)}
 												disabled={admitting.has(resource.resource_id)}
 											>
 												{admitting.has(resource.resource_id)
 													? "Admitting…"
-													: "Admit as source"}
+													: "Use as course material"}
 											</button>
 										) : null}
 									</div>
@@ -422,10 +471,10 @@ export function LibraryView({
 
 									<ul className="search-chunks">
 										{group.chunks.map((chunk: SearchResult) => (
-											<li key={`${group.source_id}-${chunk.coordinates.line_start ?? 0}`}>
-												<p className="search-result-snippet">
-													{chunk.snippet}
-												</p>
+											<li
+												key={`${group.source_id}-${chunk.coordinates.line_start ?? 0}`}
+											>
+												<p className="search-result-snippet">{chunk.snippet}</p>
 												{chunk.coordinates.line_start != null ? (
 													<p className="search-result-coordinates">
 														Line {chunk.coordinates.line_start + 1}
@@ -442,9 +491,7 @@ export function LibraryView({
 								</li>
 							))}
 						</ul>
-					) : searchResults.length === 0 &&
-						hasSearched &&
-						!searching ? (
+					) : searchResults.length === 0 && hasSearched && !searching ? (
 						<p className="empty-note">No results for "{lastSubmittedQuery}".</p>
 					) : null}
 				</section>
