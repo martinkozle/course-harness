@@ -44,6 +44,9 @@ export function LibraryView({
 	const [uploading, setUploading] = useState(false);
 	const [processing, setProcessing] = useState<Set<string>>(new Set());
 	const [reprocessing, setReprocessing] = useState<Set<string>>(new Set());
+	const [reprocessErrors, setReprocessErrors] = useState<Map<string, string>>(
+		new Map(),
+	);
 	const [admitting, setAdmitting] = useState<Set<string>>(new Set());
 	const [regenerating, setRegenerating] = useState(false);
 	const [searchQuery, setSearchQuery] = useState("");
@@ -110,6 +113,11 @@ export function LibraryView({
 
 	async function handleReprocess(resourceId: string) {
 		setReprocessing((current) => new Set(current).add(resourceId));
+		setReprocessErrors((current) => {
+			const next = new Map(current);
+			next.delete(resourceId);
+			return next;
+		});
 		try {
 			const response = await fetch(
 				`/api/resources/${encodeURIComponent(resourceId)}/reprocess`,
@@ -119,6 +127,12 @@ export function LibraryView({
 			const updated = await fetch("/api/resources");
 			if (!updated.ok) throw new Error(await responseError(updated));
 			onResourcesChange((await updated.json()) as ResourceState[]);
+		} catch (error) {
+			const message =
+				error instanceof Error ? error.message : "Reprocessing failed.";
+			setReprocessErrors((current) =>
+				new Map(current).set(resourceId, message),
+			);
 		} finally {
 			setReprocessing((current) => {
 				const next = new Set(current);
@@ -342,6 +356,11 @@ export function LibraryView({
 									{resource.error ? (
 										<p className="library-error" role="alert">
 											{resource.error}
+										</p>
+									) : null}
+									{reprocessErrors.get(resource.resource_id) ? (
+										<p className="library-error" role="alert">
+											{reprocessErrors.get(resource.resource_id)}
 										</p>
 									) : null}
 									<div className="resource-actions">
