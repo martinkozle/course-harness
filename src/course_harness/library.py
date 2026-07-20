@@ -13,6 +13,7 @@ from course_harness.resources import (
     read_library_index,
     register_resource,
     update_resource_snapshot,
+    write_library_index,
 )
 
 
@@ -118,6 +119,26 @@ def process_existing_resource(
         error=state.error,
         snapshot=snapshot,
     )
+
+
+def remove_resource(
+    data_dir: Path,
+    cache_dir: Path,
+    resource_id: str,
+) -> bool:
+    index = read_library_index(registry_path(data_dir))
+    resource = next((r for r in index.resources if r.id == resource_id), None)
+    if resource is None:
+        return False
+
+    if resource.snapshot_hash is not None:
+        from course_harness.search import deindex_resource  # noqa: PLC0415
+
+        deindex_resource(cache_dir, resource.snapshot_hash)
+
+    index.resources = [r for r in index.resources if r.id != resource_id]
+    write_library_index(registry_path(data_dir), index)
+    return True
 
 
 def list_resources_with_state(data_dir: Path, cache_dir: Path) -> list[ResourceState]:

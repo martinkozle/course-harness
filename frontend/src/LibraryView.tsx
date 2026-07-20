@@ -66,6 +66,7 @@ export function LibraryView({
 	const [addingRemote, setAddingRemote] = useState<Set<string>>(new Set());
 	const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
 	const [adopting, setAdopting] = useState<Set<string>>(new Set());
+	const [removing, setRemoving] = useState<Set<string>>(new Set());
 
 	const sourceByResource = Object.fromEntries(
 		sources.map((s) => [s.resource_id, s]),
@@ -283,6 +284,26 @@ export function LibraryView({
 			setAdopting((current) => {
 				const next = new Set(current);
 				next.delete(sourceId);
+				return next;
+			});
+		}
+	}
+
+	async function handleRemoveResource(resourceId: string) {
+		setRemoving((current) => new Set(current).add(resourceId));
+		try {
+			const response = await fetch(
+				`/api/resources/${encodeURIComponent(resourceId)}`,
+				{ method: "DELETE" },
+			);
+			if (!response.ok) throw new Error(await responseError(response));
+			const updated = await fetch("/api/resources");
+			if (!updated.ok) throw new Error(await responseError(updated));
+			onResourcesChange((await updated.json()) as ResourceState[]);
+		} finally {
+			setRemoving((current) => {
+				const next = new Set(current);
+				next.delete(resourceId);
 				return next;
 			});
 		}
@@ -531,6 +552,18 @@ export function LibraryView({
 													: "Refresh"}
 											</button>
 										) : null}
+										<button
+											className="compact-action secondary-action"
+											type="button"
+											onClick={() =>
+												void handleRemoveResource(resource.resource_id)
+											}
+											disabled={removing.has(resource.resource_id)}
+										>
+											{removing.has(resource.resource_id)
+												? "Removing…"
+												: "Remove"}
+										</button>
 									</div>
 								</li>
 							);
@@ -589,19 +622,29 @@ export function LibraryView({
 										{result.candidates.map((candidate) => (
 											<li key={candidate.url}>
 												<div className="library-meta">
-													<span className="library-name">
+													<a
+														className="library-name library-name-link"
+														href={candidate.url}
+														target="_blank"
+														rel="noopener noreferrer"
+													>
 														{candidate.title || candidate.url}
-													</span>
+													</a>
 													{candidate.authors ? (
 														<span className="library-label">
 															{candidate.authors.join(", ")}
 														</span>
 													) : null}
+													{candidate.published_at ? (
+														<span className="library-label">
+															{candidate.published_at.slice(0, 10)}
+														</span>
+													) : null}
 												</div>
 												{candidate.summary ? (
 													<p className="library-snapshot">
-														{candidate.summary.slice(0, 300)}
-														{candidate.summary.length > 300 ? "…" : ""}
+														{candidate.summary.slice(0, 500)}
+														{candidate.summary.length > 500 ? "…" : ""}
 													</p>
 												) : null}
 												<div className="resource-actions">

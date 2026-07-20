@@ -701,6 +701,21 @@ def create_app(
 
         return StarletteResponse(content=content, media_type="text/plain")
 
+    @app.delete("/api/resources/cache", status_code=204)
+    async def clear_resource_cache() -> Response:
+        require_workspace()
+        search_module.rebuild_index(cache_dir, data_dir)
+        logger.info("Search index rebuilt from processed resources")
+        return Response(status_code=204)
+
+    @app.delete("/api/resources/{resource_id}", status_code=204)
+    async def remove_resource(resource_id: str) -> Response:
+        require_workspace()
+        removed = library.remove_resource(data_dir, cache_dir, resource_id)
+        if not removed:
+            raise HTTPException(status_code=404, detail="Resource was not found")
+        return Response(status_code=204)
+
     @app.get("/api/resources", response_model=list[res.ResourceState])
     async def list_resources() -> list[res.ResourceState]:
         require_workspace()
@@ -791,13 +806,6 @@ def create_app(
         )
         _, _, state = library.register_and_snapshot(data_dir, cache_dir, record, content)
         return state
-
-    @app.delete("/api/resources/cache", status_code=204)
-    async def clear_resource_cache() -> Response:
-        require_workspace()
-        search_module.rebuild_index(cache_dir, data_dir)
-        logger.info("Search index rebuilt from processed resources")
-        return Response(status_code=204)
 
     @app.get("/api/resources/{resource_id}/content")
     async def resource_content(resource_id: str) -> StarletteResponse:

@@ -19,7 +19,7 @@ async def search_arxiv(
     client: httpx2.AsyncClient | None = None,
 ) -> list[Candidate]:
     url = (
-        "http://export.arxiv.org/api/query"
+        "https://export.arxiv.org/api/query"
         f"?search_query=all:{httpx2.URL(query).raw_path.decode()}"
         f"&start=0&max_results={limit}"
         "&sortBy=relevance&sortOrder=descending"
@@ -228,7 +228,7 @@ PROVIDERS: dict[str, Callable[..., Any]] = {
 
 async def discover(request: DiscoveryRequest) -> list[DiscoveryResult]:
     providers = request.providers or list(PROVIDERS)
-    async with httpx2.AsyncClient(timeout=15) as client:
+    async with httpx2.AsyncClient(timeout=15, follow_redirects=True) as client:
         tasks: list[asyncio.Task[DiscoveryResult]] = []
         for name in providers:
             fn = PROVIDERS.get(name)
