@@ -795,9 +795,8 @@ def create_app(
     @app.delete("/api/resources/cache", status_code=204)
     async def clear_resource_cache() -> Response:
         require_workspace()
-        library.clear_processing_cache(cache_dir)
         search_module.rebuild_index(cache_dir, data_dir)
-        logger.info("Processing cache cleared and search index rebuilt")
+        logger.info("Search index rebuilt from processed resources")
         return Response(status_code=204)
 
     @app.get("/api/resources/{resource_id}/content")

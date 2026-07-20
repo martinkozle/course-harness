@@ -357,7 +357,7 @@ async def test_search_respects_source_id_filter(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_clear_cache_removes_search_index(tmp_path: Path) -> None:
+async def test_clear_cache_rebuilds_search_index(tmp_path: Path) -> None:
     workspace = tmp_path / "course"
     workspace.mkdir()
     data_dir = tmp_path / "data"
@@ -378,7 +378,9 @@ async def test_clear_cache_removes_search_index(tmp_path: Path) -> None:
         )
         assert search_db_path(cache_dir).is_file()
         await client.delete("/api/resources/cache")
-        assert not search_db_path(cache_dir).is_file()
+        assert search_db_path(cache_dir).is_file()
+        hits = search_raw(cache_dir, "counterfactual")
+        assert len(hits) >= 1
 
 
 @pytest.mark.anyio
