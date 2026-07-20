@@ -7,6 +7,7 @@ from course_harness.resources import (
     ResourceRegistrationRequest,
     ResourceState,
     Snapshot,
+    content_hash,
     create_snapshot,
     process_snapshot,
     read_library_index,
@@ -247,4 +248,89 @@ def reprocess_resource(
             byte_count=snapshot_path.stat().st_size,
             captured_at=resource.registered_at,
         ),
+    )
+
+
+MAX_FETCH_BYTES = 100 * 1024 * 1024  # 100 MiB
+
+
+async def fetch_remote_resource(
+    url: str,
+    media_type: str | None = None,
+) -> tuple[bytes, str]:
+    import httpx2
+
+    resolved_type = media_type or "application/octet-stream"
+    async with httpx2.AsyncClient(timeout=30, follow_redirects=True, max_redirects=5) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+        content_length = response.headers.get("content-length")
+        if (
+            content_length is not None
+            and content_length.isdigit()
+            and int(content_length) > MAX_FETCH_BYTES
+        ):
+            raise ValueError(
+                f"Remote content is {int(content_length)} bytes; "
+                f"maximum is {MAX_FETCH_BYTES} bytes."
+            )
+        header_type = response.headers.get("content-type", "").split(";")[0].strip()
+        if not media_type and header_type:
+            resolved_type = header_type
+        content = await response.aread()
+        if len(content) > MAX_FETCH_BYTES:
+            raise ValueError(f"Fetched {len(content)} bytes; maximum is {MAX_FETCH_BYTES} bytes.")
+        return content, resolved_type
+
+
+async def register_remote_resource(
+    data_dir: Path,
+    cache_dir: Path,
+    url: str,
+    media_type: str | None = None,
+) -> ResourceState:
+    content, resolved_type = await fetch_remote_resource(url, media_type)
+    request = ResourceRegistrationRequest(
+        kind="remote",
+        location=url,
+        media_type=resolved_type,
+    )
+    _, _, state = register_and_snapshot(data_dir, cache_dir, request, content)
+    return state
+
+
+async def refresh_remote_resource(
+    data_dir: Path,
+    cache_dir: Path,
+    resource_id: str,
+) -> ResourceState:
+    index = read_library_index(registry_path(data_dir))
+    resource = next((r for r in index.resources if r.id == resource_id), None)
+    if resource is None:
+        raise ValueError(f"Resource {resource_id} was not found in the Library.")
+    if resource.kind != "remote":
+        raise ValueError("Only remote resources can be refreshed.")
+
+    content, _ = await fetch_remote_resource(resource.location, resource.media_type)
+    new_hash = content_hash(content)
+
+    if new_hash == resource.snapshot_hash:
+        state = get_resource_state(data_dir, cache_dir, resource_id)
+        assert state is not None
+        return state
+
+    snapshot = create_snapshot(snapshots_dir(data_dir), resource.id, content)
+    state = process_snapshot(cache_dir, snapshot.content_hash, resource.media_type, content)
+    update_resource_snapshot(registry_path(data_dir), resource.id, snapshot.content_hash)
+    indexed = (
+        _index_if_ready(cache_dir, snapshot.content_hash) if state.status == "ready" else False
+    )
+    return ResourceState(
+        resource_id=resource.id,
+        kind=resource.kind,
+        location=resource.location,
+        status=state.status,
+        indexed=indexed,
+        error=state.error,
+        snapshot=snapshot,
     )

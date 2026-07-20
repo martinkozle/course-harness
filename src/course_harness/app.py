@@ -816,6 +816,78 @@ def create_app(
             media_type=resource.media_type,
         )
 
+    @app.post("/api/discovery/search", response_model=list[res.DiscoveryResult])
+    async def discover_remote(request: res.DiscoveryRequest) -> list[res.DiscoveryResult]:
+        require_workspace()
+        from course_harness import discovery  # noqa: PLC0415
+
+        return await discovery.discover(request)
+
+    @app.post("/api/discovery/inspect", response_model=res.Candidate)
+    async def inspect_remote(request: res.RemoteFetchRequest) -> res.Candidate:
+        require_workspace()
+        from course_harness.discovery import inspect_web_url  # noqa: PLC0415
+
+        try:
+            return await inspect_web_url(request.url)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.post("/api/resources/remote", response_model=res.ResourceState, status_code=201)
+    async def register_remote(request: res.RemoteFetchRequest) -> res.ResourceState:
+        require_workspace()
+        try:
+            return await library.register_remote_resource(
+                data_dir, cache_dir, request.url, request.media_type
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.post("/api/resources/{resource_id}/refresh", response_model=res.ResourceState)
+    async def refresh_resource(resource_id: str) -> res.ResourceState:
+        require_workspace()
+        try:
+            return await library.refresh_remote_resource(data_dir, cache_dir, resource_id)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.post("/api/sources/{source_id}/adopt-version", response_model=sources_module.Source)
+    async def adopt_source_version(source_id: str) -> sources_module.Source:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            try:
+                return sources_module.adopt_source_version(active, data_dir, source_id)
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.get("/api/resources/{resource_id}/snapshots", response_model=list[res.Snapshot])
+    async def resource_snapshots(resource_id: str) -> list[res.Snapshot]:
+        require_workspace()
+        index = res.read_library_index(library.registry_path(data_dir))
+        resource = next((r for r in index.resources if r.id == resource_id), None)
+        if resource is None:
+            raise HTTPException(status_code=404, detail="Resource was not found.")
+        history = list(resource.snapshot_history)
+        if resource.snapshot_hash and resource.snapshot_hash not in history:
+            history.append(resource.snapshot_hash)
+        seen: set[str] = set()
+        result: list[res.Snapshot] = []
+        for h in reversed(history):
+            if h in seen:
+                continue
+            seen.add(h)
+            snapshot_path = library.snapshots_dir(data_dir) / h
+            if snapshot_path.is_file():
+                result.append(
+                    res.Snapshot(
+                        resource_id=resource_id,
+                        content_hash=h,
+                        byte_count=snapshot_path.stat().st_size,
+                        captured_at=resource.registered_at,
+                    )
+                )
+        return result
+
     static_directory = Path(__file__).with_name("static")
     if static_directory.is_dir():
         app.mount("/", StaticFiles(directory=static_directory, html=True), name="frontend")

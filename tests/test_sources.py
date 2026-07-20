@@ -684,3 +684,91 @@ async def test_labeled_retrieval_fixture_expected_discovery(tmp_path: Path) -> N
         for query in queries:
             hits = search_raw(cache_dir, query)
             assert len(hits) >= 1, f"Query '{query}' should find {fixture_path.name}"
+
+
+@pytest.mark.anyio
+async def test_adopt_version_updates_source(tmp_path: Path) -> None:
+    workspace = tmp_path / "adopt-course"
+    workspace.mkdir()
+    data_dir = tmp_path / "library-data"
+    cache_dir = tmp_path / "library-cache"
+
+    content_v1 = b"# First version content"
+    content_v2 = b"# Second version, updated content"
+
+    app = _app(workspace, data_dir=data_dir, cache_dir=cache_dir)
+    transport = httpx2.ASGITransport(app=app)
+
+    from unittest.mock import AsyncMock, patch
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        with patch(
+            "course_harness.library.fetch_remote_resource",
+            AsyncMock(return_value=(content_v1, "text/markdown")),
+        ):
+            create_r = await client.post(
+                "/api/resources/remote",
+                json={"url": "https://example.com/source.md"},
+            )
+            assert create_r.status_code == 201
+
+        resource_body = (await client.get("/api/resources")).json()
+        resource_id = resource_body[0]["resource_id"]
+
+        admit_r = await client.post(
+            "/api/sources",
+            json={"resource_id": resource_id, "label": "Test Source"},
+        )
+        assert admit_r.status_code == 201
+        source_id = admit_r.json()["id"]
+        old_version = admit_r.json()["source_version_id"]
+
+        with patch(
+            "course_harness.library.fetch_remote_resource",
+            AsyncMock(return_value=(content_v2, "text/markdown")),
+        ):
+            refresh_r = await client.post(f"/api/resources/{resource_id}/refresh")
+            assert refresh_r.status_code == 200
+
+        adopt_r = await client.post(f"/api/sources/{source_id}/adopt-version")
+        assert adopt_r.status_code == 200
+        adopted = adopt_r.json()
+        assert adopted["source_version_id"] != old_version
+
+
+@pytest.mark.anyio
+async def test_adopt_version_already_latest(tmp_path: Path) -> None:
+    workspace = tmp_path / "adopt-latest-course"
+    workspace.mkdir()
+    data_dir = tmp_path / "library-data"
+    cache_dir = tmp_path / "library-cache"
+
+    app = _app(workspace, data_dir=data_dir, cache_dir=cache_dir)
+    transport = httpx2.ASGITransport(app=app)
+
+    from unittest.mock import AsyncMock, patch
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        with patch(
+            "course_harness.library.fetch_remote_resource",
+            AsyncMock(return_value=(b"content", "text/markdown")),
+        ):
+            create_r = await client.post(
+                "/api/resources/remote",
+                json={"url": "https://example.com/stable.md"},
+            )
+            assert create_r.status_code == 201
+
+        resource_body = (await client.get("/api/resources")).json()
+        resource_id = resource_body[0]["resource_id"]
+
+        admit_r = await client.post(
+            "/api/sources",
+            json={"resource_id": resource_id, "label": "Stable Source"},
+        )
+        assert admit_r.status_code == 201
+        source_id = admit_r.json()["id"]
+
+        adopt_r = await client.post(f"/api/sources/{source_id}/adopt-version")
+        assert adopt_r.status_code == 422
+        assert "latest" in (adopt_r.json().get("detail") or "").lower()

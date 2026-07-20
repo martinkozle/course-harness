@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import httpx2
 import pytest
@@ -332,3 +333,104 @@ async def test_missing_resource_returns_404(tmp_path: Path) -> None:
         response = await client.get("/api/resources/nonexistent-id")
 
     assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_register_remote_resource(tmp_path: Path) -> None:
+    workspace = tmp_path / "remote-course"
+    workspace.mkdir()
+    data_dir = tmp_path / "library-data"
+    cache_dir = tmp_path / "library-cache"
+
+    app = _app(workspace, data_dir, cache_dir)
+    transport = httpx2.ASGITransport(app=app)
+
+    def mock_http(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/markdown"},
+            text="# Remote content",
+        )
+
+    with patch(
+        "course_harness.library.fetch_remote_resource",
+        AsyncMock(return_value=(b"# Remote content", "text/markdown")),
+    ):
+        async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/resources/remote",
+                json={"url": "https://example.com/doc.md"},
+            )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["kind"] == "remote"
+    assert body["location"] == "https://example.com/doc.md"
+    assert body["status"] == "ready"
+    assert body["indexed"] is True
+
+
+@pytest.mark.anyio
+async def test_snapshot_history_tracks_versions(tmp_path: Path) -> None:
+    workspace = tmp_path / "snap-course"
+    workspace.mkdir()
+    data_dir = tmp_path / "library-data"
+    cache_dir = tmp_path / "library-cache"
+
+    app = _app(workspace, data_dir, cache_dir)
+    transport = httpx2.ASGITransport(app=app)
+
+    content_v1 = b"# Version one"
+    content_v2 = b"# Version two"
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        with patch(
+            "course_harness.library.fetch_remote_resource",
+            AsyncMock(return_value=(content_v1, "text/markdown")),
+        ):
+            create = await client.post(
+                "/api/resources/remote",
+                json={"url": "https://example.com/evolving.md"},
+            )
+            assert create.status_code == 201
+            resource_id = create.json()["resource_id"]
+
+        with patch(
+            "course_harness.library.fetch_remote_resource",
+            AsyncMock(return_value=(content_v2, "text/markdown")),
+        ):
+            await client.post(f"/api/resources/{resource_id}/refresh")
+
+        index = res.read_library_index(data_dir / "registry.json")
+        resource = next((r for r in index.resources if r.id == resource_id), None)
+        assert resource is not None
+        assert len(resource.snapshot_history) == 1
+        assert resource.snapshot_history[0] != resource.snapshot_hash
+
+
+@pytest.mark.anyio
+async def test_refresh_non_remote_rejected(tmp_path: Path) -> None:
+    workspace = tmp_path / "local-course"
+    workspace.mkdir()
+    data_dir = tmp_path / "library-data"
+    cache_dir = tmp_path / "library-cache"
+
+    fixture = FIXTURES / "hello.md"
+    app = _app(workspace, data_dir, cache_dir)
+    transport = httpx2.ASGITransport(app=app)
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        create = await client.post(
+            "/api/resources",
+            json={
+                "kind": "local-file",
+                "location": str(fixture),
+                "media_type": "text/markdown",
+            },
+        )
+        resource_id = create.json()["id"]
+
+        refresh = await client.post(f"/api/resources/{resource_id}/refresh")
+
+    assert refresh.status_code == 422
+    assert "remote" in (refresh.json().get("detail") or "").lower()

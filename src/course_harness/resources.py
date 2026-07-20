@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ResourceKind = Literal["local-file", "upload"]
+ResourceKind = Literal["local-file", "upload", "remote"]
 ProcessingStatus = Literal["unprocessed", "processing", "ready", "failed", "retrying"]
 
 
@@ -27,6 +27,7 @@ class Resource(BaseModel):
     media_type: str
     registered_at: str
     snapshot_hash: str | None = None
+    snapshot_history: list[str] = Field(default_factory=list)
 
 
 class Snapshot(BaseModel):
@@ -55,6 +56,45 @@ class LibraryIndex(BaseModel):
 
     version: Literal[1] = 1
     resources: list[Resource] = Field(default_factory=list)
+
+
+class Candidate(BaseModel):
+    """Transient discovery result — never persisted."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str
+    provider_id: str
+    title: str | None = None
+    authors: list[str] | None = None
+    summary: str | None = None
+    url: str
+    media_type: str | None = None
+    size_bytes: int | None = None
+    published_at: str | None = None
+
+
+class DiscoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query: str = Field(min_length=1, max_length=500)
+    providers: list[str] | None = None
+    limit: int = Field(default=15, ge=1, le=30)
+
+
+class DiscoveryResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str
+    candidates: list[Candidate] = Field(default_factory=list)
+    error: str | None = None
+
+
+class RemoteFetchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    url: str = Field(min_length=1, max_length=2000)
+    media_type: str | None = None
 
 
 MEDIA_TYPE_PROCESSORS: dict[str, str] = {
@@ -127,7 +167,13 @@ def update_resource_snapshot(
     index = read_library_index(registry_path)
     for idx, resource in enumerate(index.resources):
         if resource.id == resource_id:
-            updated = resource.model_copy(update={"snapshot_hash": snapshot_hash})
+            old_hash = resource.snapshot_hash
+            history = list(resource.snapshot_history)
+            if old_hash is not None and old_hash != snapshot_hash and old_hash not in history:
+                history.append(old_hash)
+            updated = resource.model_copy(
+                update={"snapshot_hash": snapshot_hash, "snapshot_history": history}
+            )
             index.resources[idx] = updated
             write_library_index(registry_path, index)
             return updated

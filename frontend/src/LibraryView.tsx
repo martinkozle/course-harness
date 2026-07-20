@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { responseError } from "./api";
 import type {
+	Candidate,
+	DiscoveryResult,
 	GroupedSearchResult,
 	ResourceState,
 	SearchResult,
@@ -57,6 +59,13 @@ export function LibraryView({
 	const [viewingSource, setViewingSource] = useState<string | null>(null);
 	const [sourceContent, setSourceContent] = useState("");
 	const [loadingContent, setLoadingContent] = useState(false);
+
+	const [discoveryQuery, setDiscoveryQuery] = useState("");
+	const [discovering, setDiscovering] = useState(false);
+	const [discoveryResults, setDiscoveryResults] = useState<DiscoveryResult[]>([]);
+	const [addingRemote, setAddingRemote] = useState<Set<string>>(new Set());
+	const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
+	const [adopting, setAdopting] = useState<Set<string>>(new Set());
 
 	const sourceByResource = Object.fromEntries(
 		sources.map((s) => [s.resource_id, s]),
@@ -192,6 +201,90 @@ export function LibraryView({
 			// Regeneration failure is non-blocking
 		} finally {
 			setRegenerating(false);
+		}
+	}
+
+	async function handleDiscoverySearch(
+		event: React.FormEvent<HTMLFormElement>,
+	) {
+		event.preventDefault();
+		const q = discoveryQuery.trim();
+		if (!q) return;
+		setDiscovering(true);
+		setDiscoveryResults([]);
+		try {
+			const response = await fetch("/api/discovery/search", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ query: q }),
+			});
+			if (!response.ok) throw new Error(await responseError(response));
+			setDiscoveryResults((await response.json()) as DiscoveryResult[]);
+		} catch {
+			setDiscoveryResults([]);
+		} finally {
+			setDiscovering(false);
+		}
+	}
+
+	async function handleAddRemote(candidate: Candidate) {
+		setAddingRemote((current) => new Set(current).add(candidate.url));
+		try {
+			const response = await fetch("/api/resources/remote", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ url: candidate.url }),
+			});
+			if (!response.ok) throw new Error(await responseError(response));
+			const updated = await fetch("/api/resources");
+			if (!updated.ok) throw new Error(await responseError(updated));
+			onResourcesChange((await updated.json()) as ResourceState[]);
+		} finally {
+			setAddingRemote((current) => {
+				const next = new Set(current);
+				next.delete(candidate.url);
+				return next;
+			});
+		}
+	}
+
+	async function handleRefresh(resourceId: string) {
+		setRefreshing((current) => new Set(current).add(resourceId));
+		try {
+			const response = await fetch(
+				`/api/resources/${encodeURIComponent(resourceId)}/refresh`,
+				{ method: "POST" },
+			);
+			if (!response.ok) throw new Error(await responseError(response));
+			const updated = await fetch("/api/resources");
+			if (!updated.ok) throw new Error(await responseError(updated));
+			onResourcesChange((await updated.json()) as ResourceState[]);
+		} finally {
+			setRefreshing((current) => {
+				const next = new Set(current);
+				next.delete(resourceId);
+				return next;
+			});
+		}
+	}
+
+	async function handleAdoptVersion(sourceId: string) {
+		setAdopting((current) => new Set(current).add(sourceId));
+		try {
+			const response = await fetch(
+				`/api/sources/${encodeURIComponent(sourceId)}/adopt-version`,
+				{ method: "POST" },
+			);
+			if (!response.ok) throw new Error(await responseError(response));
+			const updated = await fetch("/api/sources");
+			if (!updated.ok) throw new Error(await responseError(updated));
+			onSourcesChange((await updated.json()) as Source[]);
+		} finally {
+			setAdopting((current) => {
+				const next = new Set(current);
+				next.delete(sourceId);
+				return next;
+			});
 		}
 	}
 
@@ -333,6 +426,27 @@ export function LibraryView({
 												<strong className="status-badge status-ready">
 													Admitted
 												</strong>
+												{resource.snapshot &&
+												admitted.source_version_id !==
+													resource.snapshot.content_hash ? (
+													<>
+														<strong className="status-badge status-unindexed">
+															Update available
+														</strong>
+														<button
+															className="quiet-action"
+															type="button"
+															onClick={() =>
+																void handleAdoptVersion(admitted.id)
+															}
+															disabled={adopting.has(admitted.id)}
+														>
+															{adopting.has(admitted.id)
+																? "Adopting…"
+																: "Adopt latest"}
+														</button>
+													</>
+												) : null}
 												<button
 													className="quiet-action"
 													type="button"
@@ -403,6 +517,20 @@ export function LibraryView({
 													: "Use as course material"}
 											</button>
 										) : null}
+										{resource.kind === "remote" ? (
+											<button
+												className="compact-action secondary-action"
+												type="button"
+												onClick={() =>
+													void handleRefresh(resource.resource_id)
+												}
+												disabled={refreshing.has(resource.resource_id)}
+											>
+												{refreshing.has(resource.resource_id)
+													? "Refreshing…"
+													: "Refresh"}
+											</button>
+										) : null}
 									</div>
 								</li>
 							);
@@ -414,6 +542,91 @@ export function LibraryView({
 					<p className="empty-note" aria-live="assertive">
 						Uploading file…
 					</p>
+				) : null}
+			</section>
+
+			<section
+				className="content-section discovery-section"
+				aria-label="Remote discovery"
+			>
+				<div className="content-section-heading">
+					<div>
+						<p className="section-kicker">Discovery</p>
+						<h2>Find remote resources</h2>
+					</div>
+				</div>
+
+				<form className="search-form" onSubmit={handleDiscoverySearch}>
+					<input
+						type="search"
+						className="search-input"
+						value={discoveryQuery}
+						onChange={(e) => setDiscoveryQuery(e.target.value)}
+						placeholder="Search arXiv, CrossRef, GitHub, HuggingFace…"
+						aria-label="Search remote resources"
+					/>
+					<button
+						type="submit"
+						className="search-submit primary-action"
+						disabled={discovering || !discoveryQuery.trim()}
+					>
+						{discovering ? "Searching…" : "Search"}
+					</button>
+				</form>
+
+				{discoveryResults.length > 0 ? (
+					<div className="discovery-results">
+						{discoveryResults.map((result) => (
+							<div key={result.provider} className="discovery-provider-group">
+								<h3 className="discovery-provider-label">{result.provider}</h3>
+								{result.error ? (
+									<p className="library-error" role="alert">
+										{result.error}
+									</p>
+								) : null}
+								{result.candidates.length > 0 ? (
+									<ul className="library-list">
+										{result.candidates.map((candidate) => (
+											<li key={candidate.url}>
+												<div className="library-meta">
+													<span className="library-name">
+														{candidate.title || candidate.url}
+													</span>
+													{candidate.authors ? (
+														<span className="library-label">
+															{candidate.authors.join(", ")}
+														</span>
+													) : null}
+												</div>
+												{candidate.summary ? (
+													<p className="library-snapshot">
+														{candidate.summary.slice(0, 300)}
+														{candidate.summary.length > 300 ? "…" : ""}
+													</p>
+												) : null}
+												<div className="resource-actions">
+													<button
+														className="compact-action secondary-action"
+														type="button"
+														onClick={() =>
+															void handleAddRemote(candidate)
+														}
+														disabled={addingRemote.has(candidate.url)}
+													>
+														{addingRemote.has(candidate.url)
+															? "Adding…"
+															: "Add to Library"}
+													</button>
+												</div>
+											</li>
+										))}
+									</ul>
+								) : !result.error ? (
+									<p className="empty-note">No results.</p>
+								) : null}
+							</div>
+						))}
+					</div>
 				) : null}
 			</section>
 

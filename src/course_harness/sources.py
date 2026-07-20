@@ -99,3 +99,33 @@ def admit_source(
 
 def _generate_source_id() -> str:
     return f"source-{uuid.uuid4().hex[:12]}"
+
+
+def adopt_source_version(
+    workspace: Path,
+    data_dir: Path,
+    source_id: str,
+) -> Source:
+    from course_harness.resources import read_library_index  # noqa: PLC0415
+
+    existing_index = read_sources_index(workspace)
+    if existing_index is None or not existing_index.sources:
+        raise ValueError("No Sources exist in this Workspace.")
+    source = next((s for s in existing_index.sources if s.id == source_id), None)
+    if source is None:
+        raise ValueError(f"Source {source_id} was not found in this Workspace.")
+
+    lib_index = read_library_index(data_dir / "registry.json")
+    resource = next((r for r in lib_index.resources if r.id == source.resource_id), None)
+    if resource is None or resource.snapshot_hash is None:
+        raise ValueError("Underlying Resource is no longer available or has no Snapshot.")
+
+    if resource.snapshot_hash == source.source_version_id:
+        raise ValueError("Source is already at the latest version.")
+
+    updated_source = source.model_copy(update={"source_version_id": resource.snapshot_hash})
+    existing_index.sources = [
+        updated_source if s.id == source_id else s for s in existing_index.sources
+    ]
+    write_sources_index(workspace, existing_index)
+    return updated_source

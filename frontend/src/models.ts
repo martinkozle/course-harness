@@ -30,7 +30,7 @@ export type ModelCatalog = {
 	selected_model_id: string | null;
 };
 
-export type ResourceKind = "local-file" | "upload";
+export type ResourceKind = "local-file" | "upload" | "remote";
 
 export type ProcessingStatus =
 	| "unprocessed"
@@ -79,4 +79,22 @@ export type GroupedSearchResult = {
 	label: string;
 	max_rank: number;
 	chunks: SearchResult[];
+};
+
+export type Candidate = {
+	provider: string;
+	provider_id: string;
+	title: string | null;
+	authors: string[] | null;
+	summary: string | null;
+	url: string;
+	media_type: string | null;
+	size_bytes: number | null;
+	published_at: string | null;
+};
+
+export type DiscoveryResult = {
+	provider: string;
+	candidates: Candidate[];
+	error: string | null;
 };
