@@ -473,7 +473,7 @@ export function LibraryView({
 													type="button"
 													onClick={() => void handleRemoveSource(admitted.id)}
 												>
-													Remove
+													Unadmit
 												</button>
 											</>
 										) : null}
@@ -552,18 +552,22 @@ export function LibraryView({
 													: "Refresh"}
 											</button>
 										) : null}
-										<button
-											className="compact-action secondary-action"
-											type="button"
-											onClick={() =>
-												void handleRemoveResource(resource.resource_id)
-											}
-											disabled={removing.has(resource.resource_id)}
-										>
-											{removing.has(resource.resource_id)
-												? "Removing…"
-												: "Remove"}
-										</button>
+										{!admitted ? (
+											<button
+												className="compact-action secondary-action"
+												type="button"
+												onClick={() =>
+													void handleRemoveResource(
+														resource.resource_id,
+													)
+												}
+												disabled={removing.has(resource.resource_id)}
+											>
+												{removing.has(resource.resource_id)
+													? "Deleting…"
+													: "Delete"}
+											</button>
+										) : null}
 									</div>
 								</li>
 							);
