@@ -649,6 +649,7 @@ def create_app(
 
         from course_harness.presentation import (
             SLIDE_CLASSES_BY_LAYOUT,
+            fill_slide_layout_fields,
             write_presentation,
         )
 
@@ -679,26 +680,7 @@ def create_app(
                     "citations": cmd.citations,
                     "archived": cmd.archived,
                 }
-                if layout == "title":
-                    fields["subtitle"] = cmd.subtitle
-                elif layout == "bullets":
-                    fields["bullets"] = cmd.bullets or []
-                elif layout == "two_column":
-                    fields["left_content"] = cmd.left_content
-                    fields["right_content"] = cmd.right_content
-                elif layout == "big_statement":
-                    fields["statement"] = cmd.statement
-                elif layout == "closing":
-                    fields["text"] = cmd.text
-                elif layout == "code":
-                    fields["code"] = cmd.code
-                    fields["language"] = cmd.language
-                elif layout == "image":
-                    fields["image_url"] = cmd.image_url
-                    fields["caption"] = cmd.caption
-                elif layout == "quote":
-                    fields["quote"] = cmd.quote
-                    fields["attribution"] = cmd.attribution
+                fields = fill_slide_layout_fields(layout, fields, cmd)
                 model_fields = cls.model_fields  # type: ignore
                 filtered = {k: v for k, v in fields.items() if k in model_fields}
                 slides.append(cls(**filtered))

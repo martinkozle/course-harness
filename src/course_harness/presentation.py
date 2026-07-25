@@ -290,6 +290,33 @@ class SlideOrderRequest(BaseModel):
     slide_ids: list[str] = Field(min_length=1)
 
 
+def fill_slide_layout_fields(
+    layout: str, fields: dict[str, object], cmd: object
+) -> dict[str, object]:
+    result = dict(fields)
+    if layout == "title":
+        result["subtitle"] = getattr(cmd, "subtitle", None)
+    elif layout == "bullets":
+        result["bullets"] = getattr(cmd, "bullets", []) or []
+    elif layout == "two_column":
+        result["left_content"] = getattr(cmd, "left_content", "") or ""
+        result["right_content"] = getattr(cmd, "right_content", "") or ""
+    elif layout == "big_statement":
+        result["statement"] = getattr(cmd, "statement", "") or ""
+    elif layout == "closing":
+        result["text"] = getattr(cmd, "text", "") or ""
+    elif layout == "code":
+        result["code"] = getattr(cmd, "code", "") or ""
+        result["language"] = getattr(cmd, "language", None)
+    elif layout == "image":
+        result["image_url"] = getattr(cmd, "image_url", None)
+        result["caption"] = getattr(cmd, "caption", None)
+    elif layout == "quote":
+        result["quote"] = getattr(cmd, "quote", "") or ""
+        result["attribution"] = getattr(cmd, "attribution", None)
+    return result
+
+
 def reorder_slides(presentation: Presentation, slide_ids: list[str]) -> Presentation:
     active_ids = {slide.id for slide in presentation.slides if not slide.archived}
     if len(slide_ids) != len(active_ids) or set(slide_ids) != active_ids:

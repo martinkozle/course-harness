@@ -24,6 +24,7 @@ from course_harness.presentation import (
     Presentation,
     Slide,
     SlideCitation,
+    fill_slide_layout_fields,
     list_presentations,
     read_presentation_for_lecture,
     slide_by_id,
@@ -219,33 +220,14 @@ def apply_presentation_command(
         used_ids.add(identity)
 
         cls = SLIDE_CLASSES_BY_LAYOUT[layout]
-        fields = {
+        fields: dict[str, object] = {
             "title": cmd_slide.title,
             "speaker_notes": cmd_slide.speaker_notes,
             "purpose": cmd_slide.purpose,
             "citations": cmd_slide.citations,
             "archived": cmd_slide.archived,
         }
-        if layout == "title":
-            fields["subtitle"] = cmd_slide.subtitle
-        elif layout == "bullets":
-            fields["bullets"] = cmd_slide.bullets or []
-        elif layout == "two_column":
-            fields["left_content"] = cmd_slide.left_content or ""
-            fields["right_content"] = cmd_slide.right_content or ""
-        elif layout == "big_statement":
-            fields["statement"] = cmd_slide.statement or ""
-        elif layout == "closing":
-            fields["text"] = cmd_slide.text or ""
-        elif layout == "code":
-            fields["code"] = cmd_slide.code or ""
-            fields["language"] = cmd_slide.language
-        elif layout == "image":
-            fields["image_url"] = cmd_slide.image_url
-            fields["caption"] = cmd_slide.caption
-        elif layout == "quote":
-            fields["quote"] = cmd_slide.quote or ""
-            fields["attribution"] = cmd_slide.attribution
+        fields = fill_slide_layout_fields(layout, fields, cmd_slide)
 
         model_fields = cls.model_fields  # type: ignore
         filtered = {k: v for k, v in fields.items() if k in model_fields}
