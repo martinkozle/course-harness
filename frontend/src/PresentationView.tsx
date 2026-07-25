@@ -677,6 +677,40 @@ export function PresentationView({
 										className="quiet-action compact-action"
 										type="button"
 										disabled={busy}
+										onClick={() => {
+											void (async () => {
+												if (!selectedLectureId) return;
+												setError(null);
+												try {
+													const r = await fetch(
+														`/api/presentations/${encodeURIComponent(selectedLectureId)}/export`,
+													);
+													if (!r.ok) throw new Error(await responseError(r));
+													const blob = await r.blob();
+													const url = URL.createObjectURL(blob);
+													const a = document.createElement("a");
+													a.href = url;
+													a.download = `presentation.pptx`;
+													document.body.appendChild(a);
+													a.click();
+													document.body.removeChild(a);
+													URL.revokeObjectURL(url);
+												} catch (caught) {
+													setError(
+														caught instanceof Error
+															? caught.message
+															: "Could not export presentation.",
+													);
+												}
+											})();
+										}}
+									>
+										Export PowerPoint
+									</button>
+									<button
+										className="quiet-action compact-action"
+										type="button"
+										disabled={busy}
 										onClick={() => void deletePresentation()}
 									>
 										Delete presentation

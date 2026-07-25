@@ -46,6 +46,7 @@ from course_harness.course_plan import (
     read_course_plan,
     write_course_plan,
 )
+from course_harness.export import ExportError, export_presentation
 from course_harness.presentation import (
     Presentation,
     Slide,
@@ -815,6 +816,25 @@ def create_app(
                 raise HTTPException(status_code=422, detail=str(error)) from error
             write_presentation(active, updated)
             return updated
+
+    @app.get("/api/presentations/{lecture_id}/export")
+    async def api_export_presentation(lecture_id: str) -> Response:
+        active = require_workspace()
+        pres = read_presentation_for_lecture(active, lecture_id)
+        if pres is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No Presentation exists for this lecture",
+            )
+        try:
+            pptx_bytes = export_presentation(pres)
+        except ExportError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return Response(
+            content=pptx_bytes,
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            headers={"Content-Disposition": f'attachment; filename="{pres.id}.pptx"'},
+        )
 
     @app.get("/api/sources", response_model=list[sources_module.Source])
     async def list_sources() -> list[sources_module.Source]:
