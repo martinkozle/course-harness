@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { CoursePlan } from "./AgentPanel";
 import { responseError } from "./api";
-import type { Presentation, PresentationSummary, Slide, SlideCitation } from "./models";
+import type {
+	Presentation,
+	PresentationSummary,
+	Slide,
+	SlideCitation,
+} from "./models";
 
 type PresentationViewProps = {
 	course: CoursePlan;
@@ -42,7 +47,10 @@ function citationDetail(citation: SlideCitation): string {
 	const parts: string[] = [citation.source_id.slice(0, 12)];
 	if (citation.line_start != null) {
 		parts.push(`L${citation.line_start + 1}`);
-		if (citation.line_end != null && citation.line_end !== citation.line_start) {
+		if (
+			citation.line_end != null &&
+			citation.line_end !== citation.line_start
+		) {
 			parts.push(`–${citation.line_end}`);
 		}
 	}
@@ -107,7 +115,9 @@ function SlideDetail({
 				{slide.archived ? (
 					<span className="status-badge status-unprocessed">Archived</span>
 				) : null}
-				{slide.purpose ? <p className="slide-purpose">{slide.purpose}</p> : null}
+				{slide.purpose ? (
+					<p className="slide-purpose">{slide.purpose}</p>
+				) : null}
 			</div>
 
 			{slide.layout === "bullets" && slide.bullets ? (
@@ -200,35 +210,37 @@ export function PresentationView({
 	onChange,
 	onChatContext,
 }: PresentationViewProps) {
-	const [selectedLectureId, setSelectedLectureId] = useState<string | null>(null);
+	const [selectedLectureId, setSelectedLectureId] = useState<string | null>(
+		null,
+	);
 	const [selectedSlideId, setSelectedSlideId] = useState<string | null>(null);
-	const [currentPresentation, setCurrentPresentation] = useState<Presentation | null>(null);
+	const [currentPresentation, setCurrentPresentation] =
+		useState<Presentation | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [showArchived, setShowArchived] = useState(false);
 	const prevPresentationsLen = useRef(presentations.length);
 
-	const loadPresentation = useCallback(
-		async (lectureId: string) => {
-			try {
-				const response = await fetch(
-					`/api/presentations/${encodeURIComponent(lectureId)}`,
-				);
-				if (response.status === 404) {
-					setCurrentPresentation(null);
-					return;
-				}
-				if (!response.ok) {
-					throw new Error(await responseError(response));
-				}
-				setCurrentPresentation((await response.json()) as Presentation);
-			} catch (caught) {
-				setError(
-					caught instanceof Error ? caught.message : "Could not load presentation.",
-				);
+	const loadPresentation = useCallback(async (lectureId: string) => {
+		try {
+			const response = await fetch(
+				`/api/presentations/${encodeURIComponent(lectureId)}`,
+			);
+			if (response.status === 404) {
+				setCurrentPresentation(null);
+				return;
 			}
-		},
-		[],
-	);
+			if (!response.ok) {
+				throw new Error(await responseError(response));
+			}
+			setCurrentPresentation((await response.json()) as Presentation);
+		} catch (caught) {
+			setError(
+				caught instanceof Error
+					? caught.message
+					: "Could not load presentation.",
+			);
+		}
+	}, []);
 
 	const selectLecture = useCallback(
 		async (lectureId: string) => {
@@ -266,7 +278,9 @@ export function PresentationView({
 			await onChange();
 		} catch (caught) {
 			setError(
-				caught instanceof Error ? caught.message : "Could not delete presentation.",
+				caught instanceof Error
+					? caught.message
+					: "Could not delete presentation.",
 			);
 		}
 	}
@@ -293,13 +307,16 @@ export function PresentationView({
 			if (!response.ok) throw new Error(await responseError(response));
 			setCurrentPresentation((await response.json()) as Presentation);
 		} catch (caught) {
-			setError(caught instanceof Error ? caught.message : "Could not reorder slides.");
+			setError(
+				caught instanceof Error ? caught.message : "Could not reorder slides.",
+			);
 		}
 	}
 
 	const selectedSlide =
 		selectedSlideId && currentPresentation
-			? currentPresentation.slides.find((s) => s.id === selectedSlideId) ?? null
+			? (currentPresentation.slides.find((s) => s.id === selectedSlideId) ??
+				null)
 			: null;
 
 	const activeSlides = currentPresentation
@@ -310,7 +327,10 @@ export function PresentationView({
 		: [];
 
 	return (
-		<main className="page-main presentation-main" aria-labelledby="presentation-heading">
+		<main
+			className="page-main presentation-main"
+			aria-labelledby="presentation-heading"
+		>
 			<header className="page-heading presentation-heading">
 				<p className="eyebrow">Presentations</p>
 				<h1 id="presentation-heading">Slide canvas</h1>
@@ -389,9 +409,8 @@ export function PresentationView({
 							<div className="content-section-heading">
 								<div>
 									<p className="section-kicker">
-										{course.lectures.find(
-											(l) => l.id === selectedLectureId,
-										)?.title ?? "Lecture"}
+										{course.lectures.find((l) => l.id === selectedLectureId)
+											?.title ?? "Lecture"}
 									</p>
 									<h2 id="slide-canvas-heading">Slides</h2>
 								</div>
@@ -450,10 +469,7 @@ export function PresentationView({
 														<button
 															type="button"
 															className="slide-order-btn"
-															disabled={
-																busy ||
-																idx === activeSlides.length - 1
-															}
+															disabled={busy || idx === activeSlides.length - 1}
 															title="Move down"
 															aria-label="Move slide down"
 															onClick={(e) => {
@@ -467,36 +483,20 @@ export function PresentationView({
 													<button
 														type="button"
 														className="slide-card"
-														onClick={() =>
-															setSelectedSlideId(slide.id)
-														}
+														onClick={() => setSelectedSlideId(slide.id)}
 													>
-														<span
-															className="slide-number"
-															aria-hidden="true"
-														>
-															{String(idx + 1).padStart(
-																2,
-																"0",
-															)}
+														<span className="slide-number" aria-hidden="true">
+															{String(idx + 1).padStart(2, "0")}
 														</span>
 														<div className="slide-card-body">
 															<div className="slide-card-header">
 																<span className="slide-layout-badge">
-																	{layoutLabel(
-																		slide.layout,
-																	)}
+																	{layoutLabel(slide.layout)}
 																</span>
-																{slide.citations.length >
-																0 ? (
+																{slide.citations.length > 0 ? (
 																	<span className="citation-count-badge">
-																		{slide.citations.length}{" "}
-																		cite
-																		{slide.citations
-																			.length !==
-																		1
-																			? "s"
-																			: ""}
+																		{slide.citations.length} cite
+																		{slide.citations.length !== 1 ? "s" : ""}
 																	</span>
 																) : null}
 																{slide.speaker_notes ? (
@@ -526,9 +526,7 @@ export function PresentationView({
 											type="button"
 											className="archived-toggle"
 											aria-expanded={showArchived}
-											onClick={() =>
-												setShowArchived(!showArchived)
-											}
+											onClick={() => setShowArchived(!showArchived)}
 										>
 											Archived slides ({archivedSlides.length})
 										</button>
@@ -539,33 +537,22 @@ export function PresentationView({
 														<button
 															type="button"
 															className="slide-card"
-															onClick={() =>
-																setSelectedSlideId(
-																	slide.id,
-																)
-															}
+															onClick={() => setSelectedSlideId(slide.id)}
 														>
-															<span
-																className="slide-number"
-																aria-hidden="true"
-															>
+															<span className="slide-number" aria-hidden="true">
 																—
 															</span>
 															<div className="slide-card-body">
 																<div className="slide-card-header">
 																	<span className="slide-layout-badge">
-																		{layoutLabel(
-																			slide.layout,
-																		)}
+																		{layoutLabel(slide.layout)}
 																	</span>
 																	<span className="status-badge status-unprocessed">
 																		Archived
 																	</span>
 																</div>
 																<p className="slide-card-preview">
-																	{slidePreview(
-																		slide,
-																	)}
+																	{slidePreview(slide)}
 																</p>
 															</div>
 														</button>

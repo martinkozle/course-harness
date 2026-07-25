@@ -844,3 +844,308 @@ async def test_cancel_endpoint_is_unavailable_when_no_workspace_is_bound() -> No
 
     assert response.status_code == 409
     assert response.json() == {"detail": "No Course Workspace is active"}
+
+
+@pytest.mark.anyio
+async def test_agent_can_archive_and_restore_slides(tmp_path: Path) -> None:
+    workspace = tmp_path / "archive-course"
+    workspace.mkdir()
+    provider_store = tmp_path / "user-data" / "provider"
+
+    from course_harness.course_plan import (
+        CoursePlanInput,
+        LectureInput,
+        create_course_plan,
+        create_course_plan_file,
+        initialize_workspace_history,
+    )
+    from course_harness.presentation import (
+        BulletsSlide,
+        Presentation,
+        TitleSlide,
+        write_presentation,
+    )
+
+    plan = create_course_plan(
+        CoursePlanInput(
+            title="Archive test", audience="Test", lectures=[LectureInput(title="Lecture 1")]
+        )
+    )
+    initialize_workspace_history(workspace)
+    create_course_plan_file(workspace, plan)
+
+    slide_a = TitleSlide(id="slide-aaa111222333", title="Keep me")
+    slide_b = BulletsSlide(id="slide-bbb444555666", title="Archive me", bullets=["X"])
+    pres = Presentation(
+        id="presentation-abc123def456",
+        lecture_id=plan.lectures[0].id,
+        slides=[slide_a, slide_b],
+    )
+    write_presentation(workspace, pres)
+
+    async def archive_model(
+        _messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        yield {
+            0: DeltaToolCall(
+                name="archive_slide",
+                json_args=json.dumps({"slide_id": "slide-bbb444555666", "archived": True}),
+                tool_call_id="archive-1",
+            )
+        }
+
+    app = create_app(
+        workspace,
+        provider_store_path=provider_store,
+        agent_model=FunctionModel(stream_function=archive_model),
+        provider_validator=_verified_capabilities,
+    )
+
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        _, body = await _post_stream(
+            app,
+            "/api/agent",
+            {
+                "threadId": "test",
+                "runId": "archive-run",
+                "state": {},
+                "messages": [{"id": "u1", "role": "user", "content": "Archive that slide"}],
+                "tools": [],
+                "context": [],
+                "forwardedProps": {},
+            },
+        )
+
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in body.splitlines()
+        if line.startswith("data: ")
+    ]
+    # Autonomous mode — no interrupt for archive_slide (requires_approval=False by default)
+    state_events = [e for e in events if e["type"] == "STATE_SNAPSHOT"]
+    assert state_events, "archive should emit STATE_SNAPSHOT"
+    assert "presentations" in state_events[0]["snapshot"]
+
+    from course_harness.presentation import read_presentation_for_lecture
+
+    result = read_presentation_for_lecture(workspace, plan.lectures[0].id)
+    assert result is not None
+    archives = [s for s in result.slides if s.archived]
+    actives = [s for s in result.slides if not s.archived]
+    assert len(archives) == 1
+    assert archives[0].id == "slide-bbb444555666"
+    assert len(actives) == 1
+    assert actives[0].id == "slide-aaa111222333"
+
+
+@pytest.mark.anyio
+async def test_agent_can_delete_presentation_and_requires_approval_in_guided(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "delete-course"
+    workspace.mkdir()
+    provider_store = tmp_path / "user-data" / "provider"
+
+    from course_harness.course_plan import (
+        CoursePlanInput,
+        LectureInput,
+        create_course_plan,
+        create_course_plan_file,
+        initialize_workspace_history,
+    )
+    from course_harness.presentation import (
+        Presentation,
+        TitleSlide,
+        write_presentation,
+    )
+
+    plan = create_course_plan(
+        CoursePlanInput(
+            title="Delete test", audience="Test", lectures=[LectureInput(title="Lecture 1")]
+        )
+    )
+    initialize_workspace_history(workspace)
+    create_course_plan_file(workspace, plan)
+
+    pres = Presentation(
+        id="presentation-abc123def456",
+        lecture_id=plan.lectures[0].id,
+        slides=[TitleSlide(id="slide-aaa111222333", title="Intro")],
+    )
+    write_presentation(workspace, pres)
+
+    async def delete_model(
+        _messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        tool_has_returned = any(
+            isinstance(message, ModelRequest)
+            and any(isinstance(part, ToolReturnPart) for part in message.parts)
+            for message in _messages
+        )
+        if not tool_has_returned:
+            yield {
+                0: DeltaToolCall(
+                    name="delete_presentation",
+                    json_args=json.dumps({"lecture_id": plan.lectures[0].id}),
+                    tool_call_id="delete-1",
+                )
+            }
+        else:
+            yield "Presentation deleted."
+
+    app = create_app(
+        workspace,
+        provider_store_path=provider_store,
+        agent_model=FunctionModel(stream_function=delete_model),
+        provider_validator=_verified_capabilities,
+    )
+
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        _, body = await _post_stream(
+            app,
+            "/api/agent",
+            {
+                "threadId": "test",
+                "runId": "delete-run",
+                "state": {},
+                "messages": [{"id": "u1", "role": "user", "content": "Delete the presentation"}],
+                "tools": [],
+                "context": [],
+                "forwardedProps": {},
+            },
+        )
+
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in body.splitlines()
+        if line.startswith("data: ")
+    ]
+    # Guided mode — delete_presentation should produce an interrupt
+    outcome = events[-1].get("outcome", {})
+    interrupts = outcome.get("interrupts", [])
+    assert interrupts, "Guided mode should produce an interrupt for delete_presentation"
+
+    # Now approve the deletion
+    interrupt = interrupts[0]
+    _, approve_body = await _post_stream(
+        app,
+        "/api/agent",
+        {
+            "threadId": "test",
+            "runId": "delete-approve",
+            "state": {},
+            "messages": [],
+            "tools": [],
+            "context": [],
+            "forwardedProps": {},
+            "resume": [
+                {
+                    "interruptId": interrupt["id"],
+                    "status": "resolved",
+                    "payload": {"approved": True},
+                }
+            ],
+        },
+    )
+    approve_events = [
+        json.loads(line.removeprefix("data: "))
+        for line in approve_body.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert approve_events[-1]["type"] == "RUN_FINISHED"
+
+    from course_harness.presentation import read_presentation_for_lecture
+
+    result = read_presentation_for_lecture(workspace, plan.lectures[0].id)
+    assert result is None, "Presentation should be deleted after approval"
+
+
+@pytest.mark.anyio
+async def test_presentation_approval_preview_contains_slide_outline(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "preview-course"
+    workspace.mkdir()
+    provider_store = tmp_path / "user-data" / "provider"
+
+    from course_harness.course_plan import (
+        CoursePlanInput,
+        LectureInput,
+        create_course_plan,
+        create_course_plan_file,
+        initialize_workspace_history,
+    )
+
+    plan = create_course_plan(
+        CoursePlanInput(
+            title="Preview test", audience="Test", lectures=[LectureInput(title="Lecture 1")]
+        )
+    )
+    initialize_workspace_history(workspace)
+    create_course_plan_file(workspace, plan)
+
+    async def pres_model(
+        _messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        yield {
+            0: DeltaToolCall(
+                name="replace_presentation",
+                json_args=json.dumps(
+                    {
+                        "command": {
+                            "lecture_id": plan.lectures[0].id,
+                            "slides": [
+                                {"layout": "title", "title": "Welcome"},
+                                {"layout": "bullets", "title": "Key points", "bullets": ["A", "B"]},
+                                {"layout": "closing", "title": "Thanks"},
+                            ],
+                        }
+                    }
+                ),
+                tool_call_id="pres-1",
+            )
+        }
+
+    app = create_app(
+        workspace,
+        provider_store_path=provider_store,
+        agent_model=FunctionModel(stream_function=pres_model),
+        provider_validator=_verified_capabilities,
+    )
+
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        _, body = await _post_stream(
+            app,
+            "/api/agent",
+            {
+                "threadId": "test",
+                "runId": "pres-run",
+                "state": {},
+                "messages": [{"id": "u1", "role": "user", "content": "Create slides"}],
+                "tools": [],
+                "context": [],
+                "forwardedProps": {},
+            },
+        )
+
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in body.splitlines()
+        if line.startswith("data: ")
+    ]
+    outcome = events[-1].get("outcome", {})
+    interrupts = outcome.get("interrupts", [])
+    assert interrupts, "Guided mode should produce an interrupt for replace_presentation"
+
+    interrupt_message = interrupts[0].get("message", "")
+    assert "replace_presentation(" in interrupt_message
+    assert '"layout": "title"' in interrupt_message
+    assert '"slides":' in interrupt_message
+    assert "Welcome" in interrupt_message
+    assert "Key points" in interrupt_message

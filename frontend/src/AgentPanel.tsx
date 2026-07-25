@@ -32,6 +32,17 @@ type CoursePlanProposal = {
 	lectures: { id?: string; title: string; group?: string | null }[];
 };
 
+type PresentationProposal = {
+	lecture_id: string;
+	replace_all_slides?: boolean;
+	slides: {
+		layout: string;
+		title?: string | null;
+		purpose?: string | null;
+		archived?: boolean;
+	}[];
+};
+
 type Activity = { id: string; title: string; detail: string };
 
 type AgentMode = "guided" | "autonomous";
@@ -65,14 +76,45 @@ function updateAssistantMessage(
 	);
 }
 
-function approvalProposal(
-	interrupt: AgentInterrupt,
-): { tool: "course_plan" | "presentation"; preview: Record<string, unknown> | null } | null {
+function approvalProposal(interrupt: AgentInterrupt): {
+	tool: "course_plan" | "presentation" | "presentation_delete";
+	preview: Record<string, unknown> | null;
+} | null {
 	const message = interrupt.message;
 	if (!message) return null;
+
+	if (message.includes("delete_presentation(")) {
+		const deleteMatch =
+			/delete_presentation\(\{"lecture_id":\s*"([^"]+)"\}\)\?$/.exec(message);
+		if (deleteMatch) {
+			return {
+				tool: "presentation_delete",
+				preview: { lecture_id: deleteMatch[1] },
+			};
+		}
+		return { tool: "presentation_delete", preview: null };
+	}
+
 	if (message.includes("replace_presentation(")) {
+		const presMatch = /replace_presentation\((\{.*\})\)\?$/s.exec(message);
+		if (presMatch) {
+			try {
+				const payload = JSON.parse(presMatch[1]) as {
+					command?: PresentationProposal;
+				};
+				if (payload.command) {
+					return {
+						tool: "presentation",
+						preview: payload.command as unknown as Record<string, unknown>,
+					};
+				}
+			} catch {
+				// fall through
+			}
+		}
 		return { tool: "presentation", preview: null };
 	}
+
 	const marker = "replace_course_plan(";
 	const start = message.indexOf(marker);
 	const end = message.lastIndexOf(")?");
@@ -96,25 +138,73 @@ function ApprovalCard({
 }) {
 	const parsed = approvalProposal(approval);
 	const isPresentation = parsed?.tool === "presentation";
-	const proposal = parsed?.preview as CoursePlanProposal | null;
+	const isPresentationDelete = parsed?.tool === "presentation_delete";
+	const courseProposal =
+		!isPresentation && !isPresentationDelete
+			? (parsed?.preview as CoursePlanProposal | null)
+			: null;
+	const presentationProposal = isPresentation
+		? (parsed?.preview as PresentationProposal | null)
+		: null;
+	const deleteLectureId = isPresentationDelete
+		? (parsed?.preview as { lecture_id?: string })?.lecture_id
+		: null;
+
+	let kicker = "Course Plan proposal";
+	if (isPresentation) kicker = "Presentation proposal";
+	else if (isPresentationDelete) kicker = "Presentation proposal";
+
+	let heading = "Apply this change?";
+	if (isPresentation) heading = "Apply this presentation change?";
+	else if (isPresentationDelete) heading = "Delete this Presentation?";
+
 	return (
 		<section className="approval-card" aria-labelledby="approval-heading">
-			<p className="section-kicker">
-				{isPresentation ? "Presentation proposal" : "Course Plan proposal"}
-			</p>
-			<h3 id="approval-heading">
-				{isPresentation ? "Apply this presentation change?" : "Apply this change?"}
-			</h3>
-			{isPresentation ? (
-				<p>The agent wants to create or update a Presentation.</p>
-			) : proposal ? (
+			<p className="section-kicker">{kicker}</p>
+			<h3 id="approval-heading">{heading}</h3>
+			{isPresentationDelete ? (
+				<p>
+					{deleteLectureId
+						? `The agent wants to delete the Presentation for lecture ${deleteLectureId}.`
+						: "The agent wants to delete a Presentation."}
+				</p>
+			) : isPresentation ? (
+				presentationProposal ? (
+					<div className="proposal-sheet">
+						<div>
+							<strong>
+								{presentationProposal.slides.length} slide
+								{presentationProposal.slides.length !== 1 ? "s" : ""}
+							</strong>
+							{presentationProposal.replace_all_slides ? (
+								<span>Replace all slides</span>
+							) : null}
+						</div>
+						<ol>
+							{presentationProposal.slides.map((slide, index) => (
+								<li key={`${slide.layout}-${slide.title ?? index}`}>
+									<span>{String(index + 1).padStart(2, "0")}</span>
+									<span className="slide-layout-badge">{slide.layout}</span>
+									{slide.title ?? "(no title)"}
+									{slide.archived ? " [archived]" : ""}
+								</li>
+							))}
+						</ol>
+					</div>
+				) : (
+					<p>
+						The agent wants to create or update a Presentation, but its proposal
+						could not be read.
+					</p>
+				)
+			) : courseProposal ? (
 				<div className="proposal-sheet">
 					<div>
-						<strong>{proposal.title}</strong>
-						<span>{proposal.audience}</span>
+						<strong>{courseProposal.title}</strong>
+						<span>{courseProposal.audience}</span>
 					</div>
 					<ol>
-						{proposal.lectures.map((lecture, index) => (
+						{courseProposal.lectures.map((lecture, index) => (
 							<li key={`${lecture.id ?? "new"}-${lecture.title}`}>
 								<span>{String(index + 1).padStart(2, "0")}</span>
 								{lecture.title}
@@ -127,7 +217,7 @@ function ApprovalCard({
 					The agent proposed a Course Plan, but its preview could not be read.
 				</p>
 			)}
-			{!isPresentation ? (
+			{!isPresentation && !isPresentationDelete ? (
 				<p className="approval-scope">
 					This saves the Course title, intent, and Lecture spine. It does not
 					create Lecture content yet.
@@ -139,14 +229,20 @@ function ApprovalCard({
 					className="secondary-action"
 					onClick={() => onResolve(false)}
 				>
-					{isPresentation ? "Skip" : "Keep current plan"}
+					{isPresentation || isPresentationDelete
+						? "Skip"
+						: "Keep current plan"}
 				</button>
 				<button
 					type="button"
 					className="primary-action"
 					onClick={() => onResolve(true)}
 				>
-					{isPresentation ? "Apply" : "Save Course Plan"}
+					{isPresentationDelete
+						? "Delete"
+						: isPresentation
+							? "Apply"
+							: "Save Course Plan"}
 				</button>
 			</div>
 		</section>
@@ -412,9 +508,9 @@ export function AgentPanel({
 				<ol className="chat-messages" aria-label="Course Agent conversation">
 					{messages.length === 0 ? (
 						<li className="chat-empty">
-							The Course Agent currently creates and revises the Course Plan: its
-							intent and Lecture spine. Lecture content comes in a later authoring
-							step.
+							The Course Agent currently creates and revises the Course Plan:
+							its intent and Lecture spine. Lecture content comes in a later
+							authoring step.
 						</li>
 					) : (
 						messages.map((message) => (

@@ -24,6 +24,7 @@ from course_harness.presentation import (
     Presentation,
     Slide,
     SlideCitation,
+    delete_presentation_file,
     fill_slide_layout_fields,
     list_presentations,
     read_presentation_for_lecture,
@@ -285,7 +286,11 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             "Use read_slide to review specific slide details before revising. "
             "Preserve existing Slide IDs when revising unless the Course Author explicitly "
             "asks to replace all slides. Slide titles should be concise (1-6 words). "
-            "Use reorder_slides to rearrange the non-archived slides. Archived slides "
+            "Use reorder_slides to rearrange the non-archived slides. "
+            "Use archive_slide to archive or restore individual slides rather than "
+            "reissuing a full replace_presentation for a single archive action. "
+            "Use delete_presentation only when the Course Author explicitly asks to "
+            "remove a Presentation. Archived slides "
             "are preserved at the end and survive replanning — only replace_all_slides "
             "removes them.\n\n"
             "Authoring workflow: 1) Create the Lecture spine with replace_course_plan, "
@@ -607,6 +612,48 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         return ToolReturn(return_value=f"Slide {slide_id} was not found.")
 
     @agent.tool
+    async def archive_slide(
+        ctx: RunContext[CourseAgentDeps], slide_id: str, archived: bool
+    ) -> ToolReturn:
+        """Archive or restore a single slide. Archived slides are preserved
+        at the end of the slide list and survive replanning."""
+        for pres in ctx.deps.course_state.presentations:
+            slide = slide_by_id(pres, slide_id)
+            if slide is not None:
+                updated_slides = [
+                    (s.model_copy(update={"archived": archived}) if s.id == slide_id else s)
+                    for s in pres.slides
+                ]
+                updated = pres.model_copy(update={"slides": updated_slides})
+                write_presentation(ctx.deps.workspace, updated)
+                ctx.deps.course_state = CourseAgentState(
+                    course=ctx.deps.course_state.course,
+                    sources=ctx.deps.course_state.sources,
+                    presentations=list_presentations(ctx.deps.workspace),
+                )
+                return ToolReturn(
+                    return_value=(f"Slide {slide_id} {'archived' if archived else 'restored'}."),
+                    metadata=[
+                        ActivitySnapshotEvent(
+                            type=EventType.ACTIVITY_SNAPSHOT,
+                            message_id=f"slide-archive-{slide_id}",
+                            activity_type="slide-archive",
+                            content={
+                                "title": (
+                                    f"Slide {'archived' if archived else 'restored'}: {slide_id}"
+                                ),
+                                "detail": (f"Slide {slide_id} in presentation {pres.id}"),
+                            },
+                        ),
+                        StateSnapshotEvent(
+                            type=EventType.STATE_SNAPSHOT,
+                            snapshot=ctx.deps.course_state.model_dump(mode="json"),
+                        ),
+                    ],
+                )
+        return ToolReturn(return_value=f"Slide {slide_id} was not found.")
+
+    @agent.tool
     async def reorder_slides(
         ctx: RunContext[CourseAgentDeps], lecture_id: str, slide_ids: list[str]
     ) -> ToolReturn:
@@ -684,6 +731,49 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
                     content={
                         "title": "Presentation updated",
                         "detail": f"Saved {len(pres.slides)} slides to {pres.id}.yaml",
+                    },
+                ),
+                StateSnapshotEvent(
+                    type=EventType.STATE_SNAPSHOT,
+                    snapshot=ctx.deps.course_state.model_dump(mode="json"),
+                ),
+            ],
+        )
+
+    @agent.tool(requires_approval=requires_approval)
+    async def delete_presentation(ctx: RunContext[CourseAgentDeps], lecture_id: str) -> ToolReturn:
+        """Delete a Presentation for a lecture. This removes the presentation
+        file and unlinks it from the Lecture in the Course Plan."""
+        pres = read_presentation_for_lecture(ctx.deps.workspace, lecture_id)
+        if pres is None:
+            return ToolReturn(return_value=f"No Presentation exists for lecture {lecture_id}.")
+        if ctx.deps.course_state.course is None:
+            return ToolReturn(return_value="Cannot delete: no active Course Plan.")
+
+        delete_presentation_file(ctx.deps.workspace, pres.id)
+        updated_lectures = [
+            lec.model_copy(update={"presentation_id": None}) if lec.id == lecture_id else lec
+            for lec in ctx.deps.course_state.course.lectures
+        ]
+        updated_plan = ctx.deps.course_state.course.model_copy(
+            update={"lectures": updated_lectures}
+        )
+        write_course_plan(ctx.deps.workspace, updated_plan)
+        ctx.deps.course_state = CourseAgentState(
+            course=updated_plan,
+            sources=ctx.deps.course_state.sources,
+            presentations=list_presentations(ctx.deps.workspace),
+        )
+        return ToolReturn(
+            return_value=(f"Presentation for lecture {lecture_id} deleted ({pres.id})."),
+            metadata=[
+                ActivitySnapshotEvent(
+                    type=EventType.ACTIVITY_SNAPSHOT,
+                    message_id=f"presentation-delete-{pres.id}",
+                    activity_type="presentation-delete",
+                    content={
+                        "title": "Presentation deleted",
+                        "detail": f"Removed {pres.id} for lecture {lecture_id}",
                     },
                 ),
                 StateSnapshotEvent(

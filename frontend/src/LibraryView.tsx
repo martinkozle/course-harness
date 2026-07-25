@@ -62,7 +62,9 @@ export function LibraryView({
 
 	const [discoveryQuery, setDiscoveryQuery] = useState("");
 	const [discovering, setDiscovering] = useState(false);
-	const [discoveryResults, setDiscoveryResults] = useState<DiscoveryResult[]>([]);
+	const [discoveryResults, setDiscoveryResults] = useState<DiscoveryResult[]>(
+		[],
+	);
 	const [addingRemote, setAddingRemote] = useState<Set<string>>(new Set());
 	const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
 	const [adopting, setAdopting] = useState<Set<string>>(new Set());
@@ -542,9 +544,7 @@ export function LibraryView({
 											<button
 												className="compact-action secondary-action"
 												type="button"
-												onClick={() =>
-													void handleRefresh(resource.resource_id)
-												}
+												onClick={() => void handleRefresh(resource.resource_id)}
 												disabled={refreshing.has(resource.resource_id)}
 											>
 												{refreshing.has(resource.resource_id)
@@ -557,9 +557,7 @@ export function LibraryView({
 												className="compact-action secondary-action"
 												type="button"
 												onClick={() =>
-													void handleRemoveResource(
-														resource.resource_id,
-													)
+													void handleRemoveResource(resource.resource_id)
 												}
 												disabled={removing.has(resource.resource_id)}
 											>
@@ -655,9 +653,7 @@ export function LibraryView({
 													<button
 														className="compact-action secondary-action"
 														type="button"
-														onClick={() =>
-															void handleAddRemote(candidate)
-														}
+														onClick={() => void handleAddRemote(candidate)}
 														disabled={addingRemote.has(candidate.url)}
 													>
 														{addingRemote.has(candidate.url)

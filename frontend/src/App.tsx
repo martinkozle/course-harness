@@ -4,9 +4,14 @@ import { AgentPanel, type ChatMessage, type CoursePlan } from "./AgentPanel";
 import type { AgentInterrupt } from "./agentStream";
 import { responseError } from "./api";
 import { LibraryView } from "./LibraryView";
-import type { ModelCatalog, PresentationSummary, ResourceState, Source } from "./models";
-import { ModelsView } from "./ProviderSetup";
+import type {
+	ModelCatalog,
+	PresentationSummary,
+	ResourceState,
+	Source,
+} from "./models";
 import { PresentationView } from "./PresentationView";
+import { ModelsView } from "./ProviderSetup";
 
 type Workspace = {
 	name: string;
@@ -38,7 +43,12 @@ type CourseRequest = {
 	lectures: { title: string }[];
 };
 
-type WorkspaceView = "course" | "files" | "models" | "library" | "presentations";
+type WorkspaceView =
+	| "course"
+	| "files"
+	| "models"
+	| "library"
+	| "presentations";
 
 type SectionLink = {
 	id: WorkspaceView;

@@ -1983,7 +1983,9 @@ h1 {
 	color: var(--ink);
 	cursor: pointer;
 	text-align: left;
-	transition: border-color 0.15s, background 0.15s;
+	transition:
+		border-color 0.15s,
+		background 0.15s;
 }
 
 .lecture-selector-list button:hover {
@@ -2121,7 +2123,9 @@ h1 {
 	background: var(--paper);
 	cursor: pointer;
 	text-align: left;
-	transition: border-color 0.15s, box-shadow 0.15s;
+	transition:
+		border-color 0.15s,
+		box-shadow 0.15s;
 }
 
 .slide-card:hover {
