@@ -49,6 +49,8 @@ class CoursePlan(BaseModel):
     goals: list[Goal] = Field(default_factory=list)
     outcomes: list[Outcome] = Field(default_factory=list)
     lectures: list[Lecture] = Field(min_length=1)
+    template_profile_id: str | None = Field(default=None)
+    template_profile_version: int | None = Field(default=None)
 
     @model_validator(mode="after")
     def lecture_identities_are_unique(self) -> Self:

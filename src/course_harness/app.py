@@ -22,6 +22,7 @@ from course_harness import library
 from course_harness import resources as res
 from course_harness import search as search_module
 from course_harness import sources as sources_module
+from course_harness import template_profiles as tpl
 from course_harness.chat_history import (
     ChatTranscript,
     read_chat_history,
@@ -87,6 +88,7 @@ from course_harness.providers import (
     validate_provider_account,
     validate_provider_capabilities,
 )
+from course_harness.template_inspect import inspect_template, map_semantic_layouts
 from course_harness.workspaces import (
     WorkspaceSelectionError,
     default_recent_store_path,
@@ -166,6 +168,8 @@ def create_app(
     chat_store_path: Path | None = None,
     library_data_path: Path | None = None,
     library_cache_path: Path | None = None,
+    templates_data_path: Path | None = None,
+    templates_cache_path: Path | None = None,
     agent_model: Model | None = None,
     provider_validator: ProviderCapabilityValidator = validate_provider_capabilities,
     provider_account_validator: ProviderAccountValidator = validate_provider_account,
@@ -222,6 +226,8 @@ def create_app(
     provider_path = provider_store_path or default_provider_store_path()
     data_dir = library_data_path or library.library_data_dir()
     cache_dir = library_cache_path or library.library_cache_dir()
+    templates_data = templates_data_path or tpl.templates_data_dir()
+    templates_cache = templates_cache_path or tpl.templates_cache_dir()
     chat_path = chat_store_path or recent_path.parent / "chat"
     course_agent = create_course_agent()
     autonomous_agent = create_autonomous_course_agent()
@@ -615,6 +621,27 @@ def create_app(
             write_course_plan(active, updated)
             return updated
 
+    @app.patch("/api/course/profile", response_model=CoursePlan)
+    async def api_pin_template_profile(request: Request) -> CoursePlan:
+        body = await request.json()
+        template_profile_id = body.get("template_profile_id")
+        template_profile_version = body.get("template_profile_version")
+        active, plan = require_course_plan()
+        async with exclusive_mutation(active):
+            if template_profile_id is not None:
+                try:
+                    tpl.resolve_profile(templates_data, template_profile_id)
+                except ValueError as error:
+                    raise HTTPException(status_code=422, detail=str(error)) from error
+            updated = plan.model_copy(
+                update={
+                    "template_profile_id": template_profile_id,
+                    "template_profile_version": template_profile_version,
+                }
+            )
+            write_course_plan(active, updated)
+            return updated
+
     class PresentationSummary(BaseModel):
         id: str
         lecture_id: str
@@ -818,7 +845,7 @@ def create_app(
             return updated
 
     @app.get("/api/presentations/{lecture_id}/export")
-    async def api_export_presentation(lecture_id: str) -> Response:
+    async def api_export_presentation(lecture_id: str, profile: str | None = None) -> Response:
         active = require_workspace()
         pres = read_presentation_for_lecture(active, lecture_id)
         if pres is None:
@@ -827,7 +854,17 @@ def create_app(
                 detail="No Presentation exists for this lecture",
             )
         try:
-            pptx_bytes = export_presentation(pres)
+            resolved_profile = tpl.resolve_profile(templates_data, profile)
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+        template_file = None
+        if resolved_profile.id != tpl.BUILTIN_DEFAULT_ID:
+            template_file = tpl.profile_dir(templates_data, resolved_profile.id) / "template.pptx"
+        try:
+            pptx_bytes = export_presentation(
+                pres, profile=resolved_profile, template_path=template_file
+            )
         except ExportError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return Response(
@@ -1161,6 +1198,198 @@ def create_app(
                     )
                 )
         return result
+
+    # -------------------------------------------------------------------
+    # Template Profiles
+    # -------------------------------------------------------------------
+
+    class TemplateUploadResponse(BaseModel):
+        profile: tpl.TemplateProfile
+        inspection: dict
+
+    @app.get("/api/templates", response_model=list[tpl.TemplateProfileSummary])
+    async def api_list_templates() -> list[tpl.TemplateProfileSummary]:
+        builtin = tpl._builtin_default_profile()
+        builtin_summary = tpl.TemplateProfileSummary(
+            id=builtin.id,
+            name=builtin.name,
+            version=builtin.version,
+            slide_count=builtin.slide_count,
+            mapped_layouts=len(builtin.layouts),
+        )
+        registry = tpl.read_registry(templates_data)
+        return [builtin_summary] + registry.profiles
+
+    @app.post("/api/templates/upload", response_model=TemplateUploadResponse)
+    async def api_upload_template(request: Request) -> TemplateUploadResponse:
+
+        form = await request.form()
+        uploaded_file = form.get("file")
+        if uploaded_file is None:
+            raise HTTPException(status_code=422, detail="A .pptx or .potx file is required.")
+        if isinstance(uploaded_file, str):
+            raise HTTPException(status_code=422, detail="A file attachment is required.")
+
+        filename = getattr(uploaded_file, "filename", "uploaded.pptx")
+        content = await uploaded_file.read()
+        if not isinstance(content, bytes):
+            raise HTTPException(status_code=422, detail="File content must be binary.")
+
+        media_type = getattr(uploaded_file, "content_type", None)
+        if media_type and media_type != tpl.TEMPLATE_MEDIA_TYPE:
+            raise HTTPException(
+                status_code=422,
+                detail="Only .pptx and .potx files are supported",
+            )
+
+        try:
+            tpl.validate_template_content(content)
+        except Exception as error:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Could not read PowerPoint template: {error}",
+            ) from error
+
+        from uuid import uuid4
+
+        profile_id = f"tpl-{uuid4().hex[:12]}"
+        pd = tpl.profile_dir(templates_data, profile_id)
+        pd.mkdir(parents=True, exist_ok=True)
+        template_path = pd / "template.pptx"
+        template_path.write_bytes(content)
+
+        inspection = inspect_template(template_path)
+        mappings = map_semantic_layouts(inspection)
+
+        name = str(filename)
+        if name.lower().endswith(".pptx") or name.lower().endswith(".potx"):
+            name = name.rsplit(".", 1)[0]
+
+        profile = tpl.TemplateProfile(
+            id=profile_id,
+            name=name[:200],
+            version=1,
+            template_filename=str(filename),
+            slide_width=inspection["slide_width"],
+            slide_height=inspection["slide_height"],
+            slide_count=inspection["slide_count"],
+            layouts=[
+                tpl.TemplateLayoutMapping(
+                    semantic_layout=m["semantic_layout"],
+                    template_layout_index=m["template_layout_index"],
+                    confidence=m["confidence"],
+                    rationale=m["rationale"],
+                )
+                for m in mappings
+            ],
+        )
+        tpl.write_profile_version(templates_data, profile)
+
+        registry = tpl.read_registry(templates_data)
+        registry.profiles.append(
+            tpl.TemplateProfileSummary(
+                id=profile.id,
+                name=profile.name,
+                version=profile.version,
+                slide_count=profile.slide_count,
+                mapped_layouts=len(profile.layouts),
+            )
+        )
+        tpl.write_registry(templates_data, registry)
+
+        return TemplateUploadResponse(profile=profile, inspection=inspection)
+
+    @app.get("/api/templates/{profile_id}", response_model=tpl.TemplateProfile)
+    async def api_get_template(profile_id: str) -> tpl.TemplateProfile:
+        try:
+            return tpl.resolve_profile(templates_data, profile_id)
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    class MappingUpdate(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        semantic_layout: str
+        template_layout_index: int
+
+    class MappingUpdateRequest(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        mappings: list[MappingUpdate]
+
+    @app.put("/api/templates/{profile_id}", response_model=tpl.TemplateProfile)
+    async def api_update_template_mapping(
+        profile_id: str, request: MappingUpdateRequest
+    ) -> tpl.TemplateProfile:
+        if profile_id == tpl.BUILTIN_DEFAULT_ID:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot update the built-in default profile",
+            )
+        profile = tpl.read_profile(templates_data, profile_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Template profile not found")
+        new_mappings = {m.semantic_layout: m.template_layout_index for m in request.mappings}
+        updated_layouts = []
+        for m in profile.layouts:
+            if m.semantic_layout in new_mappings:
+                new_idx = new_mappings[m.semantic_layout]
+                if new_idx == m.template_layout_index:
+                    updated_layouts.append(m)
+                else:
+                    updated_layouts.append(
+                        tpl.TemplateLayoutMapping(
+                            semantic_layout=m.semantic_layout,
+                            template_layout_index=new_idx,
+                            confidence=1.0,
+                            rationale=f"Manually corrected to layout index {new_idx}",
+                        )
+                    )
+            else:
+                updated_layouts.append(m)
+        updated_profile = tpl.TemplateProfile(
+            id=profile.id,
+            name=profile.name,
+            version=profile.version + 1,
+            template_filename=profile.template_filename,
+            slide_width=profile.slide_width,
+            slide_height=profile.slide_height,
+            slide_count=profile.slide_count,
+            layouts=updated_layouts,
+        )
+        tpl.write_profile_version(templates_data, updated_profile)
+        registry = tpl.read_registry(templates_data)
+        for s in registry.profiles:
+            if s.id == profile.id:
+                s.version = updated_profile.version
+                s.mapped_layouts = len(updated_profile.layouts)
+                break
+        tpl.write_registry(templates_data, registry)
+        return updated_profile
+
+    @app.delete("/api/templates/{profile_id}", status_code=204)
+    async def api_delete_template(profile_id: str) -> Response:
+        if profile_id == tpl.BUILTIN_DEFAULT_ID:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete the built-in default profile",
+            )
+        if tpl.read_profile(templates_data, profile_id) is None:
+            raise HTTPException(status_code=404, detail="Template profile not found")
+        tpl.delete_profile(templates_data, templates_cache, profile_id)
+        return Response(status_code=204)
+
+    @app.post("/api/templates/{profile_id}/calibrate", response_model=list[tpl.CalibrationSlide])
+    async def api_calibrate(profile_id: str) -> list[tpl.CalibrationSlide]:
+        profile = tpl.read_profile(templates_data, profile_id)
+        if profile is None and profile_id != tpl.BUILTIN_DEFAULT_ID:
+            raise HTTPException(status_code=404, detail="Template profile not found")
+        try:
+            resolved = tpl.resolve_profile(templates_data, profile_id)
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        try:
+            return tpl.render_calibration(templates_data, templates_cache, resolved)
+        except RuntimeError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     static_directory = Path(__file__).with_name("static")
     if static_directory.is_dir():

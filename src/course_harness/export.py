@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from io import BytesIO
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pptx import Presentation as PPTXPresentation
 from pptx.enum.text import PP_ALIGN
@@ -19,6 +21,9 @@ from course_harness.presentation import (
     TitleSlide,
     TwoColumnSlide,
 )
+
+if TYPE_CHECKING:
+    from course_harness.template_profiles import TemplateProfile
 
 DEFAULT_LAYOUT_MAPPING: dict[str, int] = {
     "title": 0,
@@ -47,12 +52,25 @@ class ExportError(Exception):
     pass
 
 
-def export_presentation(presentation: Presentation) -> bytes:
-    prs = PPTXPresentation()
+def export_presentation(
+    presentation: Presentation,
+    profile: TemplateProfile | None = None,
+    template_path: Path | None = None,
+) -> bytes:
+    if profile is not None and profile.id != "_builtin-default":
+        layout_mapping = {m.semantic_layout: m.template_layout_index for m in profile.layouts}
+    else:
+        layout_mapping = DEFAULT_LAYOUT_MAPPING
+
+    if template_path is not None and template_path.exists():
+        prs = PPTXPresentation(str(template_path))
+    else:
+        prs = PPTXPresentation()
+
     active_slides = [s for s in presentation.slides if not s.archived]
 
     for slide in active_slides:
-        layout_index = DEFAULT_LAYOUT_MAPPING.get(slide.layout)
+        layout_index = layout_mapping.get(slide.layout)
         if layout_index is None:
             raise ExportError(f"Unsupported slide layout: {slide.layout}")
 

@@ -152,3 +152,36 @@ export type PresentationSummary = {
 	lecture_id: string;
 	slide_count: number;
 };
+
+export type TemplateLayoutMapping = {
+	semantic_layout: SlideLayout;
+	template_layout_index: number;
+	confidence: number;
+	rationale: string;
+};
+
+export type TemplateProfile = {
+	schema_version: 1;
+	id: string;
+	name: string;
+	version: number;
+	template_filename: string;
+	slide_width: number;
+	slide_height: number;
+	slide_count: number;
+	layouts: TemplateLayoutMapping[];
+};
+
+export type TemplateProfileSummary = {
+	id: string;
+	name: string;
+	version: number;
+	slide_count: number;
+	mapped_layouts: number;
+};
+
+export type CalibrationSlide = {
+	semantic_layout: string;
+	template_layout_index: number;
+	image_url: string;
+};

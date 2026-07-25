@@ -9,9 +9,11 @@ import type {
 	PresentationSummary,
 	ResourceState,
 	Source,
+	TemplateProfileSummary,
 } from "./models";
 import { PresentationView } from "./PresentationView";
 import { ModelsView } from "./ProviderSetup";
+import { TemplatesView } from "./TemplatesView";
 
 type Workspace = {
 	name: string;
@@ -48,7 +50,8 @@ type WorkspaceView =
 	| "files"
 	| "models"
 	| "library"
-	| "presentations";
+	| "presentations"
+	| "templates";
 
 type SectionLink = {
 	id: WorkspaceView;
@@ -724,6 +727,7 @@ const workspaceViews: SectionLink[] = [
 	{ id: "presentations", label: "Presentations" },
 	{ id: "files", label: "Files" },
 	{ id: "library", label: "Library" },
+	{ id: "templates", label: "Templates" },
 	{ id: "models", label: "Models" },
 ];
 
@@ -745,6 +749,7 @@ export function App() {
 	const [sources, setSources] = useState<Source[]>([]);
 	const [presentations, setPresentations] = useState<PresentationSummary[]>([]);
 	const [presentationVersion, setPresentationVersion] = useState(0);
+	const [templates, setTemplates] = useState<TemplateProfileSummary[]>([]);
 	const [activeView, setActiveView] = useState<WorkspaceView>("course");
 	const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 	const [chatApproval, setChatApproval] = useState<AgentInterrupt | null>(null);
@@ -767,6 +772,7 @@ export function App() {
 				resourcesResponse,
 				sourcesResponse,
 				presentationsResponse,
+				templatesResponse,
 			] = await Promise.all([
 				fetch("/api/course", { signal }),
 				fetch("/api/workspace/files", { signal }),
@@ -775,6 +781,7 @@ export function App() {
 				fetch("/api/resources", { signal }),
 				fetch("/api/sources", { signal }),
 				fetch("/api/presentations", { signal }),
+				fetch("/api/templates", { signal }),
 			]);
 			if (courseResponse.status === 404) {
 				setCourse(null);
@@ -810,6 +817,11 @@ export function App() {
 			if (presentationsResponse.ok) {
 				setPresentations(
 					(await presentationsResponse.json()) as PresentationSummary[],
+				);
+			}
+			if (templatesResponse.ok) {
+				setTemplates(
+					(await templatesResponse.json()) as TemplateProfileSummary[],
 				);
 			}
 		},
@@ -1081,6 +1093,11 @@ export function App() {
 						onResourcesChange={setResources}
 						onSourcesChange={setSources}
 					/>
+				) : activeView === "templates" ? (
+					<TemplatesView
+						templates={templates}
+						onTemplatesChange={setTemplates}
+					/>
 				) : activeView === "files" ? (
 					<FilesView workspace={workspace} files={files} />
 				) : activeView === "presentations" && course ? (
@@ -1089,6 +1106,7 @@ export function App() {
 						busy={busy || agentRunning}
 						presentations={presentations}
 						presentationVersion={presentationVersion}
+						templates={templates}
 						onChange={refreshPresentations}
 						onChatContext={setChatContext}
 					/>

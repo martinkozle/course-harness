@@ -7,6 +7,7 @@ import type {
 	PresentationSummary,
 	Slide,
 	SlideCitation,
+	TemplateProfileSummary,
 } from "./models";
 
 type PresentationViewProps = {
@@ -14,6 +15,7 @@ type PresentationViewProps = {
 	busy: boolean;
 	presentations: PresentationSummary[];
 	presentationVersion: number;
+	templates: TemplateProfileSummary[];
 	onChange: () => Promise<void>;
 	onChatContext: (instruction: string) => void;
 };
@@ -420,6 +422,7 @@ export function PresentationView({
 	busy,
 	presentations,
 	presentationVersion,
+	templates,
 	onChange,
 	onChatContext,
 }: PresentationViewProps) {
@@ -431,6 +434,7 @@ export function PresentationView({
 		useState<Presentation | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [showArchived, setShowArchived] = useState(false);
+	const [selectedProfileId, setSelectedProfileId] = useState<string>("_builtin-default");
 	const prevVersion = useRef(presentationVersion);
 
 	const loadPresentation = useCallback(async (lectureId: string) => {
@@ -673,40 +677,58 @@ export function PresentationView({
 									>
 										Refine slides
 									</button>
-									<button
-										className="quiet-action compact-action"
-										type="button"
-										disabled={busy}
-										onClick={() => {
-											void (async () => {
-												if (!selectedLectureId) return;
-												setError(null);
-												try {
-													const r = await fetch(
-														`/api/presentations/${encodeURIComponent(selectedLectureId)}/export`,
-													);
-													if (!r.ok) throw new Error(await responseError(r));
-													const blob = await r.blob();
-													const url = URL.createObjectURL(blob);
-													const a = document.createElement("a");
-													a.href = url;
-													a.download = `presentation.pptx`;
-													document.body.appendChild(a);
-													a.click();
-													document.body.removeChild(a);
-													URL.revokeObjectURL(url);
-												} catch (caught) {
-													setError(
-														caught instanceof Error
-															? caught.message
-															: "Could not export presentation.",
-													);
-												}
-											})();
-										}}
-									>
-										Export PowerPoint
-									</button>
+									<div className="export-row">
+										<select
+											value={selectedProfileId}
+											onChange={(e) => setSelectedProfileId(e.target.value)}
+											aria-label="Template profile"
+											className="profile-select"
+										>
+											<option value="_builtin-default">
+												Default template
+											</option>
+											{templates.map((t) => (
+												<option key={t.id} value={t.id}>
+													{t.name}
+												</option>
+											))}
+										</select>
+										<button
+											className="quiet-action compact-action"
+											type="button"
+											disabled={busy}
+											onClick={() => {
+												void (async () => {
+													if (!selectedLectureId) return;
+													setError(null);
+													try {
+														const exportUrl = selectedProfileId && selectedProfileId !== "_builtin-default"
+															? `/api/presentations/${encodeURIComponent(selectedLectureId)}/export?profile=${encodeURIComponent(selectedProfileId)}`
+															: `/api/presentations/${encodeURIComponent(selectedLectureId)}/export`;
+														const r = await fetch(exportUrl);
+														if (!r.ok) throw new Error(await responseError(r));
+														const blob = await r.blob();
+														const url = URL.createObjectURL(blob);
+														const a = document.createElement("a");
+														a.href = url;
+														a.download = `presentation.pptx`;
+														document.body.appendChild(a);
+														a.click();
+														document.body.removeChild(a);
+														URL.revokeObjectURL(url);
+													} catch (caught) {
+														setError(
+															caught instanceof Error
+																? caught.message
+																: "Could not export presentation.",
+														);
+													}
+												})();
+											}}
+										>
+											Export PowerPoint
+										</button>
+									</div>
 									<button
 										className="quiet-action compact-action"
 										type="button"
