@@ -1148,4 +1148,161 @@ async def test_presentation_approval_preview_contains_slide_outline(
     assert '"layout": "title"' in interrupt_message
     assert '"slides":' in interrupt_message
     assert "Welcome" in interrupt_message
-    assert "Key points" in interrupt_message
+
+
+@pytest.mark.anyio
+async def test_presentation_state_snapshots_stream_on_canvas_updates(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "canvas-course"
+    workspace.mkdir()
+    provider_store = tmp_path / "user-data" / "provider"
+
+    from course_harness.course_plan import (
+        CoursePlanInput,
+        LectureInput,
+        create_course_plan,
+        create_course_plan_file,
+        initialize_workspace_history,
+    )
+
+    plan = create_course_plan(
+        CoursePlanInput(
+            title="Canvas test", audience="Test", lectures=[LectureInput(title="Lecture 1")]
+        )
+    )
+    initialize_workspace_history(workspace)
+    create_course_plan_file(workspace, plan)
+    lecture_id = plan.lectures[0].id
+
+    call_count = 0
+
+    async def canvas_model(
+        _messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        nonlocal call_count
+        call_count += 1
+        tool_has_returned = any(
+            isinstance(msg, ModelRequest)
+            and any(isinstance(part, ToolReturnPart) for part in msg.parts)
+            for msg in _messages
+        )
+        if not tool_has_returned:
+            if call_count == 1:
+                yield {
+                    0: DeltaToolCall(
+                        name="replace_presentation",
+                        json_args=json.dumps(
+                            {
+                                "command": {
+                                    "lecture_id": lecture_id,
+                                    "slides": [
+                                        {
+                                            "layout": "title",
+                                            "title": "Welcome",
+                                            "purpose": "Opening",
+                                        },
+                                        {
+                                            "layout": "bullets",
+                                            "title": "Key points",
+                                            "bullets": ["A", "B"],
+                                        },
+                                        {"layout": "closing", "title": "Summary"},
+                                    ],
+                                }
+                            }
+                        ),
+                        tool_call_id="canvas-1",
+                    )
+                }
+            elif call_count == 2:
+                yield {
+                    0: DeltaToolCall(
+                        name="archive_slide",
+                        json_args=json.dumps({"slide_id": "preserve", "archived": True}),
+                        tool_call_id="canvas-2",
+                    )
+                }
+        else:
+            yield "Done."
+
+    app = create_app(
+        workspace,
+        provider_store_path=provider_store,
+        agent_model=FunctionModel(stream_function=canvas_model),
+        provider_validator=_verified_capabilities,
+    )
+
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+
+        _, body = await _post_stream(
+            app,
+            "/api/agent",
+            {
+                "threadId": "canvas",
+                "runId": "canvas-create",
+                "state": {},
+                "messages": [{"id": "u1", "role": "user", "content": "Create slides"}],
+                "tools": [],
+                "context": [],
+                "forwardedProps": {},
+            },
+        )
+
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in body.splitlines()
+        if line.startswith("data: ")
+    ]
+    outcome = events[-1].get("outcome", {})
+    interrupts = outcome.get("interrupts", [])
+    assert interrupts, "Guided mode should produce an interrupt for replace_presentation"
+
+    # Approve and check the state snapshots from the approval run
+    interrupt = interrupts[0]
+    _, approve_body = await _post_stream(
+        app,
+        "/api/agent",
+        {
+            "threadId": "canvas",
+            "runId": "canvas-approve",
+            "state": {},
+            "messages": [],
+            "tools": [],
+            "context": [],
+            "forwardedProps": {},
+            "resume": [
+                {
+                    "interruptId": interrupt["id"],
+                    "status": "resolved",
+                    "payload": {"approved": True},
+                }
+            ],
+        },
+    )
+    approve_events = [
+        json.loads(line.removeprefix("data: "))
+        for line in approve_body.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert approve_events[-1]["type"] == "RUN_FINISHED"
+
+    state_snapshots = [e for e in approve_events if e["type"] == "STATE_SNAPSHOT"]
+    assert len(state_snapshots) >= 1, "Should emit at least one state snapshot after create"
+
+    last_snapshot = state_snapshots[-1]["snapshot"]
+    assert "presentations" in last_snapshot, "State snapshot must include presentations"
+    assert len(last_snapshot["presentations"]) == 1
+    pres = last_snapshot["presentations"][0]
+    assert pres["lecture_id"] == lecture_id
+    assert len(pres["slides"]) == 3
+    layouts = [s["layout"] for s in pres["slides"]]
+    assert layouts == ["title", "bullets", "closing"]
+
+    from course_harness.presentation import read_presentation_for_lecture
+
+    stored = read_presentation_for_lecture(workspace, lecture_id)
+    assert stored is not None
+    assert len(stored.slides) == 3

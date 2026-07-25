@@ -744,6 +744,7 @@ export function App() {
 	const [resources, setResources] = useState<ResourceState[]>([]);
 	const [sources, setSources] = useState<Source[]>([]);
 	const [presentations, setPresentations] = useState<PresentationSummary[]>([]);
+	const [presentationVersion, setPresentationVersion] = useState(0);
 	const [activeView, setActiveView] = useState<WorkspaceView>("course");
 	const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 	const [chatApproval, setChatApproval] = useState<AgentInterrupt | null>(null);
@@ -926,6 +927,7 @@ export function App() {
 		const response = await fetch("/api/presentations");
 		if (response.ok) {
 			setPresentations((await response.json()) as PresentationSummary[]);
+			setPresentationVersion((v) => v + 1);
 		}
 	}
 
@@ -1086,6 +1088,7 @@ export function App() {
 						course={course}
 						busy={busy || agentRunning}
 						presentations={presentations}
+						presentationVersion={presentationVersion}
 						onChange={refreshPresentations}
 						onChatContext={setChatContext}
 					/>

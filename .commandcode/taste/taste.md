@@ -2,6 +2,9 @@
 
 [cmd]: https://commandcode.ai/
 
+# implementation-workflow
+- Save reusable architectural exploration findings as `.md` reference files in the project so subsequent implementation agents can read them instead of re-exploring the same topics (e.g., AG-UI protocol integration, mutation patterns, frontend architecture). Confidence: 0.65
+
 # architecture
 - Separate provider accounts (credential storage) from model presets (named model selections) so users can create multiple model presets sharing the same API key. Confidence: 0.80
 - Validate API keys at configuration time (e.g., against OpenRouter `/api/v1/key`) rather than failing at runtime during first use. Confidence: 0.70

@@ -1970,8 +1970,14 @@ h1 {
 	margin-bottom: 0.25rem;
 }
 
-.lecture-selector-list button {
-	width: 100%;
+.lecture-selector-row {
+	display: flex;
+	gap: 0.25rem;
+	align-items: stretch;
+}
+
+.lecture-selector-row > button:first-child {
+	flex: 1;
 	display: flex;
 	align-items: center;
 	gap: 0.5rem;
@@ -1988,15 +1994,34 @@ h1 {
 		background 0.15s;
 }
 
-.lecture-selector-list button:hover {
+.lecture-selector-row > button:first-child:hover {
 	border-color: var(--cobalt);
 	background: var(--cobalt-soft);
 }
 
-.lecture-selector-list button[aria-current="true"] {
+.lecture-selector-row > button:first-child[aria-current="true"] {
 	border-color: var(--cobalt);
 	background: var(--cobalt-soft);
 	font-weight: 600;
+}
+
+.lecture-context-btn {
+	flex-shrink: 0;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: var(--paper);
+	padding: 0.25rem 0.4rem;
+	font-size: 0.75rem;
+	color: var(--muted);
+	white-space: nowrap;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.lecture-context-btn:hover {
+	border-color: var(--cobalt);
+	color: var(--cobalt);
 }
 
 .lecture-selector-list .lecture-index {

@@ -46,15 +46,35 @@ test("Course Author views Presentation canvas and slide outline", async ({
 		page.getByText("Select a Lecture to view its slide canvas."),
 	).toBeVisible();
 
-	const lectureItems = page
-		.locator(".lecture-selector-list")
-		.getByRole("button");
-	await expect(lectureItems).toHaveCount(2);
+	// Click a lecture context button to set contextual chat
+	await page.getByRole("button", { name: /Chat about lecture/ }).first().click();
 
-	await lectureItems.first().click();
+	// Verify the chat context indicator appears
+	await expect(page.locator(".chat-context-indicator")).toBeVisible();
+	await expect(page.locator(".context-text")).toContainText(
+		"From association to intervention",
+	);
+
+	// Clear the context
+	await page.getByRole("button", { name: "Clear" }).click();
+	await expect(page.locator(".chat-context-indicator")).not.toBeVisible();
+
+	// Click a lecture to select it
+	const lectureButtons = page
+		.locator(".lecture-selector-list .lecture-selector-row > button:first-child");
+	await expect(lectureButtons).toHaveCount(2);
+
+	await lectureButtons.first().click();
 	await expect(
 		page.getByText("No Presentation for this Lecture yet."),
 	).toBeVisible();
+
+	// Verify "Create presentation" button sets context
+	await page.getByRole("button", { name: "Create presentation" }).click();
+	await expect(page.locator(".chat-context-indicator")).toBeVisible();
+	await expect(page.locator(".context-text")).toContainText(
+		"Create a presentation for the lecture",
+	);
 
 	// Navigate back to Course Plan
 	await page.getByRole("button", { name: "Course Plan" }).click();

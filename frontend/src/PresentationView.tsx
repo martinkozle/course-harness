@@ -13,6 +13,7 @@ type PresentationViewProps = {
 	course: CoursePlan;
 	busy: boolean;
 	presentations: PresentationSummary[];
+	presentationVersion: number;
 	onChange: () => Promise<void>;
 	onChatContext: (instruction: string) => void;
 };
@@ -418,6 +419,7 @@ export function PresentationView({
 	course,
 	busy,
 	presentations,
+	presentationVersion,
 	onChange,
 	onChatContext,
 }: PresentationViewProps) {
@@ -429,7 +431,7 @@ export function PresentationView({
 		useState<Presentation | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [showArchived, setShowArchived] = useState(false);
-	const prevPresentationsLen = useRef(presentations.length);
+	const prevVersion = useRef(presentationVersion);
 
 	const loadPresentation = useCallback(async (lectureId: string) => {
 		try {
@@ -466,13 +468,13 @@ export function PresentationView({
 	);
 
 	useEffect(() => {
-		if (presentations.length !== prevPresentationsLen.current) {
-			prevPresentationsLen.current = presentations.length;
+		if (presentationVersion !== prevVersion.current) {
+			prevVersion.current = presentationVersion;
 			if (selectedLectureId) {
 				void loadPresentation(selectedLectureId);
 			}
 		}
-	}, [presentations.length, selectedLectureId, loadPresentation]);
+	}, [presentationVersion, selectedLectureId, loadPresentation]);
 
 	async function deletePresentation() {
 		if (!selectedLectureId) return;
@@ -576,7 +578,7 @@ export function PresentationView({
 								(p) => p.lecture_id === lecture.id,
 							);
 							return (
-								<li key={lecture.id}>
+								<li key={lecture.id} className="lecture-selector-row">
 									<button
 										type="button"
 										aria-current={
@@ -598,6 +600,19 @@ export function PresentationView({
 												¶
 											</span>
 										) : null}
+									</button>
+									<button
+										type="button"
+										className="quiet-action compact-action lecture-context-btn"
+										aria-label={`Chat about lecture: ${lecture.title}`}
+										title={`Chat about lecture: ${lecture.title}`}
+										onClick={() =>
+											onChatContext(
+												`I'm looking at the lecture "${lecture.title}" (id: ${lecture.id})`,
+											)
+										}
+									>
+										→
 									</button>
 								</li>
 							);
