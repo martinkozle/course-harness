@@ -48,10 +48,15 @@ from course_harness.course_plan import (
 )
 from course_harness.presentation import (
     Presentation,
+    SlideArchiveRequest,
     SlideCitation,
+    SlideOrderRequest,
     delete_presentation_file,
     list_presentations,
     read_presentation_for_lecture,
+    reorder_slides,
+    slide_by_id,
+    write_presentation,
 )
 from course_harness.providers import (
     ModelCatalog,
@@ -129,6 +134,7 @@ class SlideRequest(BaseModel):
     speaker_notes: str | None = None
     purpose: str | None = None
     citations: list[SlideCitation] = Field(default_factory=list)
+    archived: bool = False
     subtitle: str | None = None
     bullets: list[str] | None = None
     left_content: str | None = None
@@ -671,6 +677,7 @@ def create_app(
                     "speaker_notes": cmd.speaker_notes,
                     "purpose": cmd.purpose,
                     "citations": cmd.citations,
+                    "archived": cmd.archived,
                 }
                 if layout == "title":
                     fields["subtitle"] = cmd.subtitle
@@ -734,6 +741,56 @@ def create_app(
             updated_plan = plan.model_copy(update={"lectures": updated_lectures})
             write_course_plan(active, updated_plan)
             return Response(status_code=204)
+
+    @app.patch("/api/presentations/{lecture_id}/slides/{slide_id}", response_model=Presentation)
+    async def api_archive_slide(
+        lecture_id: str, slide_id: str, request: SlideArchiveRequest
+    ) -> Presentation:
+        active, plan = require_course_plan()
+        async with exclusive_mutation(active):
+            pres = read_presentation_for_lecture(active, lecture_id)
+            if pres is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No Presentation exists for this lecture",
+                )
+            existing = slide_by_id(pres, slide_id)
+            if existing is None:
+                raise HTTPException(status_code=404, detail="Slide was not found")
+
+            updated_slide = existing.model_copy(update={"archived": request.archived})
+            if request.archived:
+                reordered = (
+                    [s for s in pres.slides if s.id != slide_id and not s.archived]
+                    + [s for s in pres.slides if s.id != slide_id and s.archived]
+                    + [updated_slide]
+                )
+            else:
+                reordered = (
+                    [s for s in pres.slides if s.id != slide_id and not s.archived]
+                    + [updated_slide]
+                    + [s for s in pres.slides if s.id != slide_id and s.archived]
+                )
+            updated = pres.model_copy(update={"slides": reordered})
+            write_presentation(active, updated)
+            return updated
+
+    @app.put("/api/presentations/{lecture_id}/slides/order", response_model=Presentation)
+    async def api_reorder_slides(lecture_id: str, request: SlideOrderRequest) -> Presentation:
+        active, plan = require_course_plan()
+        async with exclusive_mutation(active):
+            pres = read_presentation_for_lecture(active, lecture_id)
+            if pres is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No Presentation exists for this lecture",
+                )
+            try:
+                updated = reorder_slides(pres, request.slide_ids)
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            write_presentation(active, updated)
+            return updated
 
     @app.get("/api/sources", response_model=list[sources_module.Source])
     async def list_sources() -> list[sources_module.Source]:

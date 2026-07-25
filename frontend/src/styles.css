@@ -2040,6 +2040,76 @@ h1 {
 	margin: 0;
 }
 
+.slide-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 0;
+}
+
+.slide-order-actions {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: 3px;
+	border: 0;
+	margin: 0;
+	padding: 0 6px 0 0;
+}
+
+.slide-order-btn {
+	width: 28px;
+	height: 28px;
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	background: var(--paper);
+	color: var(--muted);
+	font-size: 0.7rem;
+	cursor: pointer;
+	padding: 0;
+	display: grid;
+	place-items: center;
+}
+
+.slide-order-btn:hover:not(:disabled) {
+	border-color: var(--cobalt);
+	color: var(--cobalt-dark);
+}
+
+/* ── Archived slides section ── */
+
+.archived-section {
+	margin-top: 1.5rem;
+	border-top: 1px solid var(--line);
+	padding-top: 1rem;
+}
+
+.archived-toggle {
+	width: 100%;
+	text-align: left;
+	border: 0;
+	background: none;
+	color: var(--muted);
+	font-size: 0.82rem;
+	font-weight: 750;
+	cursor: pointer;
+	padding: 0.35rem 0;
+}
+
+.archived-toggle:hover {
+	color: var(--ink);
+}
+
+.archived-list {
+	margin-top: 0.5rem;
+	opacity: 0.75;
+}
+
+/* ── Slide detail actions ── */
+
+.slide-detail-actions {
+	display: flex;
+	gap: 0.5rem;
+}
+
 .slide-card {
 	width: 100%;
 	display: flex;

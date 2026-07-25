@@ -66,6 +66,7 @@ class SlideCommand(BaseModel):
     speaker_notes: str | None = None
     purpose: str | None = None
     citations: list[SlideCitation] = Field(default_factory=list)
+    archived: bool = False
     subtitle: str | None = None
     bullets: list[str] | None = None
     left_content: str | None = None
@@ -223,6 +224,7 @@ def apply_presentation_command(
             "speaker_notes": cmd_slide.speaker_notes,
             "purpose": cmd_slide.purpose,
             "citations": cmd_slide.citations,
+            "archived": cmd_slide.archived,
         }
         if layout == "title":
             fields["subtitle"] = cmd_slide.subtitle
@@ -248,6 +250,11 @@ def apply_presentation_command(
         model_fields = cls.model_fields  # type: ignore
         filtered = {k: v for k, v in fields.items() if k in model_fields}
         new_slides.append(cls(id=identity, **filtered))
+
+    if not command.replace_all_slides and existing is not None:
+        for existing_slide in existing.slides:
+            if existing_slide.archived and existing_slide.id not in used_ids:
+                new_slides.append(existing_slide)
 
     presentation.slides = new_slides
     write_presentation(workspace, presentation)
@@ -295,7 +302,10 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             "Every content slide should include citations linking back to Course Sources. "
             "Use read_slide to review specific slide details before revising. "
             "Preserve existing Slide IDs when revising unless the Course Author explicitly "
-            "asks to replace all slides. Slide titles should be concise (1-6 words).\n\n"
+            "asks to replace all slides. Slide titles should be concise (1-6 words). "
+            "Use reorder_slides to rearrange the non-archived slides. Archived slides "
+            "are preserved at the end and survive replanning — only replace_all_slides "
+            "removes them.\n\n"
             "Authoring workflow: 1) Create the Lecture spine with replace_course_plan, "
             "2) Gather and admit relevant Sources, 3) Create skeleton slide outlines with "
             "replace_presentation, 4) Progressively fill content, speaker notes, and citations "
@@ -531,12 +541,18 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             )
         lines = ["Current Presentations:"]
         for p in pres:
-            lines.append(f"Lecture {p.lecture_id}: {len(p.slides)} slides ({p.id})")
+            active_count = sum(1 for s in p.slides if not s.archived)
+            archived_count = sum(1 for s in p.slides if s.archived)
+            lines.append(
+                f"Lecture {p.lecture_id}: {active_count} active + {archived_count} archived "
+                f"slides ({p.id})"
+            )
             for s in p.slides:
                 sid = s.id if hasattr(s, "id") else "?"
                 layout = s.layout if hasattr(s, "layout") else "?"
                 title = s.title if hasattr(s, "title") and s.title else "(no title)"
-                lines.append(f"  {sid} [{layout}] {title}")
+                arch_mark = " [ARCHIVED]" if getattr(s, "archived", False) else ""
+                lines.append(f"  {sid} [{layout}] {title}{arch_mark}")
         return "\n".join(lines)
 
     @agent.tool
@@ -551,14 +567,25 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
                 )
             )
         lines = [f"Presentation for lecture {lecture_id} ({pres.id}):"]
-        for i, slide in enumerate(pres.slides):
+        position = 0
+        for slide in pres.slides:
+            if slide.archived:
+                continue
+            position += 1
             sid = slide.id if hasattr(slide, "id") else "?"
             layout = slide.layout if hasattr(slide, "layout") else "?"
             title = slide.title if hasattr(slide, "title") and slide.title else "(no title)"
             purpose = slide.purpose if hasattr(slide, "purpose") and slide.purpose else ""
-            lines.append(f"  {i + 1}. {sid} [{layout}] {title}")
+            lines.append(f"  {position}. {sid} [{layout}] {title}")
             if purpose:
                 lines.append(f"     Purpose: {purpose}")
+        archived = [s for s in pres.slides if s.archived]
+        if archived:
+            lines.append("Archived slides:")
+            for slide in archived:
+                sid = slide.id if hasattr(slide, "id") else "?"
+                title = slide.title if hasattr(slide, "title") and slide.title else "(no title)"
+                lines.append(f"  {sid} [{slide.layout}] {title}")
         return ToolReturn(
             return_value="\n".join(lines),
             metadata=[
@@ -596,6 +623,46 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
                     ],
                 )
         return ToolReturn(return_value=f"Slide {slide_id} was not found.")
+
+    @agent.tool
+    async def reorder_slides(
+        ctx: RunContext[CourseAgentDeps], lecture_id: str, slide_ids: list[str]
+    ) -> ToolReturn:
+        """Reorder the non-archived slides in a Presentation. Provide every non-archived
+        Slide ID in the desired order. Archived slides are preserved at the end."""
+        from course_harness.presentation import reorder_slides as reorder  # noqa: PLC0415
+
+        pres = read_presentation_for_lecture(ctx.deps.workspace, lecture_id)
+        if pres is None:
+            return ToolReturn(return_value=f"No Presentation exists for lecture {lecture_id}.")
+        try:
+            updated = reorder(pres, slide_ids)
+        except ValueError as error:
+            return ToolReturn(return_value=str(error))
+        write_presentation(ctx.deps.workspace, updated)
+        ctx.deps.course_state = CourseAgentState(
+            course=ctx.deps.course_state.course,
+            sources=ctx.deps.course_state.sources,
+            presentations=list_presentations(ctx.deps.workspace),
+        )
+        return ToolReturn(
+            return_value=f"Reordered {len(updated.slides)} slides.",
+            metadata=[
+                ActivitySnapshotEvent(
+                    type=EventType.ACTIVITY_SNAPSHOT,
+                    message_id=f"slides-reorder-{lecture_id}",
+                    activity_type="slides-reorder",
+                    content={
+                        "title": "Slides reordered",
+                        "detail": f"Reordered slides for lecture {lecture_id}",
+                    },
+                ),
+                StateSnapshotEvent(
+                    type=EventType.STATE_SNAPSHOT,
+                    snapshot=ctx.deps.course_state.model_dump(mode="json"),
+                ),
+            ],
+        )
 
     @agent.tool(requires_approval=requires_approval)
     async def replace_presentation(

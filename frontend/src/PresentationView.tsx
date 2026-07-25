@@ -51,28 +51,62 @@ function citationDetail(citation: SlideCitation): string {
 
 function SlideDetail({
 	slide,
+	lectureId,
 	onClose,
 	onChatContext,
+	onArchiveChange,
+	busy,
 }: {
 	slide: Slide;
+	lectureId: string;
 	onClose: () => void;
 	onChatContext: (instruction: string) => void;
+	onArchiveChange: () => void;
+	busy: boolean;
 }) {
+	async function toggleArchive() {
+		try {
+			const response = await fetch(
+				`/api/presentations/${encodeURIComponent(lectureId)}/slides/${encodeURIComponent(slide.id)}`,
+				{
+					method: "PATCH",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ archived: !slide.archived }),
+				},
+			);
+			if (!response.ok) throw new Error(await responseError(response));
+			onArchiveChange();
+		} catch {}
+	}
+
 	return (
 		<section className="slide-detail" aria-label={`Slide ${slide.id} detail`}>
 			<div className="slide-detail-header">
 				<h3>{slide.title || "Untitled slide"}</h3>
-				<button
-					className="quiet-action compact-action"
-					type="button"
-					onClick={onClose}
-					aria-label="Close slide detail"
-				>
-					Close
-				</button>
+				<div className="slide-detail-actions">
+					<button
+						className="quiet-action compact-action"
+						type="button"
+						disabled={busy}
+						onClick={() => void toggleArchive()}
+					>
+						{slide.archived ? "Restore" : "Archive"}
+					</button>
+					<button
+						className="quiet-action compact-action"
+						type="button"
+						onClick={onClose}
+						aria-label="Close slide detail"
+					>
+						Close
+					</button>
+				</div>
 			</div>
 			<div className="slide-detail-meta">
 				<span className="slide-layout-badge">{layoutLabel(slide.layout)}</span>
+				{slide.archived ? (
+					<span className="status-badge status-unprocessed">Archived</span>
+				) : null}
 				{slide.purpose ? <p className="slide-purpose">{slide.purpose}</p> : null}
 			</div>
 
@@ -170,6 +204,7 @@ export function PresentationView({
 	const [selectedSlideId, setSelectedSlideId] = useState<string | null>(null);
 	const [currentPresentation, setCurrentPresentation] = useState<Presentation | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const [showArchived, setShowArchived] = useState(false);
 	const prevPresentationsLen = useRef(presentations.length);
 
 	const loadPresentation = useCallback(
@@ -201,6 +236,7 @@ export function PresentationView({
 			setSelectedSlideId(null);
 			setCurrentPresentation(null);
 			setError(null);
+			setShowArchived(false);
 			await loadPresentation(lectureId);
 		},
 		[loadPresentation],
@@ -235,10 +271,43 @@ export function PresentationView({
 		}
 	}
 
+	async function moveSlide(slideId: string, direction: "up" | "down") {
+		if (!selectedLectureId || !currentPresentation) return;
+		const active = currentPresentation.slides.filter((s) => !s.archived);
+		const idx = active.findIndex((s) => s.id === slideId);
+		if (idx < 0) return;
+		const target = direction === "up" ? idx - 1 : idx + 1;
+		if (target < 0 || target >= active.length) return;
+		const reordered = [...active];
+		[reordered[idx], reordered[target]] = [reordered[target], reordered[idx]];
+		setError(null);
+		try {
+			const response = await fetch(
+				`/api/presentations/${encodeURIComponent(selectedLectureId)}/slides/order`,
+				{
+					method: "PUT",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ slide_ids: reordered.map((s) => s.id) }),
+				},
+			);
+			if (!response.ok) throw new Error(await responseError(response));
+			setCurrentPresentation((await response.json()) as Presentation);
+		} catch (caught) {
+			setError(caught instanceof Error ? caught.message : "Could not reorder slides.");
+		}
+	}
+
 	const selectedSlide =
 		selectedSlideId && currentPresentation
 			? currentPresentation.slides.find((s) => s.id === selectedSlideId) ?? null
 			: null;
+
+	const activeSlides = currentPresentation
+		? currentPresentation.slides.filter((s) => !s.archived)
+		: [];
+	const archivedSlides = currentPresentation
+		? currentPresentation.slides.filter((s) => s.archived)
+		: [];
 
 	return (
 		<main className="page-main presentation-main" aria-labelledby="presentation-heading">
@@ -342,61 +411,170 @@ export function PresentationView({
 								{selectedSlide ? (
 									<SlideDetail
 										slide={selectedSlide}
+										lectureId={selectedLectureId}
 										onClose={() => setSelectedSlideId(null)}
 										onChatContext={onChatContext}
+										onArchiveChange={() => {
+											void loadPresentation(selectedLectureId);
+											setSelectedSlideId(null);
+										}}
+										busy={busy}
 									/>
-								) : currentPresentation.slides.length === 0 ? (
+								) : activeSlides.length === 0 ? (
 									<p className="empty-note">
-										No slides yet. Ask the Course Agent to create a
+										No active slides. Ask the Course Agent to create a
 										presentation outline.
 									</p>
 								) : (
 									<ol className="slide-list">
-										{currentPresentation.slides.map((slide, index) => (
+										{activeSlides.map((slide, idx) => (
 											<li key={slide.id}>
-												<button
-													type="button"
-													className="slide-card"
-													onClick={() => setSelectedSlideId(slide.id)}
-												>
-													<span
-														className="slide-number"
-														aria-hidden="true"
+												<div className="slide-row">
+													<fieldset
+														className="slide-order-actions"
+														aria-label={`Reorder slide ${slide.id}`}
 													>
-														{String(index + 1).padStart(2, "0")}
-													</span>
-													<div className="slide-card-body">
-														<div className="slide-card-header">
-															<span className="slide-layout-badge">
-																{layoutLabel(slide.layout)}
-															</span>
-															{slide.citations.length > 0 ? (
-																<span className="citation-count-badge">
-																	{slide.citations.length} cite
-																	{slide.citations.length !== 1
-																		? "s"
-																		: ""}
+														<button
+															type="button"
+															className="slide-order-btn"
+															disabled={busy || idx === 0}
+															title="Move up"
+															aria-label="Move slide up"
+															onClick={(e) => {
+																e.stopPropagation();
+																void moveSlide(slide.id, "up");
+															}}
+														>
+															↑
+														</button>
+														<button
+															type="button"
+															className="slide-order-btn"
+															disabled={
+																busy ||
+																idx === activeSlides.length - 1
+															}
+															title="Move down"
+															aria-label="Move slide down"
+															onClick={(e) => {
+																e.stopPropagation();
+																void moveSlide(slide.id, "down");
+															}}
+														>
+															↓
+														</button>
+													</fieldset>
+													<button
+														type="button"
+														className="slide-card"
+														onClick={() =>
+															setSelectedSlideId(slide.id)
+														}
+													>
+														<span
+															className="slide-number"
+															aria-hidden="true"
+														>
+															{String(idx + 1).padStart(
+																2,
+																"0",
+															)}
+														</span>
+														<div className="slide-card-body">
+															<div className="slide-card-header">
+																<span className="slide-layout-badge">
+																	{layoutLabel(
+																		slide.layout,
+																	)}
 																</span>
-															) : null}
-															{slide.speaker_notes ? (
-																<span
-																	className="notes-indicator"
-																	role="img"
-																	aria-label="Has speaker notes"
-																>
-																	🎙
-																</span>
-															) : null}
+																{slide.citations.length >
+																0 ? (
+																	<span className="citation-count-badge">
+																		{slide.citations.length}{" "}
+																		cite
+																		{slide.citations
+																			.length !==
+																		1
+																			? "s"
+																			: ""}
+																	</span>
+																) : null}
+																{slide.speaker_notes ? (
+																	<span
+																		className="notes-indicator"
+																		role="img"
+																		aria-label="Has speaker notes"
+																	>
+																		🎙
+																	</span>
+																) : null}
+															</div>
+															<p className="slide-card-preview">
+																{slidePreview(slide)}
+															</p>
 														</div>
-														<p className="slide-card-preview">
-															{slidePreview(slide)}
-														</p>
-													</div>
-												</button>
+													</button>
+												</div>
 											</li>
 										))}
 									</ol>
 								)}
+
+								{archivedSlides.length > 0 ? (
+									<div className="archived-section">
+										<button
+											type="button"
+											className="archived-toggle"
+											aria-expanded={showArchived}
+											onClick={() =>
+												setShowArchived(!showArchived)
+											}
+										>
+											Archived slides ({archivedSlides.length})
+										</button>
+										{showArchived ? (
+											<ol className="slide-list archived-list">
+												{archivedSlides.map((slide) => (
+													<li key={slide.id}>
+														<button
+															type="button"
+															className="slide-card"
+															onClick={() =>
+																setSelectedSlideId(
+																	slide.id,
+																)
+															}
+														>
+															<span
+																className="slide-number"
+																aria-hidden="true"
+															>
+																—
+															</span>
+															<div className="slide-card-body">
+																<div className="slide-card-header">
+																	<span className="slide-layout-badge">
+																		{layoutLabel(
+																			slide.layout,
+																		)}
+																	</span>
+																	<span className="status-badge status-unprocessed">
+																		Archived
+																	</span>
+																</div>
+																<p className="slide-card-preview">
+																	{slidePreview(
+																		slide,
+																	)}
+																</p>
+															</div>
+														</button>
+													</li>
+												))}
+											</ol>
+										) : null}
+									</div>
+								) : null}
 							</div>
 						</>
 					)}

@@ -137,6 +137,7 @@ export type Slide = {
 	speaker_notes?: string;
 	purpose?: string;
 	citations: SlideCitation[];
+	archived: boolean;
 };
 
 export type Presentation = {

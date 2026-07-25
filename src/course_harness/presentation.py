@@ -21,6 +21,7 @@ class SlideBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(pattern=r"^slide-[0-9a-f]{12}$")
+    archived: bool = False
 
 
 class TitleSlide(SlideBase):
@@ -275,3 +276,25 @@ def slide_by_id(presentation: Presentation, slide_id: str) -> Slide | None:
         if slide.id == slide_id:
             return slide
     return None
+
+
+class SlideArchiveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    archived: bool
+
+
+class SlideOrderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slide_ids: list[str] = Field(min_length=1)
+
+
+def reorder_slides(presentation: Presentation, slide_ids: list[str]) -> Presentation:
+    active_ids = {slide.id for slide in presentation.slides if not slide.archived}
+    if len(slide_ids) != len(active_ids) or set(slide_ids) != active_ids:
+        raise ValueError("Slide order must contain every non-archived Slide ID exactly once")
+    by_id: dict[str, Slide] = {slide.id: slide for slide in presentation.slides}
+    active = [by_id[sid] for sid in slide_ids]
+    archived = [slide for slide in presentation.slides if slide.archived]
+    return presentation.model_copy(update={"slides": [*active, *archived]})

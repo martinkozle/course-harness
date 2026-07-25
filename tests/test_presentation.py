@@ -324,3 +324,198 @@ async def test_list_slides_endpoint(tmp_path: Path) -> None:
         assert data["slides"][0]["title"] == "First"
         assert data["slides"][1]["title"] == "Second"
         assert data["slides"][1]["bullets"] == ["X"]
+
+
+@pytest.mark.anyio
+async def test_reorder_slides(tmp_path: Path) -> None:
+    workspace = tmp_path / "test-course"
+    workspace.mkdir()
+    plan = create_course_plan(
+        CoursePlanInput(
+            title="Test Course",
+            audience="Test",
+            lectures=[LectureInput(title="Lecture 1")],
+        )
+    )
+    initialize_workspace_history(workspace)
+    create_course_plan_file(workspace, plan)
+
+    transport = httpx2.ASGITransport(app=create_app(workspace))
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        create = await client.post(
+            f"/api/presentations/{plan.lectures[0].id}",
+            json={
+                "slides": [
+                    {"layout": "title", "title": "First"},
+                    {"layout": "bullets", "title": "Second", "bullets": ["A"]},
+                    {"layout": "section", "title": "Third"},
+                ]
+            },
+        )
+        assert create.status_code == 201
+        pres = Presentation.model_validate(create.json())
+        slide_ids = [s.id for s in pres.slides]
+        reversed_ids = list(reversed(slide_ids))
+
+        response = await client.put(
+            f"/api/presentations/{plan.lectures[0].id}/slides/order",
+            json={"slide_ids": reversed_ids},
+        )
+        assert response.status_code == 200
+        updated = Presentation.model_validate(response.json())
+        assert [s.id for s in updated.slides] == reversed_ids
+        assert updated.slides[0].title == "Third"
+        assert updated.slides[2].title == "First"
+
+
+@pytest.mark.anyio
+async def test_reorder_slides_invalid_ids(tmp_path: Path) -> None:
+    workspace = tmp_path / "test-course"
+    workspace.mkdir()
+    plan = create_course_plan(
+        CoursePlanInput(
+            title="Test Course",
+            audience="Test",
+            lectures=[LectureInput(title="Lecture 1")],
+        )
+    )
+    initialize_workspace_history(workspace)
+    create_course_plan_file(workspace, plan)
+
+    transport = httpx2.ASGITransport(app=create_app(workspace))
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        create = await client.post(
+            f"/api/presentations/{plan.lectures[0].id}",
+            json={
+                "slides": [
+                    {"layout": "title", "title": "First"},
+                    {"layout": "bullets", "title": "Second", "bullets": ["A"]},
+                ]
+            },
+        )
+        assert create.status_code == 201
+        slide_ids = Presentation.model_validate(create.json()).slides
+
+        response = await client.put(
+            f"/api/presentations/{plan.lectures[0].id}/slides/order",
+            json={"slide_ids": [slide_ids[0].id]},
+        )
+        assert response.status_code == 422
+
+        response = await client.put(
+            f"/api/presentations/{plan.lectures[0].id}/slides/order",
+            json={"slide_ids": [slide_ids[0].id, "slide-deadbeef1234"]},
+        )
+        assert response.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_archive_and_restore_slide(tmp_path: Path) -> None:
+    workspace = tmp_path / "test-course"
+    workspace.mkdir()
+    plan = create_course_plan(
+        CoursePlanInput(
+            title="Test Course",
+            audience="Test",
+            lectures=[LectureInput(title="Lecture 1")],
+        )
+    )
+    initialize_workspace_history(workspace)
+    create_course_plan_file(workspace, plan)
+
+    transport = httpx2.ASGITransport(app=create_app(workspace))
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        create = await client.post(
+            f"/api/presentations/{plan.lectures[0].id}",
+            json={
+                "slides": [
+                    {"layout": "title", "title": "First"},
+                    {"layout": "bullets", "title": "Second", "bullets": ["A"]},
+                    {"layout": "section", "title": "Third"},
+                ]
+            },
+        )
+        assert create.status_code == 201
+        pres = Presentation.model_validate(create.json())
+        middle_id = pres.slides[1].id
+
+        archive = await client.patch(
+            f"/api/presentations/{plan.lectures[0].id}/slides/{middle_id}",
+            json={"archived": True},
+        )
+        assert archive.status_code == 200
+        archived_pres = Presentation.model_validate(archive.json())
+        active = [s for s in archived_pres.slides if not s.archived]
+        archived = [s for s in archived_pres.slides if s.archived]
+        assert len(active) == 2
+        assert active[0].title == "First"
+        assert active[1].title == "Third"
+        assert len(archived) == 1
+        assert archived[0].id == middle_id
+
+        restore = await client.patch(
+            f"/api/presentations/{plan.lectures[0].id}/slides/{middle_id}",
+            json={"archived": False},
+        )
+        assert restore.status_code == 200
+        restored_pres = Presentation.model_validate(restore.json())
+        assert [s.archived for s in restored_pres.slides] == [False, False, False]
+        assert restored_pres.slides[0].title == "First"
+        assert restored_pres.slides[1].title == "Third"
+        assert restored_pres.slides[2].id == middle_id
+
+
+@pytest.mark.anyio
+async def test_archived_survives_replan(tmp_path: Path) -> None:
+    workspace = tmp_path / "test-course"
+    workspace.mkdir()
+    plan = create_course_plan(
+        CoursePlanInput(
+            title="Test Course",
+            audience="Test",
+            lectures=[LectureInput(title="Lecture 1")],
+        )
+    )
+    initialize_workspace_history(workspace)
+    create_course_plan_file(workspace, plan)
+
+    from course_harness.presentation import (
+        BulletsSlide,
+        TitleSlide,
+        write_presentation,
+    )
+
+    archived_slide = BulletsSlide(
+        id="slide-aaa000000001", title="Archived slide", bullets=["X"], archived=True
+    )
+    active_slide = TitleSlide(id="slide-abc123def456", title="Active slide")
+    pres = Presentation(
+        id="presentation-abc123def456",
+        lecture_id=plan.lectures[0].id,
+        slides=[active_slide, archived_slide],
+    )
+    write_presentation(workspace, pres)
+
+    from course_harness.course_agent import (
+        ReplacePresentationCommand,
+        SlideCommand,
+        apply_presentation_command,
+    )
+
+    command = ReplacePresentationCommand(
+        lecture_id=plan.lectures[0].id,
+        slides=[
+            SlideCommand(
+                id="slide-abc123def456",
+                layout="title",
+                title="Revised active slide",
+            ),
+        ],
+    )
+    result = apply_presentation_command(workspace, command, plan)
+    active_slides = [s for s in result.slides if not s.archived]
+    archived_slides = [s for s in result.slides if s.archived]
+    assert len(active_slides) == 1
+    assert active_slides[0].title == "Revised active slide"
+    assert len(archived_slides) == 1
+    assert archived_slides[0].id == "slide-aaa000000001"
