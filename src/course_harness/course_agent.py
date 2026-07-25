@@ -153,6 +153,9 @@ def apply_course_plan_command(workspace: Path, command: ReplaceCoursePlanCommand
                 title=command_lecture.title,
                 group=command_lecture.group,
                 source_focus=command_lecture.source_focus,
+                presentation_id=(
+                    existing_by_id[identity].presentation_id if identity in existing_by_id else None
+                ),
             )
         )
 

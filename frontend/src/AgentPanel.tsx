@@ -67,10 +67,13 @@ function updateAssistantMessage(
 
 function approvalProposal(
 	interrupt: AgentInterrupt,
-): CoursePlanProposal | null {
+): { tool: "course_plan" | "presentation"; preview: Record<string, unknown> | null } | null {
 	const message = interrupt.message;
-	const marker = "replace_course_plan(";
 	if (!message) return null;
+	if (message.includes("replace_presentation(")) {
+		return { tool: "presentation", preview: null };
+	}
+	const marker = "replace_course_plan(";
 	const start = message.indexOf(marker);
 	const end = message.lastIndexOf(")?");
 	if (start === -1 || end <= start) return null;
@@ -78,9 +81,9 @@ function approvalProposal(
 		const payload = JSON.parse(message.slice(start + marker.length, end)) as {
 			command?: CoursePlanProposal;
 		};
-		return payload.command ?? null;
+		return { tool: "course_plan", preview: payload.command ?? null };
 	} catch {
-		return null;
+		return { tool: "course_plan", preview: null };
 	}
 }
 
@@ -91,12 +94,20 @@ function ApprovalCard({
 	approval: AgentInterrupt;
 	onResolve: (approved: boolean) => void;
 }) {
-	const proposal = approvalProposal(approval);
+	const parsed = approvalProposal(approval);
+	const isPresentation = parsed?.tool === "presentation";
+	const proposal = parsed?.preview as CoursePlanProposal | null;
 	return (
 		<section className="approval-card" aria-labelledby="approval-heading">
-			<p className="section-kicker">Course Agent proposal</p>
-			<h3 id="approval-heading">Apply this change?</h3>
-			{proposal ? (
+			<p className="section-kicker">
+				{isPresentation ? "Presentation proposal" : "Course Plan proposal"}
+			</p>
+			<h3 id="approval-heading">
+				{isPresentation ? "Apply this presentation change?" : "Apply this change?"}
+			</h3>
+			{isPresentation ? (
+				<p>The agent wants to create or update a Presentation.</p>
+			) : proposal ? (
 				<div className="proposal-sheet">
 					<div>
 						<strong>{proposal.title}</strong>
@@ -116,24 +127,26 @@ function ApprovalCard({
 					The agent proposed a Course Plan, but its preview could not be read.
 				</p>
 			)}
-			<p className="approval-scope">
-				This saves the Course title, intent, and Lecture spine. It does not
-				create Lecture content yet.
-			</p>
+			{!isPresentation ? (
+				<p className="approval-scope">
+					This saves the Course title, intent, and Lecture spine. It does not
+					create Lecture content yet.
+				</p>
+			) : null}
 			<div className="approval-actions">
 				<button
 					type="button"
 					className="secondary-action"
 					onClick={() => onResolve(false)}
 				>
-					Keep current plan
+					{isPresentation ? "Skip" : "Keep current plan"}
 				</button>
 				<button
 					type="button"
 					className="primary-action"
 					onClick={() => onResolve(true)}
 				>
-					Save Course Plan
+					{isPresentation ? "Apply" : "Save Course Plan"}
 				</button>
 			</div>
 		</section>
@@ -175,8 +188,8 @@ export function AgentPanel({
 	useEffect(() => setApproval(initialApproval), [initialApproval]);
 	useEffect(() => onRunningChange(running), [onRunningChange, running]);
 	useEffect(() => {
-		chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-	});  // no deps — run after every render (messages always change between renders during streaming)
+		chatEndRef.current?.scrollIntoView({ behavior: "auto" });
+	});
 	useEffect(
 		() => () => {
 			abortRef.current?.abort();

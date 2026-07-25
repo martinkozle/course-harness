@@ -1,13 +1,8 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { CoursePlan } from "./AgentPanel";
 import { responseError } from "./api";
-import type {
-	Presentation,
-	PresentationSummary,
-	Slide,
-	SlideCitation,
-} from "./models";
+import type { Presentation, PresentationSummary, Slide, SlideCitation } from "./models";
 
 type PresentationViewProps = {
 	course: CoursePlan;
@@ -38,8 +33,7 @@ function slidePreview(slide: Slide): string {
 	if (slide.bullets && slide.bullets.length > 0) return slide.bullets[0];
 	if (slide.quote) return `"${slide.quote.slice(0, 60)}…"`;
 	if (slide.statement) return slide.statement.slice(0, 80);
-	if (slide.code)
-		return slide.code.split("\n")[0].slice(0, 60);
+	if (slide.code) return slide.code.split("\n")[0].slice(0, 60);
 	if (slide.text) return slide.text.slice(0, 80);
 	return "(empty)";
 }
@@ -67,9 +61,7 @@ function SlideDetail({
 	return (
 		<section className="slide-detail" aria-label={`Slide ${slide.id} detail`}>
 			<div className="slide-detail-header">
-				<h3>
-					{slide.title || "Untitled slide"}
-				</h3>
+				<h3>{slide.title || "Untitled slide"}</h3>
 				<button
 					className="quiet-action compact-action"
 					type="button"
@@ -103,87 +95,21 @@ function SlideDetail({
 					))}
 				</ul>
 			) : slide.layout === "code" && slide.code ? (
-				<pre
-					className="slide-code-block"
-					onClick={() =>
-						onChatContext(
-							`I'm looking at slide ${slide.id} (layout: ${slide.layout}, code block)`,
-						)
-					}
-					onKeyDown={(e) => {
-						if (e.key === "Enter") {
-							onChatContext(
-								`I'm looking at slide ${slide.id} (layout: ${slide.layout}, code block)`,
-							);
-						}
-					}}
-				>
+				<pre className="slide-code-block">
 					<code>{slide.code}</code>
 				</pre>
 			) : slide.layout === "two_column" ? (
 				<div className="slide-two-column">
-					<button
-						type="button"
-						className="clickable-content"
-						onClick={() =>
-							onChatContext(
-								`I'm looking at slide ${slide.id} (layout: two_column, left column)`,
-							)
-						}
-					>
-						{slide.left_content}
-					</button>
-					<button
-						type="button"
-						className="clickable-content"
-						onClick={() =>
-							onChatContext(
-								`I'm looking at slide ${slide.id} (layout: two_column, right column)`,
-							)
-						}
-					>
-						{slide.right_content}
-					</button>
+					<div className="clickable-content">{slide.left_content}</div>
+					<div className="clickable-content">{slide.right_content}</div>
 				</div>
 			) : slide.quote ? (
-				<blockquote
-					className="slide-quote"
-					onClick={() =>
-						onChatContext(
-							`I'm looking at slide ${slide.id} (layout: quote)`,
-						)
-					}
-					onKeyDown={(e) => {
-						if (e.key === "Enter") {
-							onChatContext(
-								`I'm looking at slide ${slide.id} (layout: quote)`,
-							);
-						}
-					}}
-				>
+				<blockquote className="slide-quote">
 					<p>{slide.quote}</p>
-					{slide.attribution ? (
-						<footer>{slide.attribution}</footer>
-					) : null}
+					{slide.attribution ? <footer>{slide.attribution}</footer> : null}
 				</blockquote>
 			) : slide.statement ? (
-				<p
-					className="slide-statement clickable-content"
-					onClick={() =>
-						onChatContext(
-							`I'm looking at slide ${slide.id} (layout: big_statement): "${slide.statement}"`,
-						)
-					}
-					onKeyDown={(e) => {
-						if (e.key === "Enter") {
-							onChatContext(
-								`I'm looking at slide ${slide.id} (layout: big_statement): "${slide.statement}"`,
-							);
-						}
-					}}
-				>
-					{slide.statement}
-				</p>
+				<p className="slide-statement">{slide.statement}</p>
 			) : null}
 
 			{slide.speaker_notes ? (
@@ -240,20 +166,14 @@ export function PresentationView({
 	onChange,
 	onChatContext,
 }: PresentationViewProps) {
-	const [selectedLectureId, setSelectedLectureId] = useState<string | null>(
-		null,
-	);
+	const [selectedLectureId, setSelectedLectureId] = useState<string | null>(null);
 	const [selectedSlideId, setSelectedSlideId] = useState<string | null>(null);
-	const [currentPresentation, setCurrentPresentation] =
-		useState<Presentation | null>(null);
+	const [currentPresentation, setCurrentPresentation] = useState<Presentation | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const prevPresentationsLen = useRef(presentations.length);
 
-	const selectLecture = useCallback(
+	const loadPresentation = useCallback(
 		async (lectureId: string) => {
-			setSelectedLectureId(lectureId);
-			setSelectedSlideId(null);
-			setCurrentPresentation(null);
-			setError(null);
 			try {
 				const response = await fetch(
 					`/api/presentations/${encodeURIComponent(lectureId)}`,
@@ -275,6 +195,26 @@ export function PresentationView({
 		[],
 	);
 
+	const selectLecture = useCallback(
+		async (lectureId: string) => {
+			setSelectedLectureId(lectureId);
+			setSelectedSlideId(null);
+			setCurrentPresentation(null);
+			setError(null);
+			await loadPresentation(lectureId);
+		},
+		[loadPresentation],
+	);
+
+	useEffect(() => {
+		if (presentations.length !== prevPresentationsLen.current) {
+			prevPresentationsLen.current = presentations.length;
+			if (selectedLectureId) {
+				void loadPresentation(selectedLectureId);
+			}
+		}
+	}, [presentations.length, selectedLectureId, loadPresentation]);
+
 	async function deletePresentation() {
 		if (!selectedLectureId) return;
 		setError(null);
@@ -290,16 +230,15 @@ export function PresentationView({
 			await onChange();
 		} catch (caught) {
 			setError(
-				caught instanceof Error
-					? caught.message
-					: "Could not delete presentation.",
+				caught instanceof Error ? caught.message : "Could not delete presentation.",
 			);
 		}
 	}
 
-	const selectedSlide = selectedSlideId && currentPresentation
-		? currentPresentation.slides.find((s) => s.id === selectedSlideId) ?? null
-		: null;
+	const selectedSlide =
+		selectedSlideId && currentPresentation
+			? currentPresentation.slides.find((s) => s.id === selectedSlideId) ?? null
+			: null;
 
 	return (
 		<main className="page-main presentation-main" aria-labelledby="presentation-heading">
@@ -332,9 +271,7 @@ export function PresentationView({
 									<button
 										type="button"
 										aria-current={
-											selectedLectureId === lecture.id
-												? "true"
-												: undefined
+											selectedLectureId === lecture.id ? "true" : undefined
 										}
 										disabled={busy}
 										onClick={() => void selectLecture(lecture.id)}
@@ -344,7 +281,11 @@ export function PresentationView({
 										</span>
 										<span className="lecture-title">{lecture.title}</span>
 										{hasPres ? (
-											<span className="presentation-indicator" role="img" aria-label="Has presentation">
+											<span
+												className="presentation-indicator"
+												role="img"
+												aria-label="Has presentation"
+											>
 												¶
 											</span>
 										) : null}
@@ -411,64 +352,49 @@ export function PresentationView({
 									</p>
 								) : (
 									<ol className="slide-list">
-										{currentPresentation.slides.map(
-											(slide, index) => (
-												<li key={slide.id}>
-													<button
-														type="button"
-														className="slide-card"
-														onClick={() =>
-															setSelectedSlideId(
-																slide.id,
-															)
-														}
+										{currentPresentation.slides.map((slide, index) => (
+											<li key={slide.id}>
+												<button
+													type="button"
+													className="slide-card"
+													onClick={() => setSelectedSlideId(slide.id)}
+												>
+													<span
+														className="slide-number"
+														aria-hidden="true"
 													>
-														<span
-															className="slide-number"
-															aria-hidden="true"
-														>
-															{String(index + 1).padStart(
-																2,
-																"0",
-															)}
-														</span>
-														<div className="slide-card-body">
-															<div className="slide-card-header">
-																<span className="slide-layout-badge">
-																	{layoutLabel(
-																		slide.layout,
-																	)}
+														{String(index + 1).padStart(2, "0")}
+													</span>
+													<div className="slide-card-body">
+														<div className="slide-card-header">
+															<span className="slide-layout-badge">
+																{layoutLabel(slide.layout)}
+															</span>
+															{slide.citations.length > 0 ? (
+																<span className="citation-count-badge">
+																	{slide.citations.length} cite
+																	{slide.citations.length !== 1
+																		? "s"
+																		: ""}
 																</span>
-																{slide.citations.length > 0 ? (
-																	<span className="citation-count-badge">
-																		{
-																			slide
-																				.citations
-																				.length
-																		}{" "}
-																		cite
-																		{slide
-																			.citations
-																			.length !==
-																		1
-																			? "s"
-																			: ""}
-																	</span>
-																) : null}
-																{slide.speaker_notes ? (
-																	<span className="notes-indicator" role="img" aria-label="Has speaker notes">
-																		🎙
-																	</span>
-																) : null}
-															</div>
-															<p className="slide-card-preview">
-																{slidePreview(slide)}
-															</p>
+															) : null}
+															{slide.speaker_notes ? (
+																<span
+																	className="notes-indicator"
+																	role="img"
+																	aria-label="Has speaker notes"
+																>
+																	🎙
+																</span>
+															) : null}
 														</div>
-													</button>
-												</li>
-											),
-										)}
+														<p className="slide-card-preview">
+															{slidePreview(slide)}
+														</p>
+													</div>
+												</button>
+											</li>
+										))}
 									</ol>
 								)}
 							</div>
