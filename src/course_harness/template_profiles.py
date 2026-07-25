@@ -249,7 +249,6 @@ def render_calibration(
     cache_dir: Path,
     profile: TemplateProfile,
 ) -> list[CalibrationSlide]:
-    import subprocess
 
     if profile.id == BUILTIN_DEFAULT_ID:
         return _render_builtin_calibration(profile)
@@ -271,43 +270,24 @@ def render_calibration(
         ]
 
     cal_dir.mkdir(parents=True, exist_ok=True)
-    cal_pptx = _generate_calibration_deck(profile, template_path)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        src = Path(tmpdir) / "calibration.pptx"
-        src.write_bytes(cal_pptx)
+    for f in cal_dir.glob("*.png"):
+        f.unlink()
 
-        for f in cal_dir.glob("*.png"):
-            f.unlink()
+    slides = _generate_calibration_slides(profile, template_path)
 
-        result = subprocess.run(
-            [
-                "libreoffice",
-                "--headless",
-                "--convert-to",
-                "png",
-                "--outdir",
-                str(cal_dir),
-                str(src),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
+    for semantic, idx, pptx_bytes in slides:
+        slide_name = f"{idx:02d}-{semantic}"
+        _render_single_slide(cal_dir, slide_name, pptx_bytes)
+
+    final_images = sorted(cal_dir.glob("*.png"))
+    if len(final_images) < len(profile.layouts):
+        raise RuntimeError(
+            f"Expected {len(profile.layouts)} calibration images, got {len(final_images)}"
         )
-        if result.returncode != 0:
-            raise RuntimeError(f"LibreOffice calibration render failed: {result.stderr.strip()}")
-
-        rendered = sorted(cal_dir.glob("*.png"))
-        if len(rendered) < len(profile.layouts):
-            raise RuntimeError(
-                f"Expected {len(profile.layouts)} calibration images, got {len(rendered)}"
-            )
-
-        _rename_calibration_images(rendered, profile)
 
     _write_calibration_meta(cal_dir, profile)
 
-    final_images = sorted(cal_dir.glob("*.png"))
     return [
         CalibrationSlide(
             semantic_layout=_parse_semantic_from_filename(p.name),
@@ -316,6 +296,40 @@ def render_calibration(
         )
         for p in final_images
     ]
+
+
+def _render_single_slide(cal_dir: Path, slide_name: str, pptx_bytes: bytes) -> None:
+    import subprocess
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        src = Path(tmpdir) / f"{slide_name}.pptx"
+        src.write_bytes(pptx_bytes)
+
+        result = subprocess.run(
+            [
+                "libreoffice",
+                "--headless",
+                "--convert-to",
+                "png",
+                "--outdir",
+                str(tmpdir),
+                str(src),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"LibreOffice render failed for {slide_name}: {result.stderr.strip()}"
+            )
+
+        rendered = sorted(Path(tmpdir).glob("*.png"))
+        if not rendered:
+            raise RuntimeError(f"No PNG output for {slide_name}")
+
+        target = cal_dir / f"{slide_name}.png"
+        rendered[0].rename(target)
 
 
 def _render_builtin_calibration(profile: TemplateProfile) -> list[CalibrationSlide]:
@@ -354,9 +368,9 @@ def _generate_calibration_deck(profile: TemplateProfile, template_path: Path) ->
                 tf = shape.text_frame
                 tf.clear()
                 p = tf.paragraphs[0]
-                p.text = "• Sample bullet one"
+                p.text = "\u2022 Sample bullet one"
                 p2 = tf.add_paragraph()
-                p2.text = "• Sample bullet two"
+                p2.text = "\u2022 Sample bullet two"
             else:
                 with contextlib.suppress(Exception):
                     shape.text_frame.text = f"[placeholder idx={shape.placeholder_format.idx}]"
@@ -366,13 +380,47 @@ def _generate_calibration_deck(profile: TemplateProfile, template_path: Path) ->
     return buffer.getvalue()
 
 
-def _rename_calibration_images(images: list[Path], profile: TemplateProfile) -> None:
-    mapping = list(sorted(profile.layouts, key=lambda m: m.template_layout_index))
-    if len(images) == len(mapping):
-        for img, m in zip(images, mapping, strict=False):
-            target = img.parent / f"{m.template_layout_index:02d}-{m.semantic_layout}.png"
-            if img != target:
-                img.rename(target)
+def _generate_calibration_slides(
+    profile: TemplateProfile,
+    template_path: Path,
+) -> list[tuple[str, int, bytes]]:
+    import contextlib
+    import io
+
+    mapping = {m.semantic_layout: m.template_layout_index for m in profile.layouts}
+    slides: list[tuple[str, int, bytes]] = []
+
+    for semantic, idx in mapping.items():
+        prs = PPTXPresentation(str(template_path))
+        layouts = prs.slide_layouts
+        if idx >= len(layouts):
+            continue
+        slide_layout = layouts[idx]
+        slide = prs.slides.add_slide(slide_layout)
+
+        for shape in slide.placeholders:
+            if shape.placeholder_format.idx == 0:
+                shape.text_frame.text = f"[{semantic}] Sample Title"
+            elif shape.placeholder_format.idx == 1:
+                shape.text_frame.text = (
+                    "Sample subtitle or body text.\nThis is rendered for calibration."
+                )
+            elif shape.placeholder_format.idx == 2:
+                tf = shape.text_frame
+                tf.clear()
+                p = tf.paragraphs[0]
+                p.text = "\u2022 Sample bullet one"
+                p2 = tf.add_paragraph()
+                p2.text = "\u2022 Sample bullet two"
+            else:
+                with contextlib.suppress(Exception):
+                    shape.text_frame.text = f"[placeholder idx={shape.placeholder_format.idx}]"
+
+        buffer = io.BytesIO()
+        prs.save(buffer)
+        slides.append((semantic, idx, buffer.getvalue()))
+
+    return slides
 
 
 def _calibration_meta_matches(cal_dir: Path, profile: TemplateProfile) -> bool:

@@ -1391,6 +1391,19 @@ def create_app(
         except RuntimeError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
+    @app.get("/api/templates/{profile_id}/calibration/{filename}")
+    async def api_calibration_image(profile_id: str, filename: str) -> StarletteResponse:
+        if ".." in filename or "/" in filename:
+            raise HTTPException(status_code=404, detail="Not found")
+        cal_dir = tpl.calibration_dir(templates_cache, profile_id)
+        image_path = cal_dir / filename
+        if not image_path.is_file():
+            raise HTTPException(status_code=404, detail="Not found")
+        return StarletteResponse(
+            content=image_path.read_bytes(),
+            media_type="image/png",
+        )
+
     static_directory = Path(__file__).with_name("static")
     if static_directory.is_dir():
         app.mount("/", StaticFiles(directory=static_directory, html=True), name="frontend")
