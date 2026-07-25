@@ -86,14 +86,14 @@ function SlideDetail({
 
 			{slide.layout === "bullets" && slide.bullets ? (
 				<ul className="slide-bullets">
-					{slide.bullets.map((bullet) => (
+					{slide.bullets.map((bullet, position) => (
 						<li key={`${slide.id}-${bullet}`}>
 							<button
 								type="button"
 								className="clickable-content"
 								onClick={() =>
 									onChatContext(
-										`I'm looking at slide ${slide.id} (layout: ${slide.layout}), bullet ${i + 1}: "${bullet}"`,
+										`I'm looking at slide ${slide.id} (layout: ${slide.layout}), bullet ${String(position + 1)}: "${bullet}"`,
 									)
 								}
 							>
@@ -275,39 +275,6 @@ export function PresentationView({
 		[],
 	);
 
-	async function createPresentation() {
-		if (!selectedLectureId) return;
-		setError(null);
-		try {
-			const response = await fetch(
-				`/api/presentations/${encodeURIComponent(selectedLectureId)}`,
-				{
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						slides: [
-							{
-								layout: "title",
-								title: "New presentation",
-							},
-						],
-					}),
-				},
-			);
-			if (!response.ok) {
-				throw new Error(await responseError(response));
-			}
-			setCurrentPresentation((await response.json()) as Presentation);
-			await onChange();
-		} catch (caught) {
-			setError(
-				caught instanceof Error
-					? caught.message
-					: "Could not create presentation.",
-			);
-		}
-	}
-
 	async function deletePresentation() {
 		if (!selectedLectureId) return;
 		setError(null);
@@ -405,14 +372,7 @@ export function PresentationView({
 					) : !currentPresentation ? (
 						<div className="empty-state">
 							<p>No Presentation for this Lecture yet.</p>
-							<button
-								className="primary-action"
-								type="button"
-								disabled={busy}
-								onClick={() => void createPresentation()}
-							>
-								Start presentation
-							</button>
+							<span>Ask the Course Agent to create a slide outline.</span>
 						</div>
 					) : (
 						<>

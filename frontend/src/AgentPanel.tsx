@@ -94,8 +94,8 @@ function ApprovalCard({
 	const proposal = approvalProposal(approval);
 	return (
 		<section className="approval-card" aria-labelledby="approval-heading">
-			<p className="section-kicker">Course Plan proposal</p>
-			<h3 id="approval-heading">Save this Course Plan?</h3>
+			<p className="section-kicker">Course Agent proposal</p>
+			<h3 id="approval-heading">Apply this change?</h3>
 			{proposal ? (
 				<div className="proposal-sheet">
 					<div>
@@ -163,6 +163,7 @@ export function AgentPanel({
 	const [error, setError] = useState<string | null>(null);
 	const [mode, setMode] = useState<AgentMode>("guided");
 	const abortRef = useRef<AbortController | null>(null);
+	const chatEndRef = useRef<HTMLDivElement | null>(null);
 	const selected = catalog.model_presets.find(
 		(preset) => preset.id === catalog.selected_model_id,
 	);
@@ -173,6 +174,9 @@ export function AgentPanel({
 	useEffect(() => setMessages(initialMessages), [initialMessages]);
 	useEffect(() => setApproval(initialApproval), [initialApproval]);
 	useEffect(() => onRunningChange(running), [onRunningChange, running]);
+	useEffect(() => {
+		chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+	});  // no deps — run after every render (messages always change between renders during streaming)
 	useEffect(
 		() => () => {
 			abortRef.current?.abort();
@@ -391,22 +395,25 @@ export function AgentPanel({
 				)}
 			</div>
 
-			<ol className="chat-messages" aria-label="Course Agent conversation">
-				{messages.length === 0 ? (
-					<li className="chat-empty">
-						The Course Agent currently creates and revises the Course Plan: its
-						intent and Lecture spine. Lecture content comes in a later authoring
-						step.
-					</li>
-				) : (
-					messages.map((message) => (
-						<li className={`chat-message ${message.role}`} key={message.id}>
-							<span>{message.role === "user" ? "You" : "Course Agent"}</span>
-							<p>{message.content}</p>
+			<div className="chat-scroll-container">
+				<ol className="chat-messages" aria-label="Course Agent conversation">
+					{messages.length === 0 ? (
+						<li className="chat-empty">
+							The Course Agent currently creates and revises the Course Plan: its
+							intent and Lecture spine. Lecture content comes in a later authoring
+							step.
 						</li>
-					))
-				)}
-			</ol>
+					) : (
+						messages.map((message) => (
+							<li className={`chat-message ${message.role}`} key={message.id}>
+								<span>{message.role === "user" ? "You" : "Course Agent"}</span>
+								<p>{message.content}</p>
+							</li>
+						))
+					)}
+				</ol>
+				<div ref={chatEndRef} />
+			</div>
 
 			<div className="agent-activity" aria-live="polite" aria-atomic="true">
 				{activities.map((activity) => (

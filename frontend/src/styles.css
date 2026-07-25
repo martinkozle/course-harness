@@ -1021,6 +1021,14 @@ h1 {
 	color: var(--cobalt);
 }
 
+.chat-scroll-container {
+	flex: 1 1 0;
+	min-height: 0;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+}
+
 .chat-messages {
 	display: grid;
 	flex: 1 1 0;
@@ -1936,10 +1944,20 @@ h1 {
 /* ── Presentations view ── */
 
 .presentation-layout {
-	display: grid;
-	grid-template-columns: 260px 1fr;
-	gap: 1rem;
+	display: flex;
+	gap: 1.5rem;
 	margin-top: 1rem;
+}
+
+.lecture-selector-section {
+	flex-shrink: 0;
+	width: 240px;
+}
+
+.slide-canvas-section {
+	flex: 1;
+	min-width: 0;
+	min-height: 400px;
 }
 
 .lecture-selector-list {
@@ -1983,7 +2001,8 @@ h1 {
 	font-size: 0.75rem;
 	font-weight: 600;
 	color: var(--muted);
-	width: 1.5rem;
+	min-width: 1.5rem;
+	text-align: center;
 	flex-shrink: 0;
 }
 
