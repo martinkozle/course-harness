@@ -9,7 +9,7 @@ from typing import Literal, cast
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import AgentRunResult, DeferredToolRequests
 from pydantic_ai.models import Model
 from pydantic_ai.ui.ag_ui import AGUIAdapter
@@ -45,6 +45,13 @@ from course_harness.course_plan import (
     initialize_workspace_history,
     read_course_plan,
     write_course_plan,
+)
+from course_harness.presentation import (
+    Presentation,
+    SlideCitation,
+    delete_presentation_file,
+    list_presentations,
+    read_presentation_for_lecture,
 )
 from course_harness.providers import (
     ModelCatalog,
@@ -111,6 +118,35 @@ class WorkspaceEntry(BaseModel):
 
 class ModelSelection(BaseModel):
     model_id: str = Field(min_length=1)
+
+
+class SlideRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = None
+    layout: str = Field(min_length=1)
+    title: str | None = None
+    speaker_notes: str | None = None
+    purpose: str | None = None
+    citations: list[SlideCitation] = Field(default_factory=list)
+    subtitle: str | None = None
+    bullets: list[str] | None = None
+    left_content: str | None = None
+    right_content: str | None = None
+    statement: str | None = None
+    text: str | None = None
+    code: str | None = None
+    language: str | None = None
+    image_url: str | None = None
+    caption: str | None = None
+    quote: str | None = None
+    attribution: str | None = None
+
+
+class PresentationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slides: list[SlideRequest] = Field(min_length=1)
 
 
 def create_app(
@@ -472,6 +508,7 @@ def create_app(
             course_state=CourseAgentState(
                 course=plan,
                 sources=sources_index.sources if sources_index else [],
+                presentations=list_presentations(active),
             ),
             workspace=active,
             data_dir=data_dir,
@@ -569,6 +606,134 @@ def create_app(
             )
             write_course_plan(active, updated)
             return updated
+
+    class PresentationSummary(BaseModel):
+        id: str
+        lecture_id: str
+        slide_count: int
+
+    @app.get("/api/presentations", response_model=list[PresentationSummary])
+    async def api_list_presentations() -> list[PresentationSummary]:
+        active = require_workspace()
+        return [
+            PresentationSummary(
+                id=p.id,
+                lecture_id=p.lecture_id,
+                slide_count=len(p.slides),
+            )
+            for p in list_presentations(active)
+        ]
+
+    @app.get("/api/presentations/{lecture_id}", response_model=Presentation)
+    async def api_get_presentation(lecture_id: str) -> Presentation:
+        active = require_workspace()
+        pres = read_presentation_for_lecture(active, lecture_id)
+        if pres is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No Presentation exists for this lecture",
+            )
+        return pres
+
+    @app.post("/api/presentations/{lecture_id}", response_model=Presentation, status_code=201)
+    async def api_create_presentation(
+        lecture_id: str, request: PresentationRequest
+    ) -> Presentation:
+        from uuid import uuid4
+
+        from course_harness.presentation import (
+            SLIDE_CLASSES_BY_LAYOUT,
+            write_presentation,
+        )
+
+        active, plan = require_course_plan()
+        async with exclusive_mutation(active):
+            if all(lec.id != lecture_id for lec in plan.lectures):
+                raise HTTPException(status_code=404, detail="Lecture was not found")
+
+            existing = read_presentation_for_lecture(active, lecture_id)
+            if existing:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This lecture already has a Presentation",
+                )
+
+            slides = []
+            for cmd in request.slides:
+                layout = cmd.layout
+                if layout not in SLIDE_CLASSES_BY_LAYOUT:
+                    raise HTTPException(status_code=422, detail=f"Unknown slide layout: {layout}")
+                cls = SLIDE_CLASSES_BY_LAYOUT[layout]
+                slide_id = cmd.id or f"slide-{uuid4().hex[:12]}"
+                fields: dict[str, object] = {
+                    "id": slide_id,
+                    "title": cmd.title,
+                    "speaker_notes": cmd.speaker_notes,
+                    "purpose": cmd.purpose,
+                    "citations": cmd.citations,
+                }
+                if layout == "title":
+                    fields["subtitle"] = cmd.subtitle
+                elif layout == "bullets":
+                    fields["bullets"] = cmd.bullets or []
+                elif layout == "two_column":
+                    fields["left_content"] = cmd.left_content
+                    fields["right_content"] = cmd.right_content
+                elif layout == "big_statement":
+                    fields["statement"] = cmd.statement
+                elif layout == "closing":
+                    fields["text"] = cmd.text
+                elif layout == "code":
+                    fields["code"] = cmd.code
+                    fields["language"] = cmd.language
+                elif layout == "image":
+                    fields["image_url"] = cmd.image_url
+                    fields["caption"] = cmd.caption
+                elif layout == "quote":
+                    fields["quote"] = cmd.quote
+                    fields["attribution"] = cmd.attribution
+                model_fields = cls.model_fields  # type: ignore
+                filtered = {k: v for k, v in fields.items() if k in model_fields}
+                slides.append(cls(**filtered))
+
+            presentation_id = f"presentation-{uuid4().hex[:12]}"
+            presentation = Presentation(
+                id=presentation_id,
+                lecture_id=lecture_id,
+                slides=slides,
+            )
+            write_presentation(active, presentation)
+
+            updated_lectures = [
+                lec.model_copy(update={"presentation_id": presentation_id})
+                if lec.id == lecture_id
+                else lec
+                for lec in plan.lectures
+            ]
+            updated_plan = plan.model_copy(update={"lectures": updated_lectures})
+            write_course_plan(active, updated_plan)
+
+            return presentation
+
+    @app.delete("/api/presentations/{lecture_id}", status_code=204)
+    async def api_delete_presentation(lecture_id: str) -> Response:
+        active, plan = require_course_plan()
+        async with exclusive_mutation(active):
+            pres = read_presentation_for_lecture(active, lecture_id)
+            if pres is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No Presentation exists for this lecture",
+                )
+            delete_presentation_file(active, pres.id)
+
+            updated_lectures = [
+                lec.model_copy(update={"presentation_id": None}) if lec.id == lecture_id else lec
+                for lec in plan.lectures
+            ]
+            updated_plan = plan.model_copy(update={"lectures": updated_lectures})
+            write_course_plan(active, updated_plan)
+            return Response(status_code=204)
 
     @app.get("/api/sources", response_model=list[sources_module.Source])
     async def list_sources() -> list[sources_module.Source]:

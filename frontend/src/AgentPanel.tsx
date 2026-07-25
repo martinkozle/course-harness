@@ -10,7 +10,12 @@ export type CoursePlan = {
 	audience: string;
 	goals: string[];
 	outcomes: string[];
-	lectures: { id: string; title: string; group: string | null }[];
+	lectures: {
+		id: string;
+		title: string;
+		group: string | null;
+		presentation_id?: string;
+	}[];
 };
 
 export type ChatMessage = {
@@ -40,6 +45,9 @@ type AgentPanelProps = {
 	modelsOpen: boolean;
 	onCourseChange: (course: CoursePlan) => Promise<void>;
 	onRunningChange: (running: boolean) => void;
+	onPresentationsChange?: () => Promise<void>;
+	chatContext?: string | null;
+	onChatContextCleared?: () => void;
 };
 
 function updateAssistantMessage(
@@ -141,6 +149,9 @@ export function AgentPanel({
 	modelsOpen,
 	onCourseChange,
 	onRunningChange,
+	onPresentationsChange,
+	chatContext,
+	onChatContextCleared,
 }: AgentPanelProps) {
 	const [messages, setMessages] = useState(initialMessages);
 	const [prompt, setPrompt] = useState("");
@@ -227,8 +238,16 @@ export function AgentPanel({
 					onActivity: (id, title, detail) =>
 						setActivities((current) => [...current, { id, title, detail }]),
 					onState: async (snapshot) => {
-						const state = snapshot as { course?: CoursePlan };
+						const state = snapshot as {
+							course?: CoursePlan;
+						};
 						if (state.course) await onCourseChange(state.course);
+						if (
+							onPresentationsChange &&
+							(snapshot as Record<string, unknown>).presentations
+						) {
+							await onPresentationsChange();
+						}
 					},
 					onInterrupt: setApproval,
 				},
@@ -271,10 +290,11 @@ export function AgentPanel({
 		event.preventDefault();
 		const content = prompt.trim();
 		if (!content || running) return;
+		const contextPrefix = chatContext ? `[Context: ${chatContext}]\n\n` : "";
 		const userMessage: ChatMessage = {
 			id: crypto.randomUUID(),
 			role: "user",
-			content,
+			content: contextPrefix + content,
 		};
 		if (isContinueUntilDone(content)) {
 			setMode("autonomous");
@@ -282,6 +302,7 @@ export function AgentPanel({
 		setMessages((current) => [...current, userMessage]);
 		setPrompt("");
 		setApproval(null);
+		if (onChatContextCleared) onChatContextCleared();
 		void run([userMessage]);
 	}
 
@@ -414,6 +435,19 @@ export function AgentPanel({
 				onSubmit={sendMessage}
 				aria-busy={running}
 			>
+				{chatContext ? (
+					<div className="chat-context-indicator">
+						<span className="context-label">Context</span>
+						<span className="context-text">{chatContext}</span>
+						<button
+							type="button"
+							className="quiet-action compact-action"
+							onClick={() => onChatContextCleared?.()}
+						>
+							Clear
+						</button>
+					</div>
+				) : null}
 				<label htmlFor="course-agent-message">Message the Course Agent</label>
 				<textarea
 					id="course-agent-message"

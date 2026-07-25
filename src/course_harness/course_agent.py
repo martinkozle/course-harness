@@ -19,6 +19,16 @@ from course_harness.course_plan import (
     read_course_plan,
     write_course_plan,
 )
+from course_harness.presentation import (
+    SLIDE_CLASSES_BY_LAYOUT,
+    Presentation,
+    Slide,
+    SlideCitation,
+    list_presentations,
+    read_presentation_for_lecture,
+    slide_by_id,
+    write_presentation,
+)
 from course_harness.sources import Source, SourcesIndex
 
 
@@ -47,9 +57,41 @@ class ReplaceCoursePlanCommand(BaseModel):
     replace_all_lectures: bool = False
 
 
+class SlideCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    id: str | None = Field(default=None, pattern=r"^slide-[0-9a-f]{12}$")
+    layout: str = Field(min_length=1)
+    title: str | None = None
+    speaker_notes: str | None = None
+    purpose: str | None = None
+    citations: list[SlideCitation] = Field(default_factory=list)
+    subtitle: str | None = None
+    bullets: list[str] | None = None
+    left_content: str | None = None
+    right_content: str | None = None
+    statement: str | None = None
+    text: str | None = None
+    code: str | None = None
+    language: str | None = None
+    image_url: str | None = None
+    caption: str | None = None
+    quote: str | None = None
+    attribution: str | None = None
+
+
+class ReplacePresentationCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    lecture_id: str = Field(min_length=1)
+    slides: list[SlideCommand] = Field(min_length=1)
+    replace_all_slides: bool = False
+
+
 class CourseAgentState(BaseModel):
     course: CoursePlan | None = None
     sources: list[Source] = Field(default_factory=list)
+    presentations: list[Presentation] = Field(default_factory=list)
 
 
 @dataclass
@@ -126,7 +168,106 @@ def apply_course_plan_command(workspace: Path, command: ReplaceCoursePlanCommand
     return updated
 
 
+def apply_presentation_command(
+    workspace: Path,
+    command: ReplacePresentationCommand,
+    course_plan: CoursePlan,
+) -> Presentation:
+    from uuid import uuid4  # noqa: PLC0415
+
+    lecture = next((lec for lec in course_plan.lectures if lec.id == command.lecture_id), None)
+    if lecture is None:
+        raise ValueError(f"Lecture does not exist in this Course Plan: {command.lecture_id}")
+
+    existing = read_presentation_for_lecture(workspace, command.lecture_id)
+
+    if existing is None:
+        presentation = Presentation(
+            id=f"presentation-{uuid4().hex[:12]}",
+            lecture_id=command.lecture_id,
+            slides=[],
+        )
+    else:
+        presentation = existing
+
+    existing_by_id: dict[str, Slide] = {slide.id: slide for slide in presentation.slides}
+    supplied_existing_ids = {
+        cmd.id for cmd in command.slides if cmd.id is not None and cmd.id in existing_by_id
+    }
+    if presentation.slides and not supplied_existing_ids and not command.replace_all_slides:
+        raise ValueError(
+            "Revising a Presentation must preserve existing Slide IDs. Set "
+            "replace_all_slides only when the Course Author explicitly approves replacing them."
+        )
+
+    used_ids: set[str] = set()
+    new_slides: list[Slide] = []
+    for cmd_slide in command.slides:
+        layout = cmd_slide.layout
+        if layout not in SLIDE_CLASSES_BY_LAYOUT:
+            raise ValueError(f"Unknown slide layout: {layout}")
+        identity = cmd_slide.id
+        if identity is not None and identity not in existing_by_id:
+            raise ValueError(f"Slide ID does not exist in this Presentation: {identity}")
+        if identity is not None and identity in used_ids:
+            raise ValueError(f"Slide ID cannot be used more than once: {identity}")
+        identity = identity or f"slide-{uuid4().hex[:12]}"
+        used_ids.add(identity)
+
+        cls = SLIDE_CLASSES_BY_LAYOUT[layout]
+        fields = {
+            "title": cmd_slide.title,
+            "speaker_notes": cmd_slide.speaker_notes,
+            "purpose": cmd_slide.purpose,
+            "citations": cmd_slide.citations,
+        }
+        if layout == "title":
+            fields["subtitle"] = cmd_slide.subtitle
+        elif layout == "bullets":
+            fields["bullets"] = cmd_slide.bullets or []
+        elif layout == "two_column":
+            fields["left_content"] = cmd_slide.left_content or ""
+            fields["right_content"] = cmd_slide.right_content or ""
+        elif layout == "big_statement":
+            fields["statement"] = cmd_slide.statement or ""
+        elif layout == "closing":
+            fields["text"] = cmd_slide.text or ""
+        elif layout == "code":
+            fields["code"] = cmd_slide.code or ""
+            fields["language"] = cmd_slide.language
+        elif layout == "image":
+            fields["image_url"] = cmd_slide.image_url
+            fields["caption"] = cmd_slide.caption
+        elif layout == "quote":
+            fields["quote"] = cmd_slide.quote or ""
+            fields["attribution"] = cmd_slide.attribution
+
+        model_fields = cls.model_fields  # type: ignore
+        filtered = {k: v for k, v in fields.items() if k in model_fields}
+        new_slides.append(cls(id=identity, **filtered))
+
+    presentation.slides = new_slides
+    write_presentation(workspace, presentation)
+
+    if lecture.presentation_id != presentation.id:
+        updated_lectures = [
+            lec.model_copy(update={"presentation_id": presentation.id})
+            if lec.id == lecture.id
+            else lec
+            for lec in course_plan.lectures
+        ]
+        updated_plan = course_plan.model_copy(update={"lectures": updated_lectures})
+        write_course_plan(workspace, updated_plan)
+
+    return presentation
+
+
 def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, str]:
+    import json as _json_mod_inner
+
+    def json_str(data: object) -> str:
+        return _json_mod_inner.dumps(data, indent=2)
+
     agent = Agent(
         deps_type=CourseAgentDeps,
         name="course-agent",
@@ -142,7 +283,20 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             "examine specific material. Reference Sources by their source_id when citing "
             "evidence. Never fabricate or guess source IDs — always confirm them through "
             "list_sources. Use admit_source only when the Course Author asks to promote a "
-            "Library Resource to a Course Source."
+            "Library Resource to a Course Source.\n\n"
+            "You can author Presentations for any Lecture. Use list_slides to see the current "
+            "state and replace_presentation to create or revise slides. Start with skeleton "
+            "outlines (layout, title, purpose for each slide) and fill in content progressively "
+            "as the Course Author gives direction. Nine slide layouts are available: title, "
+            "section, bullets, two_column, big_statement, closing, code, image, quote. "
+            "Every content slide should include citations linking back to Course Sources. "
+            "Use read_slide to review specific slide details before revising. "
+            "Preserve existing Slide IDs when revising unless the Course Author explicitly "
+            "asks to replace all slides. Slide titles should be concise (1-6 words).\n\n"
+            "Authoring workflow: 1) Create the Lecture spine with replace_course_plan, "
+            "2) Gather and admit relevant Sources, 3) Create skeleton slide outlines with "
+            "replace_presentation, 4) Progressively fill content, speaker notes, and citations "
+            "as the Course Author reviews each iteration."
         ),
     )
 
@@ -354,6 +508,130 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
                     content={
                         "title": f"Source admitted: {source.label}",
                         "detail": f"Pinned version {source.source_version_id[:12]}",
+                    },
+                ),
+                StateSnapshotEvent(
+                    type=EventType.STATE_SNAPSHOT,
+                    snapshot=ctx.deps.course_state.model_dump(mode="json"),
+                ),
+            ],
+        )
+
+    @agent.instructions
+    async def current_presentations(ctx: RunContext[CourseAgentDeps]) -> str:
+        pres = ctx.deps.course_state.presentations
+        if not pres:
+            return (
+                "No Presentations have been authored yet. Use replace_presentation to create "
+                "slide outlines for any Lecture. Start with skeleton slides (layout, title, "
+                "purpose) and fill in content progressively."
+            )
+        lines = ["Current Presentations:"]
+        for p in pres:
+            lines.append(f"Lecture {p.lecture_id}: {len(p.slides)} slides ({p.id})")
+            for s in p.slides:
+                sid = s.id if hasattr(s, "id") else "?"
+                layout = s.layout if hasattr(s, "layout") else "?"
+                title = s.title if hasattr(s, "title") and s.title else "(no title)"
+                lines.append(f"  {sid} [{layout}] {title}")
+        return "\n".join(lines)
+
+    @agent.tool
+    async def list_slides(ctx: RunContext[CourseAgentDeps], lecture_id: str) -> ToolReturn:
+        """List all slides in a Presentation for a specific lecture."""
+        pres = read_presentation_for_lecture(ctx.deps.workspace, lecture_id)
+        if pres is None:
+            return ToolReturn(
+                return_value=(
+                    f"No Presentation exists for lecture {lecture_id}. "
+                    "Use replace_presentation to create one."
+                )
+            )
+        lines = [f"Presentation for lecture {lecture_id} ({pres.id}):"]
+        for i, slide in enumerate(pres.slides):
+            sid = slide.id if hasattr(slide, "id") else "?"
+            layout = slide.layout if hasattr(slide, "layout") else "?"
+            title = slide.title if hasattr(slide, "title") and slide.title else "(no title)"
+            purpose = slide.purpose if hasattr(slide, "purpose") and slide.purpose else ""
+            lines.append(f"  {i + 1}. {sid} [{layout}] {title}")
+            if purpose:
+                lines.append(f"     Purpose: {purpose}")
+        return ToolReturn(
+            return_value="\n".join(lines),
+            metadata=[
+                ActivitySnapshotEvent(
+                    type=EventType.ACTIVITY_SNAPSHOT,
+                    message_id=f"slides-list-{lecture_id}",
+                    activity_type="slides-list",
+                    content={
+                        "title": "Slides listed",
+                        "detail": f"Found {len(pres.slides)} slides for lecture {lecture_id}",
+                    },
+                ),
+            ],
+        )
+
+    @agent.tool
+    async def read_slide(ctx: RunContext[CourseAgentDeps], slide_id: str) -> ToolReturn:
+        """Read the full content of a specific slide including speaker notes and citations."""
+        for pres in ctx.deps.course_state.presentations:
+            slide = slide_by_id(pres, slide_id)
+            if slide is not None:
+                data = slide.model_dump(mode="json")
+                return ToolReturn(
+                    return_value=f"Slide {slide_id}:\n{json_str(data)}",
+                    metadata=[
+                        ActivitySnapshotEvent(
+                            type=EventType.ACTIVITY_SNAPSHOT,
+                            message_id=f"slide-read-{slide_id}",
+                            activity_type="slide-read",
+                            content={
+                                "title": f"Read: {slide_id}",
+                                "detail": (f"Slide in presentation {pres.id}"),
+                            },
+                        ),
+                    ],
+                )
+        return ToolReturn(return_value=f"Slide {slide_id} was not found.")
+
+    @agent.tool(requires_approval=requires_approval)
+    async def replace_presentation(
+        ctx: RunContext[CourseAgentDeps], command: ReplacePresentationCommand
+    ) -> ToolReturn:
+        """Replace a Presentation with one validated application command.
+        Nine slide layouts are available: title, section, bullets, two_column,
+        big_statement, closing, code, image, quote.
+        Start with skeleton slides (layout, title, purpose) then progressively
+        fill content. Every content slide should include citations linking back to
+        Course Sources."""
+        if ctx.deps.course_state.course is None:
+            return ToolReturn(return_value="Cannot create a Presentation without a Course Plan.")
+        try:
+            pres = apply_presentation_command(
+                ctx.deps.workspace, command, ctx.deps.course_state.course
+            )
+        except ValueError as error:
+            return ToolReturn(return_value=str(error))
+
+        updated_plan = read_course_plan(ctx.deps.workspace)
+        ctx.deps.course_state = CourseAgentState(
+            course=updated_plan,
+            sources=ctx.deps.course_state.sources,
+            presentations=list_presentations(ctx.deps.workspace),
+        )
+        return ToolReturn(
+            return_value=(
+                f"Presentation for lecture {command.lecture_id} saved with "
+                f"{len(pres.slides)} slides."
+            ),
+            metadata=[
+                ActivitySnapshotEvent(
+                    type=EventType.ACTIVITY_SNAPSHOT,
+                    message_id=f"presentation-{pres.id}",
+                    activity_type="presentation-change",
+                    content={
+                        "title": "Presentation updated",
+                        "detail": f"Saved {len(pres.slides)} slides to {pres.id}.yaml",
                     },
                 ),
                 StateSnapshotEvent(

@@ -289,6 +289,7 @@ async def test_renaming_a_lecture_preserves_its_identity(tmp_path: Path) -> None
         "title": "Fairness in context",
         "group": None,
         "source_focus": None,
+        "presentation_id": None,
     }
 
     reopened_transport = httpx2.ASGITransport(app=create_app(workspace))

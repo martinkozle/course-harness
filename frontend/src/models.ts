@@ -98,3 +98,56 @@ export type DiscoveryResult = {
 	candidates: Candidate[];
 	error: string | null;
 };
+
+export type SlideLayout =
+	| "title"
+	| "section"
+	| "bullets"
+	| "two_column"
+	| "big_statement"
+	| "closing"
+	| "code"
+	| "image"
+	| "quote";
+
+export type SlideCitation = {
+	source_id: string;
+	label: string;
+	url?: string;
+	line_start?: number;
+	line_end?: number;
+};
+
+export type Slide = {
+	id: string;
+	layout: SlideLayout;
+	title?: string;
+	subtitle?: string;
+	bullets?: string[];
+	left_content?: string;
+	right_content?: string;
+	statement?: string;
+	text?: string;
+	code?: string;
+	language?: string;
+	image_url?: string;
+	caption?: string;
+	quote?: string;
+	attribution?: string;
+	speaker_notes?: string;
+	purpose?: string;
+	citations: SlideCitation[];
+};
+
+export type Presentation = {
+	schema_version: 1;
+	id: string;
+	lecture_id: string;
+	slides: Slide[];
+};
+
+export type PresentationSummary = {
+	id: string;
+	lecture_id: string;
+	slide_count: number;
+};

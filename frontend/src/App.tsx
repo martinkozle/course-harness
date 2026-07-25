@@ -4,8 +4,9 @@ import { AgentPanel, type ChatMessage, type CoursePlan } from "./AgentPanel";
 import type { AgentInterrupt } from "./agentStream";
 import { responseError } from "./api";
 import { LibraryView } from "./LibraryView";
-import type { ModelCatalog, ResourceState, Source } from "./models";
+import type { ModelCatalog, PresentationSummary, ResourceState, Source } from "./models";
 import { ModelsView } from "./ProviderSetup";
+import { PresentationView } from "./PresentationView";
 
 type Workspace = {
 	name: string;
@@ -37,7 +38,7 @@ type CourseRequest = {
 	lectures: { title: string }[];
 };
 
-type WorkspaceView = "course" | "files" | "models" | "library";
+type WorkspaceView = "course" | "files" | "models" | "library" | "presentations";
 
 type SectionLink = {
 	id: WorkspaceView;
@@ -228,7 +229,9 @@ function WorkspaceShell({
 											? "FL"
 											: section.id === "library"
 												? "LB"
-												: "MD"}
+												: section.id === "presentations"
+													? "PR"
+													: "MD"}
 								</span>
 								{section.label}
 							</button>
@@ -708,6 +711,7 @@ function FilesView({
 
 const workspaceViews: SectionLink[] = [
 	{ id: "course", label: "Course Plan" },
+	{ id: "presentations", label: "Presentations" },
 	{ id: "files", label: "Files" },
 	{ id: "library", label: "Library" },
 	{ id: "models", label: "Models" },
@@ -729,9 +733,11 @@ export function App() {
 	});
 	const [resources, setResources] = useState<ResourceState[]>([]);
 	const [sources, setSources] = useState<Source[]>([]);
+	const [presentations, setPresentations] = useState<PresentationSummary[]>([]);
 	const [activeView, setActiveView] = useState<WorkspaceView>("course");
 	const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 	const [chatApproval, setChatApproval] = useState<AgentInterrupt | null>(null);
+	const [chatContext, setChatContext] = useState<string | null>(null);
 	const [agentRunning, setAgentRunning] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -749,6 +755,7 @@ export function App() {
 				chatResponse,
 				resourcesResponse,
 				sourcesResponse,
+				presentationsResponse,
 			] = await Promise.all([
 				fetch("/api/course", { signal }),
 				fetch("/api/workspace/files", { signal }),
@@ -756,6 +763,7 @@ export function App() {
 				fetch("/api/chat", { signal }),
 				fetch("/api/resources", { signal }),
 				fetch("/api/sources", { signal }),
+				fetch("/api/presentations", { signal }),
 			]);
 			if (courseResponse.status === 404) {
 				setCourse(null);
@@ -787,6 +795,11 @@ export function App() {
 			}
 			if (sourcesResponse.ok) {
 				setSources((await sourcesResponse.json()) as Source[]);
+			}
+			if (presentationsResponse.ok) {
+				setPresentations(
+					(await presentationsResponse.json()) as PresentationSummary[],
+				);
 			}
 		},
 		[],
@@ -897,6 +910,13 @@ export function App() {
 				setFiles((await filesResponse.json()) as WorkspaceEntry[]);
 			}
 		}, "The Course could not be created.");
+	}
+
+	async function refreshPresentations() {
+		const response = await fetch("/api/presentations");
+		if (response.ok) {
+			setPresentations((await response.json()) as PresentationSummary[]);
+		}
 	}
 
 	async function saveLectureChanges(drafts: LectureDraft[]): Promise<boolean> {
@@ -1034,6 +1054,9 @@ export function App() {
 								setFiles((await filesResponse.json()) as WorkspaceEntry[]);
 							}
 						}}
+						onPresentationsChange={refreshPresentations}
+						chatContext={chatContext}
+						onChatContextCleared={() => setChatContext(null)}
 					/>
 				}
 			>
@@ -1048,6 +1071,14 @@ export function App() {
 					/>
 				) : activeView === "files" ? (
 					<FilesView workspace={workspace} files={files} />
+				) : activeView === "presentations" && course ? (
+					<PresentationView
+						course={course}
+						busy={busy || agentRunning}
+						presentations={presentations}
+						onChange={refreshPresentations}
+						onChatContext={setChatContext}
+					/>
 				) : course === undefined && error ? (
 					<CourseReadError
 						workspace={workspace}

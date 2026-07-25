@@ -36,6 +36,7 @@ class Lecture(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     group: str | None = Field(default=None, min_length=1, max_length=100)
     source_focus: list[str] | None = Field(default=None)
+    presentation_id: str | None = Field(default=None)
 
 
 class CoursePlan(BaseModel):
