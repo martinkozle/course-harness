@@ -48,9 +48,10 @@ from course_harness.course_plan import (
 )
 from course_harness.presentation import (
     Presentation,
-    SlideArchiveRequest,
+    Slide,
     SlideCitation,
     SlideOrderRequest,
+    SlidePatchRequest,
     delete_presentation_file,
     list_presentations,
     read_presentation_for_lecture,
@@ -725,8 +726,8 @@ def create_app(
             return Response(status_code=204)
 
     @app.patch("/api/presentations/{lecture_id}/slides/{slide_id}", response_model=Presentation)
-    async def api_archive_slide(
-        lecture_id: str, slide_id: str, request: SlideArchiveRequest
+    async def api_patch_slide(
+        lecture_id: str, slide_id: str, request: SlidePatchRequest
     ) -> Presentation:
         active, plan = require_course_plan()
         async with exclusive_mutation(active):
@@ -740,19 +741,60 @@ def create_app(
             if existing is None:
                 raise HTTPException(status_code=404, detail="Slide was not found")
 
-            updated_slide = existing.model_copy(update={"archived": request.archived})
-            if request.archived:
+            update: dict[str, object] = {}
+            valid_fields = set(type(existing).model_fields.keys())
+            if request.title is not None and "title" in valid_fields:
+                update["title"] = request.title
+            if request.speaker_notes is not None and "speaker_notes" in valid_fields:
+                update["speaker_notes"] = request.speaker_notes
+            if request.purpose is not None and "purpose" in valid_fields:
+                update["purpose"] = request.purpose
+            if request.citations is not None and "citations" in valid_fields:
+                update["citations"] = request.citations
+            if request.subtitle is not None and "subtitle" in valid_fields:
+                update["subtitle"] = request.subtitle
+            if request.bullets is not None and "bullets" in valid_fields:
+                update["bullets"] = request.bullets
+            if request.left_content is not None and "left_content" in valid_fields:
+                update["left_content"] = request.left_content
+            if request.right_content is not None and "right_content" in valid_fields:
+                update["right_content"] = request.right_content
+            if request.statement is not None and "statement" in valid_fields:
+                update["statement"] = request.statement
+            if request.text is not None and "text" in valid_fields:
+                update["text"] = request.text
+            if request.code is not None and "code" in valid_fields:
+                update["code"] = request.code
+            if request.language is not None and "language" in valid_fields:
+                update["language"] = request.language
+            if request.image_url is not None and "image_url" in valid_fields:
+                update["image_url"] = request.image_url
+            if request.caption is not None and "caption" in valid_fields:
+                update["caption"] = request.caption
+            if request.quote is not None and "quote" in valid_fields:
+                update["quote"] = request.quote
+            if request.attribution is not None and "attribution" in valid_fields:
+                update["attribution"] = request.attribution
+
+            updated_slide = existing.model_copy(update=update)
+            if request.archived is not None and request.archived != existing.archived:
+                updated_slide = updated_slide.model_copy(update={"archived": request.archived})
+
+            reordered: list[Slide]
+            if request.archived is True and not existing.archived:
                 reordered = (
                     [s for s in pres.slides if s.id != slide_id and not s.archived]
                     + [s for s in pres.slides if s.id != slide_id and s.archived]
                     + [updated_slide]
+                )
+            elif request.archived is False and existing.archived:
+                reordered = (
+                    [s for s in pres.slides if s.id != slide_id and not s.archived]
+                    + [updated_slide]
+                    + [s for s in pres.slides if s.id != slide_id and s.archived]
                 )
             else:
-                reordered = (
-                    [s for s in pres.slides if s.id != slide_id and not s.archived]
-                    + [updated_slide]
-                    + [s for s in pres.slides if s.id != slide_id and s.archived]
-                )
+                reordered = [s if s.id != slide_id else updated_slide for s in pres.slides]
             updated = pres.model_copy(update={"slides": reordered})
             write_presentation(active, updated)
             return updated

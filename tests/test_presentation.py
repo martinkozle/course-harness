@@ -12,7 +12,9 @@ from course_harness.course_plan import (
     initialize_workspace_history,
 )
 from course_harness.presentation import (
+    BulletsSlide,
     Presentation,
+    TitleSlide,
     read_presentation_for_lecture,
 )
 
@@ -519,3 +521,126 @@ async def test_archived_survives_replan(tmp_path: Path) -> None:
     assert active_slides[0].title == "Revised active slide"
     assert len(archived_slides) == 1
     assert archived_slides[0].id == "slide-aaa000000001"
+
+
+@pytest.mark.anyio
+async def test_patch_slide_content(tmp_path: Path) -> None:
+    workspace = tmp_path / "test-course"
+    workspace.mkdir()
+    plan = create_course_plan(
+        CoursePlanInput(
+            title="Test Course",
+            audience="Test",
+            lectures=[LectureInput(title="Lecture 1")],
+        )
+    )
+    initialize_workspace_history(workspace)
+    create_course_plan_file(workspace, plan)
+
+    transport = httpx2.ASGITransport(app=create_app(workspace))
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        create = await client.post(
+            f"/api/presentations/{plan.lectures[0].id}",
+            json={
+                "slides": [
+                    {"layout": "title", "title": "Original"},
+                    {"layout": "bullets", "title": "Bullets", "bullets": ["A", "B"]},
+                ]
+            },
+        )
+        assert create.status_code == 201
+        pres = Presentation.model_validate(create.json())
+        bullets_id = pres.slides[1].id
+
+        patch = await client.patch(
+            f"/api/presentations/{plan.lectures[0].id}/slides/{bullets_id}",
+            json={"title": "Updated", "bullets": ["X", "Y", "Z"], "speaker_notes": "Reminders"},
+        )
+        assert patch.status_code == 200
+        updated = Presentation.model_validate(patch.json())
+        slide2 = updated.slides[1]
+        assert slide2.title == "Updated"
+        assert isinstance(slide2, BulletsSlide)
+        assert slide2.bullets == ["X", "Y", "Z"]
+        assert slide2.speaker_notes == "Reminders"
+
+        slide1 = updated.slides[0]
+        assert slide1.title == "Original"
+
+
+@pytest.mark.anyio
+async def test_patch_slide_archive_and_content(tmp_path: Path) -> None:
+    workspace = tmp_path / "test-course"
+    workspace.mkdir()
+    plan = create_course_plan(
+        CoursePlanInput(
+            title="Test Course",
+            audience="Test",
+            lectures=[LectureInput(title="Lecture 1")],
+        )
+    )
+    initialize_workspace_history(workspace)
+    create_course_plan_file(workspace, plan)
+
+    transport = httpx2.ASGITransport(app=create_app(workspace))
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        create = await client.post(
+            f"/api/presentations/{plan.lectures[0].id}",
+            json={
+                "slides": [
+                    {"layout": "title", "title": "First"},
+                    {"layout": "bullets", "title": "Second", "bullets": ["A"]},
+                ]
+            },
+        )
+        assert create.status_code == 201
+        pres = Presentation.model_validate(create.json())
+        middle_id = pres.slides[1].id
+
+        patch = await client.patch(
+            f"/api/presentations/{plan.lectures[0].id}/slides/{middle_id}",
+            json={"title": "Renamed", "archived": True},
+        )
+        assert patch.status_code == 200
+        updated = Presentation.model_validate(patch.json())
+        archived_slides = [s for s in updated.slides if s.archived]
+        assert len(archived_slides) == 1
+        assert archived_slides[0].title == "Renamed"
+
+
+@pytest.mark.anyio
+async def test_patch_slide_ignores_cross_layout_fields(tmp_path: Path) -> None:
+    workspace = tmp_path / "test-course"
+    workspace.mkdir()
+    plan = create_course_plan(
+        CoursePlanInput(
+            title="Test Course",
+            audience="Test",
+            lectures=[LectureInput(title="Lecture 1")],
+        )
+    )
+    initialize_workspace_history(workspace)
+    create_course_plan_file(workspace, plan)
+
+    transport = httpx2.ASGITransport(app=create_app(workspace))
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        create = await client.post(
+            f"/api/presentations/{plan.lectures[0].id}",
+            json={
+                "slides": [
+                    {"layout": "title", "title": "Title only"},
+                ]
+            },
+        )
+        assert create.status_code == 201
+        pres = Presentation.model_validate(create.json())
+        slide_id = pres.slides[0].id
+
+        patch = await client.patch(
+            f"/api/presentations/{plan.lectures[0].id}/slides/{slide_id}",
+            json={"bullets": ["Not valid for title slides"], "title": "Still works"},
+        )
+        assert patch.status_code == 200
+        updated = Presentation.model_validate(patch.json())
+        assert updated.slides[0].title == "Still works"
+        assert isinstance(updated.slides[0], TitleSlide)

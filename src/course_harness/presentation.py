@@ -284,6 +284,28 @@ class SlideArchiveRequest(BaseModel):
     archived: bool
 
 
+class SlidePatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = None
+    speaker_notes: str | None = None
+    purpose: str | None = None
+    citations: list[SlideCitation] | None = None
+    archived: bool | None = None
+    subtitle: str | None = None
+    bullets: list[str] | None = None
+    left_content: str | None = None
+    right_content: str | None = None
+    statement: str | None = None
+    text: str | None = None
+    code: str | None = None
+    language: str | None = None
+    image_url: str | None = None
+    caption: str | None = None
+    quote: str | None = None
+    attribution: str | None = None
+
+
 class SlideOrderRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
