@@ -73,16 +73,6 @@ def export_presentation(presentation: Presentation) -> bytes:
     return buffer.getvalue()
 
 
-def _content_placeholders(pptx_slide):
-    placeholders = []
-    for shape in pptx_slide.placeholders:
-        ph = shape.placeholder_format
-        if ph.type in (TITLE_PH, SUBTITLE_PH, BODY_PH, OBJECT_PH):
-            placeholders.append(shape)
-    placeholders.sort(key=lambda s: s.placeholder_format.idx)
-    return placeholders
-
-
 def _ph_by_idx(pptx_slide, idx: int):
     for shape in pptx_slide.placeholders:
         if shape.placeholder_format.idx == idx:
@@ -121,7 +111,7 @@ def _populate_section_slide(slide: SectionSlide, pptx_slide) -> None:
     subtitle_ph = _ph_by_idx(pptx_slide, 1)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
-    if subtitle_ph and slide.title:
+    if subtitle_ph:
         subtitle_ph.text_frame.text = ""
 
 

@@ -15,25 +15,9 @@ from course_harness.course_plan import (
     create_course_plan_file,
     initialize_workspace_history,
 )
-from course_harness.presentation import (
-    Presentation,
-)
 
 
-def _create_presentation(workspace: Path, lecture_id: str, slides: list[dict]) -> Presentation:
-    plan = create_course_plan(
-        CoursePlanInput(
-            title="Export Test",
-            audience="Test",
-            lectures=[LectureInput(title="L1")],
-        )
-    )
-    initialize_workspace_history(workspace)
-    create_course_plan_file(workspace, plan)
-    return _build_presentation(workspace, lecture_id, slides)
-
-
-def _build_presentation(workspace: Path, lecture_id: str, slides: list[dict]) -> Presentation:
+def _build_presentation(workspace: Path, lecture_id: str, slides: list[dict]):
     from course_harness.presentation import SLIDE_CLASSES_BY_LAYOUT, write_presentation
     from course_harness.presentation import Presentation as PresModel
 
