@@ -299,6 +299,7 @@ def render_calibration(
 
 
 def _render_single_slide(cal_dir: Path, slide_name: str, pptx_bytes: bytes) -> None:
+    import shutil
     import subprocess
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -329,7 +330,7 @@ def _render_single_slide(cal_dir: Path, slide_name: str, pptx_bytes: bytes) -> N
             raise RuntimeError(f"No PNG output for {slide_name}")
 
         target = cal_dir / f"{slide_name}.png"
-        rendered[0].rename(target)
+        shutil.move(str(rendered[0]), str(target))
 
 
 def _render_builtin_calibration(profile: TemplateProfile) -> list[CalibrationSlide]:

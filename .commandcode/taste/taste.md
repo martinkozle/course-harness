@@ -28,6 +28,9 @@
 
 # course-harness
 See [course-harness/taste.md](course-harness/taste.md)
+# python
+- Use `shutil.move()` instead of `Path.rename()` when moving files across temporary and persistent directories, since `/tmp` is often on a different filesystem and `os.rename()` fails with `OSError: Invalid cross-device link`. Confidence: 0.75
+
 # debugging
 - Set up FastAPI logging so API errors (422, 500, etc.) produce visible server-side logs with request details, not just silent HTTP status codes. Confidence: 0.60
 
