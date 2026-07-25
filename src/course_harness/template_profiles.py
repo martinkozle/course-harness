@@ -396,6 +396,7 @@ def _generate_calibration_slides(
         layouts = prs.slide_layouts
         if idx >= len(layouts):
             continue
+        _delete_all_slides(prs)
         slide_layout = layouts[idx]
         slide = prs.slides.add_slide(slide_layout)
 
@@ -422,6 +423,16 @@ def _generate_calibration_slides(
         slides.append((semantic, idx, buffer.getvalue()))
 
     return slides
+
+
+def _delete_all_slides(prs) -> None:
+    ns = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+    sldIdLst = prs.slides._sldIdLst
+    while len(sldIdLst) > 0:
+        rId = sldIdLst[0].get(ns)
+        if rId is not None:
+            prs.part.drop_rel(rId)
+        sldIdLst.remove(sldIdLst[0])
 
 
 def _calibration_meta_matches(cal_dir: Path, profile: TemplateProfile) -> bool:
