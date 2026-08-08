@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pptx import Presentation as PPTXPresentation
+from pptx.enum.shapes import PP_PLACEHOLDER
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
@@ -37,11 +39,6 @@ DEFAULT_LAYOUT_MAPPING: dict[str, int] = {
     "quote": 1,
 }
 
-TITLE_PH = 1
-BODY_PH = 2
-SUBTITLE_PH = 4
-OBJECT_PH = 7
-
 CITATION_FONT_SIZE = Pt(9)
 CITATION_BOX_HEIGHT = Inches(0.45)
 CITATION_BOX_TOP = Inches(7.0)
@@ -64,6 +61,13 @@ def export_presentation(
 
     if template_path is not None and template_path.exists():
         prs = PPTXPresentation(str(template_path))
+        ns = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+        sldIdLst = prs.slides._sldIdLst
+        while len(sldIdLst) > 0:
+            rId = sldIdLst[0].get(ns)
+            if rId is not None:
+                prs.part.drop_rel(rId)
+            sldIdLst.remove(sldIdLst[0])
     else:
         prs = PPTXPresentation()
 
@@ -91,11 +95,33 @@ def export_presentation(
     return buffer.getvalue()
 
 
-def _ph_by_idx(pptx_slide, idx: int):
+_TITLE_LIKE_TYPES = {PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE}
+_CONTENT_LIKE_TYPES = {PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.OBJECT}
+
+
+def _find_ph_of_type(pptx_slide, ph_types):
     for shape in pptx_slide.placeholders:
-        if shape.placeholder_format.idx == idx:
+        if shape.placeholder_format.type in ph_types:
             return shape
     return None
+
+
+def _find_title_ph(pptx_slide):
+    return _find_ph_of_type(pptx_slide, _TITLE_LIKE_TYPES)
+
+
+def _find_body_ph(pptx_slide):
+    return _find_ph_of_type(pptx_slide, {PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.OBJECT})
+
+
+def _find_subtitle_ph(pptx_slide):
+    return _find_ph_of_type(pptx_slide, {PP_PLACEHOLDER.SUBTITLE})
+
+
+def _find_content_phs(pptx_slide):
+    phs = [s for s in pptx_slide.placeholders if s.placeholder_format.type in _CONTENT_LIKE_TYPES]
+    phs.sort(key=lambda s: s.placeholder_format.idx)
+    return phs
 
 
 def _populate_slide(slide, pptx_slide) -> None:
@@ -116,8 +142,8 @@ def _populate_slide(slide, pptx_slide) -> None:
 
 
 def _populate_title_slide(slide: TitleSlide, pptx_slide) -> None:
-    title_ph = _ph_by_idx(pptx_slide, 0)
-    subtitle_ph = _ph_by_idx(pptx_slide, 1)
+    title_ph = _find_title_ph(pptx_slide)
+    subtitle_ph = _find_subtitle_ph(pptx_slide) or _find_body_ph(pptx_slide)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     if subtitle_ph and slide.subtitle:
@@ -125,17 +151,14 @@ def _populate_title_slide(slide: TitleSlide, pptx_slide) -> None:
 
 
 def _populate_section_slide(slide: SectionSlide, pptx_slide) -> None:
-    title_ph = _ph_by_idx(pptx_slide, 0)
-    subtitle_ph = _ph_by_idx(pptx_slide, 1)
+    title_ph = _find_title_ph(pptx_slide)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
-    if subtitle_ph:
-        subtitle_ph.text_frame.text = ""
 
 
 def _populate_bullets_slide(slide: BulletsSlide, pptx_slide) -> None:
-    title_ph = _ph_by_idx(pptx_slide, 0)
-    body_ph = _ph_by_idx(pptx_slide, 1)
+    title_ph = _find_title_ph(pptx_slide)
+    body_ph = _find_body_ph(pptx_slide)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     if body_ph and slide.bullets:
@@ -148,19 +171,42 @@ def _populate_bullets_slide(slide: BulletsSlide, pptx_slide) -> None:
 
 
 def _populate_two_column_slide(slide: TwoColumnSlide, pptx_slide) -> None:
-    title_ph = _ph_by_idx(pptx_slide, 0)
+    title_ph = _find_title_ph(pptx_slide)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
-    phs = [s for s in pptx_slide.placeholders if s.placeholder_format.type in (BODY_PH, OBJECT_PH)]
-    phs.sort(key=lambda s: s.placeholder_format.idx)
-    if len(phs) >= 1 and slide.left_content:
-        phs[0].text_frame.text = slide.left_content
-    if len(phs) >= 2 and slide.right_content:
-        phs[1].text_frame.text = slide.right_content
+    phs = [s for s in pptx_slide.placeholders if s.placeholder_format.type in _CONTENT_LIKE_TYPES]
+    phs.sort(key=lambda s: (s.left, s.top))
+    groups: list[list] = []
+    for ph in phs:
+        if not groups or abs(ph.left - groups[-1][0].left) > 500000:
+            groups.append([ph])
+        else:
+            groups[-1].append(ph)
+
+    for i, group in enumerate(groups):
+        content = slide.left_content if i == 0 else slide.right_content
+        if not content:
+            for ph in group:
+                ph.text_frame.text = ""
+            continue
+        lines = content.strip().split("\n")
+        heading = lines[0]
+        body = "\n".join(lines[1:]) if len(lines) > 1 else ""
+        for j, ph in enumerate(group):
+            if j == 0:
+                ph.text_frame.text = heading
+            elif body:
+                tf = ph.text_frame
+                tf.clear()
+                for k, line in enumerate(body.split("\n")):
+                    p = tf.paragraphs[0] if k == 0 else tf.add_paragraph()
+                    p.text = line
+            else:
+                ph.text_frame.text = ""
 
 
 def _populate_big_statement_slide(slide: BigStatementSlide, pptx_slide) -> None:
-    title_ph = _ph_by_idx(pptx_slide, 0)
+    title_ph = _find_title_ph(pptx_slide)
     if title_ph and slide.statement:
         title_ph.text_frame.text = slide.statement
         for paragraph in title_ph.text_frame.paragraphs:
@@ -168,8 +214,8 @@ def _populate_big_statement_slide(slide: BigStatementSlide, pptx_slide) -> None:
 
 
 def _populate_closing_slide(slide: ClosingSlide, pptx_slide) -> None:
-    title_ph = _ph_by_idx(pptx_slide, 0)
-    subtitle_ph = _ph_by_idx(pptx_slide, 1)
+    title_ph = _find_title_ph(pptx_slide)
+    subtitle_ph = _find_subtitle_ph(pptx_slide) or _find_body_ph(pptx_slide)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     if subtitle_ph and slide.text:
@@ -177,8 +223,8 @@ def _populate_closing_slide(slide: ClosingSlide, pptx_slide) -> None:
 
 
 def _populate_code_slide(slide: CodeSlide, pptx_slide) -> None:
-    title_ph = _ph_by_idx(pptx_slide, 0)
-    body_ph = _ph_by_idx(pptx_slide, 1)
+    title_ph = _find_title_ph(pptx_slide)
+    body_ph = _find_body_ph(pptx_slide)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     if body_ph and slide.code:
@@ -195,11 +241,10 @@ def _populate_code_slide(slide: CodeSlide, pptx_slide) -> None:
 
 
 def _populate_image_slide(slide: ImageSlide, pptx_slide) -> None:
-    title_ph = _ph_by_idx(pptx_slide, 0)
+    title_ph = _find_title_ph(pptx_slide)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
-    phs = [s for s in pptx_slide.placeholders if s.placeholder_format.type in (BODY_PH, OBJECT_PH)]
-    phs.sort(key=lambda s: s.placeholder_format.idx)
+    phs = _find_content_phs(pptx_slide)
     if phs and slide.caption:
         phs[0].text_frame.text = slide.caption
     elif phs and slide.image_url:
@@ -207,8 +252,8 @@ def _populate_image_slide(slide: ImageSlide, pptx_slide) -> None:
 
 
 def _populate_quote_slide(slide: QuoteSlide, pptx_slide) -> None:
-    title_ph = _ph_by_idx(pptx_slide, 0)
-    body_ph = _ph_by_idx(pptx_slide, 1)
+    title_ph = _find_title_ph(pptx_slide)
+    body_ph = _find_body_ph(pptx_slide)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     if body_ph:
@@ -282,3 +327,133 @@ def _citation_note_lines(citations: list[SlideCitation]) -> list[str]:
             )
         lines.append(" | ".join(parts))
     return lines
+
+
+PLACEHOLDER_REQUIREMENTS: dict[str, dict[str, str]] = {
+    "title": {"0": "TITLE or CENTER_TITLE"},
+    "section": {"0": "TITLE or CENTER_TITLE"},
+    "bullets": {"0": "TITLE or CENTER_TITLE", "1": "BODY"},
+    "two_column": {"0": "TITLE or CENTER_TITLE"},
+    "big_statement": {},
+    "closing": {"0": "TITLE or CENTER_TITLE"},
+    "code": {"0": "TITLE or CENTER_TITLE", "1": "BODY"},
+    "image": {},
+    "quote": {"0": "TITLE or CENTER_TITLE", "1": "BODY"},
+}
+
+TITLE_LIKE_TYPES = {1, 3}  # TITLE, CENTER_TITLE
+
+
+def validate_export_mapping(
+    profile: TemplateProfile,
+    template_path: Path | None = None,
+) -> list[dict]:
+    issues: list[dict] = []
+    if profile.id == "_builtin-default":
+        return issues
+
+    if template_path is None or not template_path.exists():
+        issues.append({"level": "blocking", "message": "Template file not found"})
+        return issues
+
+    prs = PPTXPresentation(str(template_path))
+    slide_layouts = prs.slide_layouts
+
+    for m in profile.layouts:
+        semantic = m.semantic_layout
+        idx = m.template_layout_index
+        if idx >= len(slide_layouts):
+            issues.append(
+                {
+                    "level": "blocking",
+                    "message": (
+                        f"Layout '{semantic}' maps to index {idx}, "
+                        f"but template only has {len(slide_layouts)} layouts"
+                    ),
+                }
+            )
+            continue
+
+        layout = slide_layouts[idx]
+        ph_by_idx: dict[int, int] = {}
+        for ph in layout.placeholders:
+            with suppress(Exception):
+                ph_by_idx[ph.placeholder_format.idx] = (
+                    int(ph.placeholder_format.type) if ph.placeholder_format.type is not None else 0
+                )
+
+        layout_name = layout.name or f"Layout {idx}"
+        reqs = PLACEHOLDER_REQUIREMENTS.get(semantic, {})
+
+        for ph_idx, ph_desc in reqs.items():
+            idx_int = int(ph_idx)
+            actual = ph_by_idx.get(idx_int)
+            if actual is None:
+                level = "blocking" if ph_desc == "TITLE or CENTER_TITLE" else "warning"
+                issues.append(
+                    {
+                        "level": level,
+                        "message": (
+                            f"'{semantic}' → '{layout_name}' (index {idx}): "
+                            f"missing placeholder idx={ph_idx} (expected {ph_desc})"
+                        ),
+                    }
+                )
+            elif ph_desc == "TITLE or CENTER_TITLE" and actual not in TITLE_LIKE_TYPES:
+                issues.append(
+                    {
+                        "level": "blocking",
+                        "message": (
+                            f"'{semantic}' → '{layout_name}' (index {idx}): "
+                            f"placeholder idx={ph_idx} is type {actual}, "
+                            f"expected {ph_desc}"
+                        ),
+                    }
+                )
+            elif ph_desc == "BODY" and actual != PP_PLACEHOLDER.BODY:
+                issues.append(
+                    {
+                        "level": "warning",
+                        "message": (
+                            f"'{semantic}' → '{layout_name}' (index {idx}): "
+                            f"placeholder idx={ph_idx} is type {actual}, "
+                            f"expected BODY — content may not render correctly"
+                        ),
+                    }
+                )
+
+        if semantic == "two_column":
+            body_obj_phs = [
+                i
+                for i, ph in enumerate(layout.placeholders)
+                if ph.placeholder_format.idx != 0
+                and (ph.placeholder_format.type in (PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.OBJECT))
+            ]
+            if len(body_obj_phs) < 2:
+                issues.append(
+                    {
+                        "level": "warning",
+                        "message": (
+                            f"'{semantic}' → '{layout_name}' (index {idx}): "
+                            f"only {len(body_obj_phs)} content placeholder(s) found, "
+                            f"two_column needs at least 2"
+                        ),
+                    }
+                )
+
+        if semantic == "image":
+            has_pic = any(
+                ph.placeholder_format.type == PP_PLACEHOLDER.PICTURE for ph in layout.placeholders
+            )
+            if not has_pic and 0 not in ph_by_idx:
+                issues.append(
+                    {
+                        "level": "warning",
+                        "message": (
+                            f"'{semantic}' → '{layout_name}' (index {idx}): "
+                            "no PICTURE or TITLE placeholder found"
+                        ),
+                    }
+                )
+
+    return issues

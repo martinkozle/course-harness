@@ -47,7 +47,7 @@ from course_harness.course_plan import (
     read_course_plan,
     write_course_plan,
 )
-from course_harness.export import ExportError, export_presentation
+from course_harness.export import ExportError, export_presentation, validate_export_mapping
 from course_harness.presentation import (
     Presentation,
     Slide,
@@ -88,7 +88,11 @@ from course_harness.providers import (
     validate_provider_account,
     validate_provider_capabilities,
 )
-from course_harness.template_inspect import inspect_template, map_semantic_layouts
+from course_harness.template_inspect import (
+    inspect_template,
+    map_semantic_layouts,
+    suggest_mappings_with_llm,
+)
 from course_harness.workspaces import (
     WorkspaceSelectionError,
     default_recent_store_path,
@@ -861,6 +865,14 @@ def create_app(
         template_file = None
         if resolved_profile.id != tpl.BUILTIN_DEFAULT_ID:
             template_file = tpl.profile_dir(templates_data, resolved_profile.id) / "template.pptx"
+
+        if resolved_profile.id != tpl.BUILTIN_DEFAULT_ID:
+            issues = validate_export_mapping(resolved_profile, template_file)
+            blocking = [i for i in issues if i["level"] == "blocking"]
+            if blocking:
+                errors = "; ".join(i["message"] for i in blocking)
+                raise HTTPException(status_code=422, detail=f"Template validation failed: {errors}")
+
         try:
             pptx_bytes = export_presentation(
                 pres, profile=resolved_profile, template_path=template_file
@@ -1403,6 +1415,55 @@ def create_app(
             content=image_path.read_bytes(),
             media_type="image/png",
         )
+
+    @app.post("/api/templates/{profile_id}/validate")
+    async def api_validate_template(profile_id: str) -> list[dict]:
+        if profile_id == tpl.BUILTIN_DEFAULT_ID:
+            return []
+        profile = tpl.read_profile(templates_data, profile_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Template profile not found")
+        template_file = tpl.profile_dir(templates_data, profile.id) / "template.pptx"
+        return validate_export_mapping(profile, template_file)
+
+    class SuggestMappingsResponse(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        mappings: list[dict]
+
+    @app.post(
+        "/api/templates/{profile_id}/suggest-mappings",
+        response_model=SuggestMappingsResponse,
+    )
+    async def api_suggest_mappings(profile_id: str) -> SuggestMappingsResponse:
+        if profile_id == tpl.BUILTIN_DEFAULT_ID:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot suggest mappings for the built-in default",
+            )
+        profile = tpl.read_profile(templates_data, profile_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Template profile not found")
+        template_file = tpl.profile_dir(templates_data, profile.id) / "template.pptx"
+        inspection = inspect_template(template_file)
+
+        selected_model = resolve_selected_model(provider_path)
+        if selected_model is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Configure a model provider before using AI suggestion.",
+            )
+        configuration, api_key = selected_model
+        from course_harness.course_agent import build_provider_model
+
+        model = build_provider_model(configuration, api_key)
+        try:
+            suggestions = await suggest_mappings_with_llm(inspection, model)
+        except Exception as error:
+            raise HTTPException(
+                status_code=422,
+                detail=f"AI suggestion failed: {error}",
+            ) from error
+        return SuggestMappingsResponse(mappings=suggestions)
 
     static_directory = Path(__file__).with_name("static")
     if static_directory.is_dir():

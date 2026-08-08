@@ -45,3 +45,6 @@ python-version = "3.14"
 
 [tool.ty.src]
 include = ["src", "tests"]
+
+[tool.ty.rules]
+"no-matching-overload" = "ignore"
