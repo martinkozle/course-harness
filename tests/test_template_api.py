@@ -5,8 +5,16 @@ import pytest
 from pptx import Presentation as PPTXPresentation
 
 from course_harness.app import create_app
+from course_harness.course_plan import (
+    CoursePlanInput,
+    LectureInput,
+    create_course_plan,
+    create_course_plan_file,
+    initialize_workspace_history,
+)
 
 PP_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+POTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.template"
 
 
 def _make_test_pptx() -> bytes:
@@ -66,6 +74,23 @@ async def test_upload_template_returns_profile(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_upload_accepts_standard_potx_media_type(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    transport = httpx2.ASGITransport(
+        app=_app(workspace, tmp_path / "tpl-data", tmp_path / "tpl-cache")
+    )
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/templates/upload",
+            files={"file": ("test.potx", _make_test_pptx(), POTX_MIME)},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["profile"]["template_filename"] == "test.potx"
+
+
+@pytest.mark.anyio
 async def test_upload_and_get_template(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     workspace.mkdir()
@@ -111,6 +136,40 @@ async def test_update_mapping_bumps_version(tmp_path: Path) -> None:
         bullets_layout = next(m for m in body["layouts"] if m["semantic_layout"] == "bullets")
         assert bullets_layout["confidence"] == 1.0
         assert "corrected" in bullets_layout["rationale"].lower()
+
+
+@pytest.mark.anyio
+async def test_course_pin_uses_an_existing_profile_version(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    plan = create_course_plan(
+        CoursePlanInput(
+            title="Pinned",
+            audience="Test",
+            lectures=[LectureInput(title="L1")],
+        )
+    )
+    initialize_workspace_history(workspace)
+    create_course_plan_file(workspace, plan)
+    transport = httpx2.ASGITransport(
+        app=_app(workspace, tmp_path / "tpl-data", tmp_path / "tpl-cache")
+    )
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        upload = await _upload_pptx(client, _make_test_pptx())
+        profile_id = upload.json()["profile"]["id"]
+        pinned = await client.patch(
+            "/api/course/profile",
+            json={"template_profile_id": profile_id, "template_profile_version": 1},
+        )
+        missing = await client.patch(
+            "/api/course/profile",
+            json={"template_profile_id": profile_id, "template_profile_version": 99},
+        )
+
+    assert pinned.status_code == 200
+    assert pinned.json()["template_profile_id"] == profile_id
+    assert pinned.json()["template_profile_version"] == 1
+    assert missing.status_code == 422
 
 
 @pytest.mark.anyio

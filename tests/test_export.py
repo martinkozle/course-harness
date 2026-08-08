@@ -226,6 +226,92 @@ async def test_export_citations_and_notes(tmp_path: Path) -> None:
                     shape_texts.append(run.text)
     all_text = " ".join(shape_texts)
     assert "Paper A" in all_text
+    assert all_text.count("Paper A") == 1
+
+
+@pytest.mark.anyio
+async def test_export_uses_course_pinned_profile_version(tmp_path: Path) -> None:
+    from course_harness.template_profiles import (
+        TemplateLayoutMapping,
+        TemplateProfile,
+        profile_dir,
+        write_profile_version,
+    )
+
+    workspace = tmp_path / "export-pinned"
+    workspace.mkdir()
+    plan = create_course_plan(
+        CoursePlanInput(
+            title="Pinned export",
+            audience="Test",
+            lectures=[LectureInput(title="L1")],
+        )
+    ).model_copy(
+        update={
+            "template_profile_id": "tpl-000000000001",
+            "template_profile_version": 1,
+        }
+    )
+    initialize_workspace_history(workspace)
+    create_course_plan_file(workspace, plan)
+    _build_presentation(
+        workspace,
+        plan.lectures[0].id,
+        [{"layout": "title", "id": "slide-000000000001", "title": "Pinned"}],
+    )
+
+    templates_data = tmp_path / "templates"
+    v1 = TemplateProfile(
+        id="tpl-000000000001",
+        name="Pinned template",
+        template_filename="template.pptx",
+        slide_width=12192000,
+        slide_height=6858000,
+        slide_count=11,
+        version=1,
+        layouts=[
+            TemplateLayoutMapping(
+                semantic_layout="title",
+                template_layout_index=0,
+                confidence=1,
+                rationale="Version one",
+            )
+        ],
+    )
+    v2 = TemplateProfile(
+        id="tpl-000000000001",
+        name="Pinned template",
+        template_filename="template.pptx",
+        slide_width=12192000,
+        slide_height=6858000,
+        slide_count=11,
+        version=2,
+        layouts=[
+            TemplateLayoutMapping(
+                semantic_layout="title",
+                template_layout_index=2,
+                confidence=1,
+                rationale="Version two",
+            )
+        ],
+    )
+    write_profile_version(templates_data, v1)
+    write_profile_version(templates_data, v2)
+    template_file = profile_dir(templates_data, v1.id) / "template.pptx"
+    PPTXPresentation().save(str(template_file))
+
+    app = create_app(
+        workspace,
+        templates_data_path=templates_data,
+        templates_cache_path=tmp_path / "template-cache",
+    )
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"/api/presentations/{plan.lectures[0].id}/export")
+
+    assert response.status_code == 200
+    exported = PPTXPresentation(BytesIO(response.content))
+    assert exported.slides[0].slide_layout.name == "Title Slide"
 
 
 @pytest.mark.anyio

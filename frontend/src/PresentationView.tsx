@@ -54,7 +54,7 @@ function citationDetail(citation: SlideCitation): string {
 			citation.line_end != null &&
 			citation.line_end !== citation.line_start
 		) {
-			parts.push(`–${citation.line_end}`);
+			parts.push(`–${citation.line_end + 1}`);
 		}
 	}
 	return parts.join(" ");
@@ -78,9 +78,13 @@ function SlideDetail({
 	const [editing, setEditing] = useState(false);
 	const [editTitle, setEditTitle] = useState(slide.title ?? "");
 	const [editNotes, setEditNotes] = useState(slide.speaker_notes ?? "");
-	const [editBullets, setEditBullets] = useState((slide.bullets ?? []).join("\n"));
+	const [editBullets, setEditBullets] = useState(
+		(slide.bullets ?? []).join("\n"),
+	);
 	const [editQuote, setEditQuote] = useState(slide.quote ?? "");
-	const [editAttribution, setEditAttribution] = useState(slide.attribution ?? "");
+	const [editAttribution, setEditAttribution] = useState(
+		slide.attribution ?? "",
+	);
 	const [editStatement, setEditStatement] = useState(slide.statement ?? "");
 	const [editCode, setEditCode] = useState(slide.code ?? "");
 	const [editLeft, setEditLeft] = useState(slide.left_content ?? "");
@@ -102,7 +106,9 @@ function SlideDetail({
 			if (!response.ok) throw new Error(await responseError(response));
 			onArchiveChange();
 		} catch (caught) {
-			setSaveError(caught instanceof Error ? caught.message : "Could not update slide.");
+			setSaveError(
+				caught instanceof Error ? caught.message : "Could not update slide.",
+			);
 		}
 	}
 
@@ -111,27 +117,35 @@ function SlideDetail({
 		setSaving(true);
 		try {
 			const patchBody: Record<string, unknown> = {};
-			if (editTitle !== (slide.title ?? "")) patchBody["title"] = editTitle;
-			if (editNotes !== (slide.speaker_notes ?? "")) patchBody["speaker_notes"] = editNotes;
+			if (editTitle !== (slide.title ?? "")) patchBody.title = editTitle;
+			if (editNotes !== (slide.speaker_notes ?? ""))
+				patchBody.speaker_notes = editNotes;
 			if (slide.layout === "bullets" && slide.bullets) {
-				const newBullets = editBullets.split("\n").map((l) => l.trim()).filter(Boolean);
+				const newBullets = editBullets
+					.split("\n")
+					.map((l) => l.trim())
+					.filter(Boolean);
 				if (JSON.stringify(newBullets) !== JSON.stringify(slide.bullets)) {
-					patchBody["bullets"] = newBullets;
+					patchBody.bullets = newBullets;
 				}
 			}
 			if (slide.layout === "quote") {
-				if (editQuote !== (slide.quote ?? "")) patchBody["quote"] = editQuote;
-				if (editAttribution !== (slide.attribution ?? "")) patchBody["attribution"] = editAttribution;
+				if (editQuote !== (slide.quote ?? "")) patchBody.quote = editQuote;
+				if (editAttribution !== (slide.attribution ?? ""))
+					patchBody.attribution = editAttribution;
 			}
 			if (slide.layout === "big_statement") {
-				if (editStatement !== (slide.statement ?? "")) patchBody["statement"] = editStatement;
+				if (editStatement !== (slide.statement ?? ""))
+					patchBody.statement = editStatement;
 			}
 			if (slide.layout === "code") {
-				if (editCode !== (slide.code ?? "")) patchBody["code"] = editCode;
+				if (editCode !== (slide.code ?? "")) patchBody.code = editCode;
 			}
 			if (slide.layout === "two_column") {
-				if (editLeft !== (slide.left_content ?? "")) patchBody["left_content"] = editLeft;
-				if (editRight !== (slide.right_content ?? "")) patchBody["right_content"] = editRight;
+				if (editLeft !== (slide.left_content ?? ""))
+					patchBody.left_content = editLeft;
+				if (editRight !== (slide.right_content ?? ""))
+					patchBody.right_content = editRight;
 			}
 			if (Object.keys(patchBody).length === 0) {
 				setEditing(false);
@@ -149,7 +163,9 @@ function SlideDetail({
 			setEditing(false);
 			onArchiveChange();
 		} catch (caught) {
-			setSaveError(caught instanceof Error ? caught.message : "Could not save changes.");
+			setSaveError(
+				caught instanceof Error ? caught.message : "Could not save changes.",
+			);
 		} finally {
 			setSaving(false);
 		}
@@ -172,12 +188,15 @@ function SlideDetail({
 		<section className="slide-detail" aria-label={`Slide ${slide.id} detail`}>
 			<div className="slide-detail-header">
 				{editing ? (
-					<input
-						className="slide-title-edit"
-						value={editTitle}
-						onChange={(e) => setEditTitle(e.target.value)}
-						placeholder="Slide title"
-					/>
+					<div className="field slide-title-field">
+						<label htmlFor={`slide-${slide.id}-title`}>Slide title</label>
+						<input
+							id={`slide-${slide.id}-title`}
+							className="slide-title-edit"
+							value={editTitle}
+							onChange={(e) => setEditTitle(e.target.value)}
+						/>
+					</div>
 				) : (
 					<h3>{slide.title || "Untitled slide"}</h3>
 				)}
@@ -231,6 +250,11 @@ function SlideDetail({
 					)}
 				</div>
 			</div>
+			{saveError ? (
+				<p className="notice error-notice" role="alert">
+					{saveError}
+				</p>
+			) : null}
 			<div className="slide-detail-meta">
 				<span className="slide-layout-badge">{layoutLabel(slide.layout)}</span>
 				{slide.archived ? (
@@ -245,7 +269,9 @@ function SlideDetail({
 				<div className="slide-edit-fields">
 					{slide.layout === "bullets" ? (
 						<div className="field">
-							<label htmlFor={`slide-${slide.id}-bullets`}>Bullets (one per line)</label>
+							<label htmlFor={`slide-${slide.id}-bullets`}>
+								Bullets (one per line)
+							</label>
 							<textarea
 								id={`slide-${slide.id}-bullets`}
 								value={editBullets}
@@ -265,7 +291,9 @@ function SlideDetail({
 								/>
 							</div>
 							<div className="field">
-								<label htmlFor={`slide-${slide.id}-attribution`}>Attribution</label>
+								<label htmlFor={`slide-${slide.id}-attribution`}>
+									Attribution
+								</label>
 								<input
 									id={`slide-${slide.id}-attribution`}
 									value={editAttribution}
@@ -329,13 +357,10 @@ function SlideDetail({
 				</div>
 			) : (
 				<>
-					{saveError ? (
-						<p className="notice error-notice" role="alert">{saveError}</p>
-					) : null}
 					{slide.layout === "bullets" && slide.bullets ? (
 						<ul className="slide-bullets">
 							{slide.bullets.map((bullet, position) => (
-								<li key={`${slide.id}-${bullet}`}>
+								<li key={`${slide.id}-${String(position)}-${bullet}`}>
 									<button
 										type="button"
 										className="clickable-content"
@@ -351,21 +376,75 @@ function SlideDetail({
 							))}
 						</ul>
 					) : slide.layout === "code" && slide.code ? (
-						<pre className="slide-code-block">
-							<code>{slide.code}</code>
-						</pre>
+						<div className="content-block">
+							<pre className="slide-code-block">
+								<code>{slide.code}</code>
+							</pre>
+							<button
+								type="button"
+								className="content-context-action"
+								onClick={() =>
+									onChatContext(`I'm looking at the code on slide ${slide.id}`)
+								}
+							>
+								Chat about code
+							</button>
+						</div>
 					) : slide.layout === "two_column" ? (
 						<div className="slide-two-column">
-							<div className="clickable-content">{slide.left_content}</div>
-							<div className="clickable-content">{slide.right_content}</div>
+							<button
+								type="button"
+								className="clickable-content"
+								onClick={() =>
+									onChatContext(
+										`I'm looking at the left column on slide ${slide.id}`,
+									)
+								}
+							>
+								{slide.left_content}
+							</button>
+							<button
+								type="button"
+								className="clickable-content"
+								onClick={() =>
+									onChatContext(
+										`I'm looking at the right column on slide ${slide.id}`,
+									)
+								}
+							>
+								{slide.right_content}
+							</button>
 						</div>
 					) : slide.quote ? (
-						<blockquote className="slide-quote">
-							<p>{slide.quote}</p>
-							{slide.attribution ? <footer>{slide.attribution}</footer> : null}
-						</blockquote>
+						<div className="content-block">
+							<blockquote className="slide-quote">
+								<p>{slide.quote}</p>
+								{slide.attribution ? (
+									<footer>{slide.attribution}</footer>
+								) : null}
+							</blockquote>
+							<button
+								type="button"
+								className="content-context-action"
+								onClick={() =>
+									onChatContext(`I'm looking at the quote on slide ${slide.id}`)
+								}
+							>
+								Chat about quote
+							</button>
+						</div>
 					) : slide.statement ? (
-						<p className="slide-statement">{slide.statement}</p>
+						<button
+							type="button"
+							className="content-block-button"
+							onClick={() =>
+								onChatContext(
+									`I'm looking at the statement on slide ${slide.id}`,
+								)
+							}
+						>
+							<span className="slide-statement">{slide.statement}</span>
+						</button>
 					) : null}
 
 					{slide.speaker_notes ? (
@@ -381,33 +460,34 @@ function SlideDetail({
 				<div className="slide-citations-section">
 					<h4>Citations</h4>
 					<ul className="citation-list">
-						{slide.citations.map((citation) => (
-							<li key={`${slide.id}-${citation.source_id}`}>
-								<button
-									type="button"
-									className="citation-button"
-									onClick={() =>
-										onChatContext(
-											`This slide cites ${citation.source_id} ("${citation.label}")`,
-										)
-									}
-								>
-									<span className="citation-label">{citation.label}</span>
+						{slide.citations.map((citation, position) => (
+							<li key={`${slide.id}-${String(position)}-${citation.source_id}`}>
+								<div className="citation-row">
+									<button
+										type="button"
+										className="citation-context-button"
+										onClick={() =>
+											onChatContext(
+												`This slide cites ${citation.source_id} ("${citation.label}")`,
+											)
+										}
+									>
+										<span className="citation-label">{citation.label}</span>
+										<small className="citation-coordinates">
+											{citationDetail(citation)}
+										</small>
+									</button>
 									{citation.url ? (
 										<a
 											href={citation.url}
 											target="_blank"
 											rel="noopener noreferrer"
 											className="citation-url"
-											onClick={(e) => e.stopPropagation()}
 										>
-											Open
+											Open source
 										</a>
 									) : null}
-									<small className="citation-coordinates">
-										{citationDetail(citation)}
-									</small>
-								</button>
+								</div>
 							</li>
 						))}
 					</ul>
@@ -433,29 +513,45 @@ export function PresentationView({
 	const [currentPresentation, setCurrentPresentation] =
 		useState<Presentation | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const [loadingPresentation, setLoadingPresentation] = useState(false);
 	const [showArchived, setShowArchived] = useState(false);
-	const [selectedProfileId, setSelectedProfileId] = useState<string>("_builtin-default");
+	const [selectedProfileId, setSelectedProfileId] = useState<string>(
+		course.template_profile_id ?? "_builtin-default",
+	);
 	const prevVersion = useRef(presentationVersion);
+	const presentationRequest = useRef(0);
 
 	const loadPresentation = useCallback(async (lectureId: string) => {
+		const requestId = ++presentationRequest.current;
+		setLoadingPresentation(true);
 		try {
 			const response = await fetch(
 				`/api/presentations/${encodeURIComponent(lectureId)}`,
 			);
 			if (response.status === 404) {
-				setCurrentPresentation(null);
+				if (requestId === presentationRequest.current) {
+					setCurrentPresentation(null);
+				}
 				return;
 			}
 			if (!response.ok) {
 				throw new Error(await responseError(response));
 			}
-			setCurrentPresentation((await response.json()) as Presentation);
+			const presentation = (await response.json()) as Presentation;
+			if (requestId === presentationRequest.current) {
+				setCurrentPresentation(presentation);
+			}
 		} catch (caught) {
-			setError(
-				caught instanceof Error
-					? caught.message
-					: "Could not load presentation.",
-			);
+			if (requestId === presentationRequest.current)
+				setError(
+					caught instanceof Error
+						? caught.message
+						: "Could not load presentation.",
+				);
+		} finally {
+			if (requestId === presentationRequest.current) {
+				setLoadingPresentation(false);
+			}
 		}
 	}, []);
 
@@ -480,8 +576,14 @@ export function PresentationView({
 		}
 	}, [presentationVersion, selectedLectureId, loadPresentation]);
 
+	useEffect(() => {
+		setSelectedProfileId(course.template_profile_id ?? "_builtin-default");
+	}, [course.template_profile_id]);
+
 	async function deletePresentation() {
 		if (!selectedLectureId) return;
+		if (!window.confirm("Delete this Presentation and all of its Slides?"))
+			return;
 		setError(null);
 		try {
 			const response = await fetch(
@@ -498,6 +600,33 @@ export function PresentationView({
 				caught instanceof Error
 					? caught.message
 					: "Could not delete presentation.",
+			);
+		}
+	}
+
+	async function selectProfile(profileId: string) {
+		const previous = selectedProfileId;
+		const selected = templates.find((template) => template.id === profileId);
+		setSelectedProfileId(profileId);
+		setError(null);
+		try {
+			const response = await fetch("/api/course/profile", {
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					template_profile_id:
+						profileId === "_builtin-default" ? null : profileId,
+					template_profile_version:
+						profileId === "_builtin-default" ? null : selected?.version,
+				}),
+			});
+			if (!response.ok) throw new Error(await responseError(response));
+		} catch (caught) {
+			setSelectedProfileId(previous);
+			setError(
+				caught instanceof Error
+					? caught.message
+					: "Could not select the Template Profile.",
 			);
 		}
 	}
@@ -624,17 +753,18 @@ export function PresentationView({
 					</ol>
 				</section>
 
-				<section
-					className="slide-canvas-section"
-					aria-labelledby="slide-canvas-heading"
-				>
+				<section className="slide-canvas-section" aria-label="Slide canvas">
 					{error ? (
 						<p className="notice error-notice" role="alert">
 							{error}
 						</p>
 					) : null}
 
-					{!selectedLectureId ? (
+					{loadingPresentation ? (
+						<div className="empty-state" role="status">
+							<p>Loading Presentation…</p>
+						</div>
+					) : !selectedLectureId ? (
 						<div className="empty-state">
 							<p>Select a Lecture to view its slide canvas.</p>
 						</div>
@@ -680,18 +810,18 @@ export function PresentationView({
 									<div className="export-row">
 										<select
 											value={selectedProfileId}
-											onChange={(e) => setSelectedProfileId(e.target.value)}
+											onChange={(e) => void selectProfile(e.target.value)}
 											aria-label="Template profile"
 											className="profile-select"
 										>
-											<option value="_builtin-default">
-												Default template
-											</option>
-											{templates.map((t) => (
-												<option key={t.id} value={t.id}>
-													{t.name}
-												</option>
-											))}
+											<option value="_builtin-default">Default template</option>
+											{templates
+												.filter((t) => t.id !== "_builtin-default")
+												.map((t) => (
+													<option key={t.id} value={t.id}>
+														{t.name}
+													</option>
+												))}
 										</select>
 										<button
 											className="quiet-action compact-action"
@@ -702,9 +832,7 @@ export function PresentationView({
 													if (!selectedLectureId) return;
 													setError(null);
 													try {
-														const exportUrl = selectedProfileId && selectedProfileId !== "_builtin-default"
-															? `/api/presentations/${encodeURIComponent(selectedLectureId)}/export?profile=${encodeURIComponent(selectedProfileId)}`
-															: `/api/presentations/${encodeURIComponent(selectedLectureId)}/export`;
+														const exportUrl = `/api/presentations/${encodeURIComponent(selectedLectureId)}/export`;
 														const r = await fetch(exportUrl);
 														if (!r.ok) throw new Error(await responseError(r));
 														const blob = await r.blob();

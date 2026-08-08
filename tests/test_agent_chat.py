@@ -64,9 +64,18 @@ def _plan_command(**changes: object) -> ReplaceCoursePlanCommand:
 
 
 def test_course_plan_revisions_cannot_silently_replace_lecture_identity(tmp_path: Path) -> None:
+    from course_harness.course_plan import write_course_plan
+
     workspace = tmp_path / "course"
     workspace.mkdir()
     original = apply_course_plan_command(workspace, _plan_command())
+    original = original.model_copy(
+        update={
+            "template_profile_id": "tpl-000000000001",
+            "template_profile_version": 3,
+        }
+    )
+    write_course_plan(workspace, original)
 
     with pytest.raises(ValueError, match="must preserve existing Lecture IDs"):
         apply_course_plan_command(
@@ -83,6 +92,8 @@ def test_course_plan_revisions_cannot_silently_replace_lecture_identity(tmp_path
         ),
     )
     assert updated.lectures[0].id == original.lectures[0].id
+    assert updated.template_profile_id == original.template_profile_id
+    assert updated.template_profile_version == original.template_profile_version
 
 
 async def _post_stream(app: Any, path: str, payload: object) -> tuple[int, str]:
@@ -998,6 +1009,7 @@ async def test_agent_can_delete_presentation_and_requires_approval_in_guided(
     app = create_app(
         workspace,
         provider_store_path=provider_store,
+        chat_store_path=tmp_path / "user-data" / "chat",
         agent_model=FunctionModel(stream_function=delete_model),
         provider_validator=_verified_capabilities,
     )
@@ -1113,6 +1125,7 @@ async def test_presentation_approval_preview_contains_slide_outline(
     app = create_app(
         workspace,
         provider_store_path=provider_store,
+        chat_store_path=tmp_path / "user-data" / "chat",
         agent_model=FunctionModel(stream_function=pres_model),
         provider_validator=_verified_capabilities,
     )
@@ -1229,6 +1242,7 @@ async def test_presentation_state_snapshots_stream_on_canvas_updates(
     app = create_app(
         workspace,
         provider_store_path=provider_store,
+        chat_store_path=tmp_path / "user-data" / "chat",
         agent_model=FunctionModel(stream_function=canvas_model),
         provider_validator=_verified_capabilities,
     )

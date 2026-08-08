@@ -133,6 +133,13 @@ class ModelSelection(BaseModel):
     model_id: str = Field(min_length=1)
 
 
+class TemplateProfilePin(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    template_profile_id: str | None = None
+    template_profile_version: int | None = Field(default=None, ge=1)
+
+
 class SlideRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -626,17 +633,26 @@ def create_app(
             return updated
 
     @app.patch("/api/course/profile", response_model=CoursePlan)
-    async def api_pin_template_profile(request: Request) -> CoursePlan:
-        body = await request.json()
-        template_profile_id = body.get("template_profile_id")
-        template_profile_version = body.get("template_profile_version")
+    async def api_pin_template_profile(pin: TemplateProfilePin) -> CoursePlan:
+        template_profile_id = pin.template_profile_id
+        template_profile_version = pin.template_profile_version
         active, plan = require_course_plan()
         async with exclusive_mutation(active):
             if template_profile_id is not None:
                 try:
-                    tpl.resolve_profile(templates_data, template_profile_id)
+                    resolved = tpl.resolve_profile(
+                        templates_data,
+                        template_profile_id,
+                        template_profile_version,
+                    )
                 except ValueError as error:
                     raise HTTPException(status_code=422, detail=str(error)) from error
+                template_profile_version = resolved.version
+            elif template_profile_version is not None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="A Template Profile version requires a Template Profile ID",
+                )
             updated = plan.model_copy(
                 update={
                     "template_profile_id": template_profile_id,
@@ -850,7 +866,7 @@ def create_app(
 
     @app.get("/api/presentations/{lecture_id}/export")
     async def api_export_presentation(lecture_id: str, profile: str | None = None) -> Response:
-        active = require_workspace()
+        active, plan = require_course_plan()
         pres = read_presentation_for_lecture(active, lecture_id)
         if pres is None:
             raise HTTPException(
@@ -858,7 +874,14 @@ def create_app(
                 detail="No Presentation exists for this lecture",
             )
         try:
-            resolved_profile = tpl.resolve_profile(templates_data, profile)
+            if profile is not None:
+                resolved_profile = tpl.resolve_profile(templates_data, profile)
+            else:
+                resolved_profile = tpl.resolve_profile(
+                    templates_data,
+                    plan.template_profile_id,
+                    plan.template_profile_version,
+                )
         except ValueError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
@@ -1248,7 +1271,10 @@ def create_app(
             raise HTTPException(status_code=422, detail="File content must be binary.")
 
         media_type = getattr(uploaded_file, "content_type", None)
-        if media_type and media_type != tpl.TEMPLATE_MEDIA_TYPE:
+        if media_type and media_type not in {
+            tpl.TEMPLATE_MEDIA_TYPE,
+            tpl.TEMPLATE_POTX_MEDIA_TYPE,
+        }:
             raise HTTPException(
                 status_code=422,
                 detail="Only .pptx and .potx files are supported",

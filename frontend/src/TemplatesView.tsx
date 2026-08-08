@@ -1,6 +1,10 @@
 import { type ChangeEvent, useState } from "react";
 import { responseError } from "./api";
-import type { CalibrationSlide, TemplateProfile, TemplateProfileSummary } from "./models";
+import type {
+	CalibrationSlide,
+	TemplateProfile,
+	TemplateProfileSummary,
+} from "./models";
 
 type TemplatesViewProps = {
 	templates: TemplateProfileSummary[];
@@ -8,9 +12,7 @@ type TemplatesViewProps = {
 };
 
 function snakeToTitle(value: string): string {
-	return value
-		.replace(/_/g, " ")
-		.replace(/\b\w/g, (c) => c.toUpperCase());
+	return value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function confidenceColor(confidence: number): string {
@@ -64,7 +66,14 @@ export function TemplatesView({
 				inspection: Record<string, unknown>;
 			};
 			setSelectedProfile(body.profile);
-			setSelectedLayouts(new Map());
+			setSelectedLayouts(
+				new Map(
+					body.profile.layouts.map((mapping) => [
+						mapping.semantic_layout,
+						mapping.template_layout_index,
+					]),
+				),
+			);
 			const listResp = await fetch("/api/templates");
 			if (listResp.ok) {
 				onTemplatesChange((await listResp.json()) as TemplateProfileSummary[]);
@@ -75,10 +84,12 @@ export function TemplatesView({
 			);
 		} finally {
 			setUploading(false);
+			event.target.value = "";
 		}
 	}
 
 	async function handleSelect(profileId: string) {
+		setUploadError(null);
 		if (profileId === "_builtin-default") {
 			setSelectedProfile(null);
 			setCalibrationSlides([]);
@@ -99,6 +110,9 @@ export function TemplatesView({
 			setSelectedLayouts(layoutMap);
 		} catch (caught) {
 			setSelectedProfile(null);
+			setUploadError(
+				caught instanceof Error ? caught.message : "Could not load template.",
+			);
 		}
 	}
 
@@ -120,14 +134,11 @@ export function TemplatesView({
 					template_layout_index,
 				}),
 			);
-			const response = await fetch(
-				`/api/templates/${selectedProfile.id}`,
-				{
-					method: "PUT",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ mappings }),
-				},
-			);
+			const response = await fetch(`/api/templates/${selectedProfile.id}`, {
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ mappings }),
+			});
 			if (!response.ok) throw new Error(await responseError(response));
 			const updated = (await response.json()) as TemplateProfile;
 			setSelectedProfile(updated);
@@ -138,9 +149,7 @@ export function TemplatesView({
 				onTemplatesChange((await listResp.json()) as TemplateProfileSummary[]);
 			}
 		} catch (caught) {
-			setUploadError(
-				caught instanceof Error ? caught.message : "Save failed.",
-			);
+			setUploadError(caught instanceof Error ? caught.message : "Save failed.");
 		} finally {
 			setSaving(false);
 		}
@@ -157,9 +166,7 @@ export function TemplatesView({
 				{ method: "POST" },
 			);
 			if (!response.ok) throw new Error(await responseError(response));
-			setCalibrationSlides(
-				(await response.json()) as CalibrationSlide[],
-			);
+			setCalibrationSlides((await response.json()) as CalibrationSlide[]);
 		} catch (caught) {
 			setCalibrationError(
 				caught instanceof Error ? caught.message : "Calibration failed.",
@@ -171,11 +178,15 @@ export function TemplatesView({
 
 	async function handleDelete() {
 		if (!selectedProfile) return;
+		if (
+			!window.confirm(`Delete the template profile “${selectedProfile.name}”?`)
+		) {
+			return;
+		}
 		try {
-			const response = await fetch(
-				`/api/templates/${selectedProfile.id}`,
-				{ method: "DELETE" },
-			);
+			const response = await fetch(`/api/templates/${selectedProfile.id}`, {
+				method: "DELETE",
+			});
 			if (!response.ok) throw new Error(await responseError(response));
 			setSelectedProfile(null);
 			setCalibrationSlides([]);
@@ -191,28 +202,35 @@ export function TemplatesView({
 	}
 
 	const layoutCount = selectedProfile?.slide_count ?? 0;
-	const layoutIndices = Array.from(
-		{ length: Math.max(layoutCount, 11) },
-		(_, i) => i,
-	);
+	const layoutIndices = Array.from({ length: layoutCount }, (_, i) => i);
 
-	const allTemplates = [
-		{
-			id: "_builtin-default",
-			name: "Built-in default",
-			version: 1,
-			slide_count: 11,
-			mapped_layouts: 9,
-		} as TemplateProfileSummary,
-		...templates,
-	];
+	const allTemplates = templates.some(
+		(template) => template.id === "_builtin-default",
+	)
+		? templates
+		: [
+				{
+					id: "_builtin-default",
+					name: "Built-in default",
+					version: 1,
+					slide_count: 11,
+					mapped_layouts: 9,
+				},
+				...templates,
+			];
 
 	return (
-		<div className="templates-view">
-			<h2 className="section-title">Templates</h2>
-			<p className="section-lede">
-				Import and configure PowerPoint templates for course export.
-			</p>
+		<main
+			className="page-main templates-main"
+			aria-labelledby="templates-heading"
+		>
+			<header className="page-heading templates-heading">
+				<p className="eyebrow">Presentation design</p>
+				<h1 id="templates-heading">Templates</h1>
+				<p className="lede">
+					Import and configure PowerPoint templates for course export.
+				</p>
+			</header>
 
 			{uploadError ? (
 				<p className="notice error-notice" role="alert">
@@ -221,7 +239,7 @@ export function TemplatesView({
 			) : null}
 
 			<div className="template-selector">
-				<label htmlFor="template-select">Active template:</label>
+				<label htmlFor="template-select">Inspect template</label>
 				<select
 					id="template-select"
 					value={selectedProfile?.id ?? "_builtin-default"}
@@ -285,9 +303,7 @@ export function TemplatesView({
 											className="calibration-image"
 										/>
 									) : (
-										<div className="calibration-placeholder">
-											No preview
-										</div>
+										<div className="calibration-placeholder">No preview</div>
 									)}
 								</div>
 							))}
@@ -295,52 +311,58 @@ export function TemplatesView({
 					) : null}
 
 					<h4 className="mapping-heading">Layout mappings</h4>
-					<table className="mapping-table">
-						<thead>
-							<tr>
-								<th>Semantic layout</th>
-								<th>Template layout</th>
-								<th>Confidence</th>
-							</tr>
-						</thead>
-						<tbody>
-							{selectedProfile.layouts.map((m) => (
-								<tr key={m.semantic_layout}>
-									<td className="layout-semantic">
-										{snakeToTitle(m.semantic_layout)}
-									</td>
-									<td>
-										<select
-											value={selectedLayouts.get(m.semantic_layout) ?? m.template_layout_index}
-											onChange={(e) =>
-												handleMappingChange(
-													m.semantic_layout,
-													Number(e.target.value),
-												)
-											}
-											aria-label={`Template layout for ${m.semantic_layout}`}
-										>
-											{layoutIndices.map((i) => (
-												<option key={i} value={i}>
-													{i}: Layout {i}
-												</option>
-											))}
-										</select>
-									</td>
-									<td>
-										<span
-											className="confidence-badge"
-											style={{
-												backgroundColor: confidenceColor(m.confidence),
-											}}
-										>
-											{confidenceLabel(m.confidence)} ({(m.confidence * 100).toFixed(0)}%)
-										</span>
-									</td>
+					<div className="mapping-table-scroll">
+						<table className="mapping-table">
+							<thead>
+								<tr>
+									<th>Semantic layout</th>
+									<th>Template layout</th>
+									<th>Confidence</th>
 								</tr>
-							))}
-						</tbody>
-					</table>
+							</thead>
+							<tbody>
+								{selectedProfile.layouts.map((m) => (
+									<tr key={m.semantic_layout}>
+										<td className="layout-semantic">
+											{snakeToTitle(m.semantic_layout)}
+										</td>
+										<td>
+											<select
+												value={
+													selectedLayouts.get(m.semantic_layout) ??
+													m.template_layout_index
+												}
+												onChange={(e) =>
+													handleMappingChange(
+														m.semantic_layout,
+														Number(e.target.value),
+													)
+												}
+												aria-label={`Template layout for ${m.semantic_layout}`}
+											>
+												{layoutIndices.map((i) => (
+													<option key={i} value={i}>
+														{i}: Layout {i}
+													</option>
+												))}
+											</select>
+										</td>
+										<td>
+											<span
+												className="confidence-badge"
+												style={{
+													backgroundColor: confidenceColor(m.confidence),
+												}}
+											>
+												{confidenceLabel(m.confidence)} (
+												{(m.confidence * 100).toFixed(0)}%)
+											</span>
+										</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
 
 					<div className="mapping-actions">
 						<button
@@ -353,7 +375,7 @@ export function TemplatesView({
 						</button>
 					</div>
 				</div>
-			) : selectedProfile === null ? null : (
+			) : (
 				<div className="profile-detail">
 					<div className="detail-header">
 						<div>
@@ -372,17 +394,19 @@ export function TemplatesView({
 
 			<div className="upload-section">
 				<label className="upload-label" htmlFor="template-upload">
-					{uploading ? "Inspecting template…" : "Import a template (.pptx or .potx)"}
+					{uploading
+						? "Inspecting template…"
+						: "Import a template (.pptx or .potx)"}
 				</label>
 				<input
 					id="template-upload"
 					type="file"
-					accept=".pptx,.potx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+					accept=".pptx,.potx,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.presentationml.template"
 					disabled={uploading}
 					onChange={handleUpload}
 					className="file-input"
 				/>
 			</div>
-		</div>
+		</main>
 	);
 }

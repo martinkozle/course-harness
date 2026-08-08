@@ -10,6 +10,8 @@ export type CoursePlan = {
 	audience: string;
 	goals: string[];
 	outcomes: string[];
+	template_profile_id?: string | null;
+	template_profile_version?: number | null;
 	lectures: {
 		id: string;
 		title: string;
@@ -279,13 +281,16 @@ export function AgentPanel({
 	const selectedAccount = catalog.provider_accounts.find(
 		(account) => account.id === selected?.provider_account_id,
 	);
+	const lastMessageContent = messages.at(-1)?.content;
 
 	useEffect(() => setMessages(initialMessages), [initialMessages]);
 	useEffect(() => setApproval(initialApproval), [initialApproval]);
 	useEffect(() => onRunningChange(running), [onRunningChange, running]);
 	useEffect(() => {
-		chatEndRef.current?.scrollIntoView({ behavior: "auto" });
-	});
+		if (lastMessageContent !== undefined || activities.length > 0 || approval) {
+			chatEndRef.current?.scrollIntoView({ behavior: "auto" });
+		}
+	}, [lastMessageContent, activities.length, approval]);
 	useEffect(
 		() => () => {
 			abortRef.current?.abort();
@@ -317,7 +322,11 @@ export function AgentPanel({
 		onCatalogChange((await response.json()) as ModelCatalog);
 	}
 
-	async function run(messagesForRun: ChatMessage[], resume?: object[]) {
+	async function run(
+		messagesForRun: ChatMessage[],
+		resume?: object[],
+		modeForRun: AgentMode = mode,
+	) {
 		setActivities([]);
 		setError(null);
 		setRunning(true);
@@ -333,7 +342,7 @@ export function AgentPanel({
 					messages: messagesForRun,
 					tools: [],
 					context: [],
-					forwardedProps: { mode },
+					forwardedProps: { mode: modeForRun },
 					...(resume ? { resume } : {}),
 				},
 				{
@@ -409,14 +418,15 @@ export function AgentPanel({
 			role: "user",
 			content: contextPrefix + content,
 		};
-		if (isContinueUntilDone(content)) {
+		const modeForRun = isContinueUntilDone(content) ? "autonomous" : mode;
+		if (modeForRun === "autonomous" && mode !== "autonomous") {
 			setMode("autonomous");
 		}
 		setMessages((current) => [...current, userMessage]);
 		setPrompt("");
 		setApproval(null);
 		if (onChatContextCleared) onChatContextCleared();
-		void run([userMessage]);
+		void run([userMessage], undefined, modeForRun);
 	}
 
 	function resolveApproval(approved: boolean) {

@@ -169,6 +169,8 @@ def apply_course_plan_command(workspace: Path, command: ReplaceCoursePlanCommand
         goals=command.goals,
         outcomes=command.outcomes,
         lectures=lectures,
+        template_profile_id=existing.template_profile_id,
+        template_profile_version=existing.template_profile_version,
     )
     write_course_plan(workspace, updated)
     return updated

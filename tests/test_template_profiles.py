@@ -11,6 +11,7 @@ from course_harness.template_profiles import (
     TemplateProfileSummary,
     delete_profile,
     read_profile,
+    read_profile_version,
     read_registry,
     resolve_profile,
     write_profile,
@@ -136,6 +137,10 @@ class TestProfileStorage:
         assert loaded is not None
         assert loaded.version == 2
         assert loaded.layouts[0].confidence == 0.99
+        original = read_profile_version(data_dir, profile.id, 1)
+        assert original is not None
+        assert original.version == 1
+        assert original.layouts[0].confidence == 0.9
 
 
 class TestBuiltinDefault:

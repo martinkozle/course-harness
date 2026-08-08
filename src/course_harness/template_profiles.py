@@ -15,6 +15,7 @@ from course_harness.presentation import VALID_LAYOUTS
 
 BUILTIN_DEFAULT_ID = "_builtin-default"
 TEMPLATE_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+TEMPLATE_POTX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.template"
 
 DEFAULT_LAYOUT_MAPPING: dict[str, int] = {
     "title": 0,
@@ -165,6 +166,17 @@ def read_profile(data_dir: Path, profile_id: str) -> TemplateProfile | None:
     return TemplateProfile.model_validate(raw)
 
 
+def read_profile_version(data_dir: Path, profile_id: str, version: int) -> TemplateProfile | None:
+    if profile_id == BUILTIN_DEFAULT_ID:
+        profile = _builtin_default_profile()
+        return profile if version == profile.version else None
+    path = _profile_version_yaml_path(profile_dir(data_dir, profile_id), version)
+    if not path.exists():
+        return None
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return TemplateProfile.model_validate(raw)
+
+
 def write_profile(data_dir: Path, profile: TemplateProfile) -> None:
     pd = profile_dir(data_dir, profile.id)
     pd.mkdir(parents=True, exist_ok=True)
@@ -235,12 +247,22 @@ def _builtin_default_profile() -> TemplateProfile:
     )
 
 
-def resolve_profile(data_dir: Path, profile_id: str | None) -> TemplateProfile:
+def resolve_profile(
+    data_dir: Path, profile_id: str | None, version: int | None = None
+) -> TemplateProfile:
     if profile_id is None or profile_id == BUILTIN_DEFAULT_ID:
-        return _builtin_default_profile()
-    profile = read_profile(data_dir, profile_id)
+        profile = _builtin_default_profile()
+        if version is not None and version != profile.version:
+            raise ValueError(f"Template profile '{profile.id}' version {version} not found")
+        return profile
+    profile = (
+        read_profile_version(data_dir, profile_id, version)
+        if version is not None
+        else read_profile(data_dir, profile_id)
+    )
     if profile is None:
-        raise ValueError(f"Template profile '{profile_id}' not found")
+        suffix = f" version {version}" if version is not None else ""
+        raise ValueError(f"Template profile '{profile_id}'{suffix} not found")
     return profile
 
 

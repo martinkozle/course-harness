@@ -1,5 +1,6 @@
 import json
 from collections.abc import AsyncIterator
+from itertools import count
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -57,32 +58,18 @@ async def course_planning_model(
 
 temporary_root = TemporaryDirectory(prefix="course-harness-e2e-", dir=".cache")
 root = Path(temporary_root.name)
-workspace = root / "playwright-workspace"
-workspace.mkdir()
+workspace_ids = count(1)
+
+
+def create_test_workspace() -> Path:
+    workspace = root / f"playwright-workspace-{next(workspace_ids)}"
+    workspace.mkdir()
+    return workspace
+
 
 uvicorn.run(
     create_app(
-        folder_picker=lambda: workspace,
-        recent_store_path=root / "user-data" / "recent-workspaces.json",
-        provider_store_path=root / "user-data" / "provider",
-        chat_store_path=root / "user-data" / "chat",
-        agent_model=FunctionModel(stream_function=course_planning_model),
-        provider_validator=verified_capabilities,
-        provider_account_validator=verified_account,
-    ),
-    host="127.0.0.1",
-    port=18765,
-)
-
-
-temporary_root = TemporaryDirectory(prefix="course-harness-e2e-", dir=".cache")
-root = Path(temporary_root.name)
-workspace = root / "playwright-workspace"
-workspace.mkdir()
-
-uvicorn.run(
-    create_app(
-        folder_picker=lambda: workspace,
+        folder_picker=create_test_workspace,
         recent_store_path=root / "user-data" / "recent-workspaces.json",
         provider_store_path=root / "user-data" / "provider",
         chat_store_path=root / "user-data" / "chat",
