@@ -15,9 +15,13 @@ from course_harness.course_plan import (
     create_course_plan_file,
     initialize_workspace_history,
 )
-from course_harness.export import export_presentation
+from course_harness.export import export_presentation, validate_export_mapping
 from course_harness.presentation import BulletsSlide, Presentation
-from course_harness.template_profiles import TemplateLayoutMapping, TemplateProfile
+from course_harness.template_profiles import (
+    TemplateLayoutMapping,
+    TemplateProfile,
+    _generate_calibration_deck,
+)
 
 
 def _build_presentation(workspace: Path, lecture_id: str, slides: list[dict]):
@@ -81,6 +85,75 @@ def test_export_uses_corrected_template_slots(tmp_path: Path) -> None:
     assert placeholders[0] == "Mapped title"
     assert placeholders[1] == ""
     assert placeholders[2] == "Mapped body"
+
+
+def test_calibration_deck_uses_corrected_template_slots(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.pptx"
+    PPTXPresentation().save(str(template_path))
+    profile = TemplateProfile(
+        id="tpl-000000000001",
+        name="Corrected slots",
+        version=1,
+        template_filename="template.pptx",
+        slide_width=12_192_000,
+        slide_height=6_858_000,
+        slide_count=11,
+        layouts=[
+            TemplateLayoutMapping(
+                semantic_layout="bullets",
+                template_layout_index=3,
+                confidence=1,
+                rationale="Course Author correction",
+                slot_mappings={"title": 0, "body": 2},
+            )
+        ],
+    )
+
+    calibrated = PPTXPresentation(BytesIO(_generate_calibration_deck(profile, template_path)))
+
+    placeholders = {
+        shape.placeholder_format.idx: shape.text_frame.text
+        for shape in calibrated.slides[-1].placeholders
+        if shape.has_text_frame
+    }
+    assert placeholders[0] == "[bullets] Sample Title"
+    assert placeholders[1] == ""
+    assert "Sample body text" in placeholders[2]
+
+
+def test_validation_blocks_incomplete_two_column_slot_mapping(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.pptx"
+    PPTXPresentation().save(str(template_path))
+    profile = TemplateProfile(
+        id="tpl-000000000001",
+        name="Incomplete columns",
+        version=1,
+        template_filename="template.pptx",
+        slide_width=12_192_000,
+        slide_height=6_858_000,
+        slide_count=11,
+        layouts=[
+            TemplateLayoutMapping(
+                semantic_layout="two_column",
+                template_layout_index=3,
+                confidence=1,
+                rationale="Incomplete correction",
+                slot_mappings={"title": 0, "left": 1},
+            )
+        ],
+    )
+
+    issues = validate_export_mapping(profile, template_path)
+
+    assert issues == [
+        {
+            "level": "blocking",
+            "message": (
+                "'two_column' → 'Two Content' (index 3): "
+                "both left and right slots must be configured"
+            ),
+        }
+    ]
 
 
 @pytest.mark.anyio

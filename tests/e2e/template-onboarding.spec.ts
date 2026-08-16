@@ -73,6 +73,17 @@ const inspection = {
 	masters: [],
 	theme: { name: "Office", colors: {} },
 	example_slides: [],
+	semantic_slots: {
+		title: ["title", "subtitle"],
+		section: ["title"],
+		bullets: ["title", "body"],
+		two_column: ["title", "left", "right"],
+		big_statement: ["statement"],
+		closing: ["title", "body"],
+		code: ["title", "body"],
+		image: ["title", "image"],
+		quote: ["title", "body"],
+	},
 };
 
 test("Course Author reviews, improves, and validates template mappings", async ({

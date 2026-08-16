@@ -11,18 +11,6 @@ import type {
 	TemplateValidationFinding,
 } from "./models";
 
-const semanticSlots: Record<SlideLayout, string[]> = {
-	title: ["title", "subtitle"],
-	section: ["title"],
-	bullets: ["title", "body"],
-	two_column: ["title", "left", "right"],
-	big_statement: ["statement"],
-	closing: ["title", "body"],
-	code: ["title", "body"],
-	image: ["title", "image"],
-	quote: ["title", "body"],
-};
-
 type TemplatesViewProps = {
 	templates: TemplateProfileSummary[];
 	catalog: ModelCatalog;
@@ -656,7 +644,9 @@ export function TemplatesView({
 													</small>
 												) : null}
 												<div className="slot-mapping-controls">
-													{semanticSlots[m.semantic_layout].map((slot) => (
+													{(
+														inspection?.semantic_slots[m.semantic_layout] ?? []
+													).map((slot) => (
 														<label key={slot}>
 															{snakeToTitle(slot)} slot
 															<select

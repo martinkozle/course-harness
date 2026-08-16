@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 from pptx import Presentation as PPTXPresentation
 from pptx.enum.shapes import PP_PLACEHOLDER
 
+from course_harness.template_profiles import SEMANTIC_SLOTS
+
 if TYPE_CHECKING:
     pass  # noqa: F811
 
@@ -210,6 +212,7 @@ def inspect_template(pptx_path: Path) -> dict:
         "masters": masters,
         "theme": _extract_theme(pptx_path),
         "example_slides": _extract_example_slides(prs),
+        "semantic_slots": {semantic: list(slots) for semantic, slots in SEMANTIC_SLOTS.items()},
     }
 
 

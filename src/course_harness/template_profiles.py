@@ -44,16 +44,16 @@ BUILTIN_LAYOUT_NAMES: dict[int, str] = {
     10: "Vertical Title and Vertical Text",
 }
 
-SEMANTIC_SLOTS: dict[str, set[str]] = {
-    "title": {"title", "subtitle"},
-    "section": {"title"},
-    "bullets": {"title", "body"},
-    "two_column": {"title", "left", "right"},
-    "big_statement": {"statement"},
-    "closing": {"title", "body"},
-    "code": {"title", "body"},
-    "image": {"title", "image"},
-    "quote": {"title", "body"},
+SEMANTIC_SLOTS: dict[str, tuple[str, ...]] = {
+    "title": ("title", "subtitle"),
+    "section": ("title",),
+    "bullets": ("title", "body"),
+    "two_column": ("title", "left", "right"),
+    "big_statement": ("statement",),
+    "closing": ("title", "body"),
+    "code": ("title", "body"),
+    "image": ("title", "image"),
+    "quote": ("title", "body"),
 }
 
 
@@ -74,7 +74,7 @@ class TemplateLayoutMapping(BaseModel):
     @model_validator(mode="after")
     def validate_slot_mappings(self) -> TemplateLayoutMapping:
         allowed = SEMANTIC_SLOTS[self.semantic_layout]
-        unknown = self.slot_mappings.keys() - allowed
+        unknown = self.slot_mappings.keys() - set(allowed)
         if unknown:
             raise ValueError(
                 f"Unknown slots for {self.semantic_layout}: {', '.join(sorted(unknown))}"
@@ -417,36 +417,18 @@ def _render_builtin_calibration(profile: TemplateProfile) -> list[CalibrationSli
 
 
 def _generate_calibration_deck(profile: TemplateProfile, template_path: Path) -> bytes:
-    import contextlib
     import io
 
     prs = PPTXPresentation(str(template_path))
-    mapping = {m.semantic_layout: m.template_layout_index for m in profile.layouts}
     layouts = prs.slide_layouts
 
-    for semantic, idx in mapping.items():
+    for mapping in profile.layouts:
+        idx = mapping.template_layout_index
         if idx >= len(layouts):
             continue
         slide_layout = layouts[idx]
         slide = prs.slides.add_slide(slide_layout)
-
-        for shape in slide.placeholders:
-            if shape.placeholder_format.idx == 0:
-                shape.text_frame.text = f"[{semantic}] Sample Title"
-            elif shape.placeholder_format.idx == 1:
-                shape.text_frame.text = (
-                    "Sample subtitle or body text.\nThis is rendered for calibration."
-                )
-            elif shape.placeholder_format.idx == 2:
-                tf = shape.text_frame
-                tf.clear()
-                p = tf.paragraphs[0]
-                p.text = "\u2022 Sample bullet one"
-                p2 = tf.add_paragraph()
-                p2.text = "\u2022 Sample bullet two"
-            else:
-                with contextlib.suppress(Exception):
-                    shape.text_frame.text = f"[placeholder idx={shape.placeholder_format.idx}]"
+        _populate_calibration_slide(slide, mapping)
 
     buffer = io.BytesIO()
     prs.save(buffer)
@@ -457,13 +439,13 @@ def _generate_calibration_slides(
     profile: TemplateProfile,
     template_path: Path,
 ) -> list[tuple[str, int, bytes]]:
-    import contextlib
     import io
 
-    mapping = {m.semantic_layout: m.template_layout_index for m in profile.layouts}
     slides: list[tuple[str, int, bytes]] = []
 
-    for semantic, idx in mapping.items():
+    for mapping in profile.layouts:
+        semantic = mapping.semantic_layout
+        idx = mapping.template_layout_index
         prs = PPTXPresentation(str(template_path))
         layouts = prs.slide_layouts
         if idx >= len(layouts):
@@ -471,30 +453,48 @@ def _generate_calibration_slides(
         _delete_all_slides(prs)
         slide_layout = layouts[idx]
         slide = prs.slides.add_slide(slide_layout)
-
-        for shape in slide.placeholders:
-            if shape.placeholder_format.idx == 0:
-                shape.text_frame.text = f"[{semantic}] Sample Title"
-            elif shape.placeholder_format.idx == 1:
-                shape.text_frame.text = (
-                    "Sample subtitle or body text.\nThis is rendered for calibration."
-                )
-            elif shape.placeholder_format.idx == 2:
-                tf = shape.text_frame
-                tf.clear()
-                p = tf.paragraphs[0]
-                p.text = "\u2022 Sample bullet one"
-                p2 = tf.add_paragraph()
-                p2.text = "\u2022 Sample bullet two"
-            else:
-                with contextlib.suppress(Exception):
-                    shape.text_frame.text = f"[placeholder idx={shape.placeholder_format.idx}]"
+        _populate_calibration_slide(slide, mapping)
 
         buffer = io.BytesIO()
         prs.save(buffer)
         slides.append((semantic, idx, buffer.getvalue()))
 
     return slides
+
+
+def _populate_calibration_slide(slide, mapping: TemplateLayoutMapping) -> None:
+    import contextlib
+
+    if mapping.slot_mappings:
+        sample_text = {
+            "title": f"[{mapping.semantic_layout}] Sample Title",
+            "subtitle": "Sample subtitle text.",
+            "body": "Sample body text.\nThis is rendered for calibration.",
+            "left": "Sample left-column content.",
+            "right": "Sample right-column content.",
+            "statement": "A sample big statement.",
+            "image": "[Sample image or caption]",
+        }
+        placeholders = {shape.placeholder_format.idx: shape for shape in slide.placeholders}
+        for slot, placeholder_index in mapping.slot_mappings.items():
+            shape = placeholders.get(placeholder_index)
+            if shape is not None:
+                with contextlib.suppress(Exception):
+                    shape.text_frame.text = sample_text[slot]
+        return
+
+    for shape in slide.placeholders:
+        if shape.placeholder_format.idx == 0:
+            shape.text_frame.text = f"[{mapping.semantic_layout}] Sample Title"
+        elif shape.placeholder_format.idx == 1:
+            shape.text_frame.text = (
+                "Sample subtitle or body text.\nThis is rendered for calibration."
+            )
+        elif shape.placeholder_format.idx == 2:
+            shape.text_frame.text = "\u2022 Sample bullet one\n\u2022 Sample bullet two"
+        else:
+            with contextlib.suppress(Exception):
+                shape.text_frame.text = f"[placeholder idx={shape.placeholder_format.idx}]"
 
 
 def _delete_all_slides(prs) -> None:

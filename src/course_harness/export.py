@@ -140,6 +140,14 @@ def _find_slot_ph(pptx_slide, slot_mappings: dict[str, int], slot: str):
     )
 
 
+def _find_slot_ph_or(pptx_slide, slot_mappings: dict[str, int], slot: str, fallback):
+    return _find_slot_ph(pptx_slide, slot_mappings, slot) or fallback(pptx_slide)
+
+
+def _find_subtitle_or_body_ph(pptx_slide):
+    return _find_subtitle_ph(pptx_slide) or _find_body_ph(pptx_slide)
+
+
 def _populate_slide(slide, pptx_slide, slot_mappings: dict[str, int]) -> None:
     handlers = {
         "title": _populate_title_slide,
@@ -158,12 +166,8 @@ def _populate_slide(slide, pptx_slide, slot_mappings: dict[str, int]) -> None:
 
 
 def _populate_title_slide(slide: TitleSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
-    title_ph = _find_slot_ph(pptx_slide, slot_mappings, "title") or _find_title_ph(pptx_slide)
-    subtitle_ph = (
-        _find_slot_ph(pptx_slide, slot_mappings, "subtitle")
-        or _find_subtitle_ph(pptx_slide)
-        or _find_body_ph(pptx_slide)
-    )
+    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "title", _find_title_ph)
+    subtitle_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "subtitle", _find_subtitle_or_body_ph)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     if subtitle_ph and slide.subtitle:
@@ -171,14 +175,14 @@ def _populate_title_slide(slide: TitleSlide, pptx_slide, slot_mappings: dict[str
 
 
 def _populate_section_slide(slide: SectionSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
-    title_ph = _find_slot_ph(pptx_slide, slot_mappings, "title") or _find_title_ph(pptx_slide)
+    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "title", _find_title_ph)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
 
 
 def _populate_bullets_slide(slide: BulletsSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
-    title_ph = _find_slot_ph(pptx_slide, slot_mappings, "title") or _find_title_ph(pptx_slide)
-    body_ph = _find_slot_ph(pptx_slide, slot_mappings, "body") or _find_body_ph(pptx_slide)
+    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "title", _find_title_ph)
+    body_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "body", _find_body_ph)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     if body_ph and slide.bullets:
@@ -193,7 +197,7 @@ def _populate_bullets_slide(slide: BulletsSlide, pptx_slide, slot_mappings: dict
 def _populate_two_column_slide(
     slide: TwoColumnSlide, pptx_slide, slot_mappings: dict[str, int]
 ) -> None:
-    title_ph = _find_slot_ph(pptx_slide, slot_mappings, "title") or _find_title_ph(pptx_slide)
+    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "title", _find_title_ph)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     left_ph = _find_slot_ph(pptx_slide, slot_mappings, "left")
@@ -238,7 +242,7 @@ def _populate_two_column_slide(
 def _populate_big_statement_slide(
     slide: BigStatementSlide, pptx_slide, slot_mappings: dict[str, int]
 ) -> None:
-    title_ph = _find_slot_ph(pptx_slide, slot_mappings, "statement") or _find_title_ph(pptx_slide)
+    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "statement", _find_title_ph)
     if title_ph and slide.statement:
         title_ph.text_frame.text = slide.statement
         for paragraph in title_ph.text_frame.paragraphs:
@@ -246,12 +250,8 @@ def _populate_big_statement_slide(
 
 
 def _populate_closing_slide(slide: ClosingSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
-    title_ph = _find_slot_ph(pptx_slide, slot_mappings, "title") or _find_title_ph(pptx_slide)
-    subtitle_ph = (
-        _find_slot_ph(pptx_slide, slot_mappings, "body")
-        or _find_subtitle_ph(pptx_slide)
-        or _find_body_ph(pptx_slide)
-    )
+    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "title", _find_title_ph)
+    subtitle_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "body", _find_subtitle_or_body_ph)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     if subtitle_ph and slide.text:
@@ -259,8 +259,8 @@ def _populate_closing_slide(slide: ClosingSlide, pptx_slide, slot_mappings: dict
 
 
 def _populate_code_slide(slide: CodeSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
-    title_ph = _find_slot_ph(pptx_slide, slot_mappings, "title") or _find_title_ph(pptx_slide)
-    body_ph = _find_slot_ph(pptx_slide, slot_mappings, "body") or _find_body_ph(pptx_slide)
+    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "title", _find_title_ph)
+    body_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "body", _find_body_ph)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     if body_ph and slide.code:
@@ -277,7 +277,7 @@ def _populate_code_slide(slide: CodeSlide, pptx_slide, slot_mappings: dict[str, 
 
 
 def _populate_image_slide(slide: ImageSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
-    title_ph = _find_slot_ph(pptx_slide, slot_mappings, "title") or _find_title_ph(pptx_slide)
+    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "title", _find_title_ph)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     mapped_image_ph = _find_slot_ph(pptx_slide, slot_mappings, "image")
@@ -289,8 +289,8 @@ def _populate_image_slide(slide: ImageSlide, pptx_slide, slot_mappings: dict[str
 
 
 def _populate_quote_slide(slide: QuoteSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
-    title_ph = _find_slot_ph(pptx_slide, slot_mappings, "title") or _find_title_ph(pptx_slide)
-    body_ph = _find_slot_ph(pptx_slide, slot_mappings, "body") or _find_body_ph(pptx_slide)
+    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "title", _find_title_ph)
+    body_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "body", _find_body_ph)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     if body_ph:
@@ -463,19 +463,41 @@ def validate_export_mapping(
                 )
 
         if semantic == "two_column":
-            configured_columns = [
-                m.slot_mappings[slot] for slot in ("left", "right") if slot in m.slot_mappings
-            ]
+            configured_columns = {
+                slot: m.slot_mappings[slot] for slot in ("left", "right") if slot in m.slot_mappings
+            }
             body_obj_phs = [
                 i
                 for i, ph in enumerate(layout.placeholders)
                 if ph.placeholder_format.idx != 0
                 and (ph.placeholder_format.type in (PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.OBJECT))
             ]
-            if configured_columns and any(index not in ph_by_idx for index in configured_columns):
+            if configured_columns and len(configured_columns) != 2:
                 issues.append(
                     {
-                        "level": "warning",
+                        "level": "blocking",
+                        "message": (
+                            f"'{semantic}' → '{layout_name}' (index {idx}): "
+                            "both left and right slots must be configured"
+                        ),
+                    }
+                )
+            elif len(set(configured_columns.values())) != len(configured_columns):
+                issues.append(
+                    {
+                        "level": "blocking",
+                        "message": (
+                            f"'{semantic}' → '{layout_name}' (index {idx}): "
+                            "left and right slots must use different placeholders"
+                        ),
+                    }
+                )
+            elif configured_columns and any(
+                index not in ph_by_idx for index in configured_columns.values()
+            ):
+                issues.append(
+                    {
+                        "level": "blocking",
                         "message": (
                             f"'{semantic}' → '{layout_name}' (index {idx}): "
                             "a configured column slot does not exist"
@@ -485,7 +507,7 @@ def validate_export_mapping(
             elif not configured_columns and len(body_obj_phs) < 2:
                 issues.append(
                     {
-                        "level": "warning",
+                        "level": "blocking",
                         "message": (
                             f"'{semantic}' → '{layout_name}' (index {idx}): "
                             f"only {len(body_obj_phs)} content placeholder(s) found, "

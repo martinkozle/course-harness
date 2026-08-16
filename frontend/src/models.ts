@@ -208,6 +208,7 @@ export type TemplateInspection = {
 	masters: unknown[];
 	theme: { name: string; colors: Record<string, string> };
 	example_slides: unknown[];
+	semantic_slots: Record<SlideLayout, string[]>;
 };
 
 export type TemplateValidationFinding = {
