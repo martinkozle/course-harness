@@ -378,6 +378,20 @@ h1 {
 	line-height: 1.35;
 }
 
+.slot-mapping-controls {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+	gap: 0.35rem;
+	margin-top: 0.5rem;
+}
+
+.slot-mapping-controls label {
+	display: grid;
+	gap: 0.2rem;
+	font-size: 0.7rem;
+	color: var(--muted);
+}
+
 .confidence-badge {
 	display: inline-block;
 	padding: 0.125rem 0.5rem;

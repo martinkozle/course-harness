@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import yaml
 from pptx import Presentation as PPTXPresentation
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from course_harness.presentation import VALID_LAYOUTS
 
@@ -44,6 +44,18 @@ BUILTIN_LAYOUT_NAMES: dict[int, str] = {
     10: "Vertical Title and Vertical Text",
 }
 
+SEMANTIC_SLOTS: dict[str, set[str]] = {
+    "title": {"title", "subtitle"},
+    "section": {"title"},
+    "bullets": {"title", "body"},
+    "two_column": {"title", "left", "right"},
+    "big_statement": {"statement"},
+    "closing": {"title", "body"},
+    "code": {"title", "body"},
+    "image": {"title", "image"},
+    "quote": {"title", "body"},
+}
+
 
 class TemplateLayoutMapping(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -57,6 +69,19 @@ class TemplateLayoutMapping(BaseModel):
     template_layout_index: int = Field(ge=0)
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str = Field(min_length=1)
+    slot_mappings: dict[str, int] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_slot_mappings(self) -> TemplateLayoutMapping:
+        allowed = SEMANTIC_SLOTS[self.semantic_layout]
+        unknown = self.slot_mappings.keys() - allowed
+        if unknown:
+            raise ValueError(
+                f"Unknown slots for {self.semantic_layout}: {', '.join(sorted(unknown))}"
+            )
+        if any(index < 0 for index in self.slot_mappings.values()):
+            raise ValueError("Template placeholder indices cannot be negative")
+        return self
 
 
 class TemplateProfile(BaseModel):

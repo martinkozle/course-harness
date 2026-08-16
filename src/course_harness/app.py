@@ -1370,6 +1370,9 @@ def create_app(
         model_config = ConfigDict(extra="forbid")
         semantic_layout: str
         template_layout_index: int
+        confidence: float | None = Field(default=None, ge=0, le=1)
+        rationale: str | None = Field(default=None, min_length=1)
+        slot_mappings: dict[str, int] | None = None
 
     class MappingUpdateRequest(BaseModel):
         model_config = ConfigDict(extra="forbid")
@@ -1425,12 +1428,28 @@ def create_app(
         profile = tpl.read_profile(templates_data, profile_id)
         if profile is None:
             raise HTTPException(status_code=404, detail="Template profile not found")
-        new_mappings = {m.semantic_layout: m.template_layout_index for m in request.mappings}
+        new_mappings = {m.semantic_layout: m for m in request.mappings}
         updated_layouts = []
         for m in profile.layouts:
             if m.semantic_layout in new_mappings:
-                new_idx = new_mappings[m.semantic_layout]
-                if new_idx == m.template_layout_index:
+                requested = new_mappings[m.semantic_layout]
+                new_idx = requested.template_layout_index
+                slot_mappings = (
+                    requested.slot_mappings
+                    if requested.slot_mappings is not None
+                    else m.slot_mappings
+                )
+                if requested.confidence is not None and requested.rationale is not None:
+                    updated_layouts.append(
+                        tpl.TemplateLayoutMapping(
+                            semantic_layout=m.semantic_layout,
+                            template_layout_index=new_idx,
+                            confidence=requested.confidence,
+                            rationale=requested.rationale,
+                            slot_mappings=slot_mappings,
+                        )
+                    )
+                elif new_idx == m.template_layout_index and slot_mappings == m.slot_mappings:
                     updated_layouts.append(m)
                 else:
                     updated_layouts.append(
@@ -1439,6 +1458,7 @@ def create_app(
                             template_layout_index=new_idx,
                             confidence=1.0,
                             rationale=f"Manually corrected to layout index {new_idx}",
+                            slot_mappings=slot_mappings,
                         )
                     )
             else:
@@ -1515,6 +1535,8 @@ def create_app(
     class SuggestMappingsResponse(BaseModel):
         model_config = ConfigDict(extra="forbid")
         mappings: list[dict]
+        source: Literal["ai", "heuristic-fallback"]
+        notice: str | None = None
 
     class SuggestMappingsRequest(BaseModel):
         model_config = ConfigDict(extra="forbid")
@@ -1539,24 +1561,27 @@ def create_app(
         template_file = tpl.profile_dir(templates_data, profile.id) / "template.pptx"
         inspection = inspect_template(template_file)
 
-        selected_model = resolve_selected_model(provider_path)
-        if selected_model is None:
-            raise HTTPException(
-                status_code=409,
-                detail="Configure a model provider before using AI suggestion.",
-            )
-        configuration, api_key = selected_model
-        from course_harness.course_agent import build_provider_model
-
-        model = build_provider_model(configuration, api_key)
+        model: object
+        if agent_model is not None:
+            model = agent_model
+        else:
+            selected_model = resolve_selected_model(provider_path)
+            if selected_model is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Configure a model provider before using AI suggestion.",
+                )
+            configuration, api_key = selected_model
+            model = build_provider_model(configuration, api_key)
         try:
             suggestions = await suggest_mappings_with_llm(inspection, model)
         except Exception as error:
-            raise HTTPException(
-                status_code=422,
-                detail=f"AI suggestion failed: {error}",
-            ) from error
-        return SuggestMappingsResponse(mappings=suggestions)
+            return SuggestMappingsResponse(
+                mappings=map_semantic_layouts(inspection),
+                source="heuristic-fallback",
+                notice=f"AI assistance was unavailable; kept local heuristic suggestions: {error}",
+            )
+        return SuggestMappingsResponse(mappings=suggestions, source="ai")
 
     static_directory = Path(__file__).with_name("static")
     if static_directory.is_dir():

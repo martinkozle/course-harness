@@ -49,6 +49,15 @@ def test_inspect_template_placeholders_have_correct_types(test_template_path: Pa
     assert {3, 4}.issubset(ph_types)
 
 
+def test_inspect_template_reports_layout_inheritance(test_template_path: Path) -> None:
+    result = inspect_template(test_template_path)
+    title_layout = result["layouts"][0]
+
+    assert title_layout["master_index"] == 0
+    assert title_layout["master_name"]
+    assert title_layout["master_placeholders"]
+
+
 def test_map_semantic_layouts_covers_all_semantics(test_template_path: Path) -> None:
     result = map_semantic_layouts(inspect_template(test_template_path))
     expected = {
@@ -92,9 +101,19 @@ def test_public_template_fixture_maps_named_layouts_deterministically() -> None:
         "Section Header",
         "Two Content",
     ]
-    assert mappings["title"]["template_layout_index"] == 0
-    assert mappings["section"]["template_layout_index"] == 2
-    assert mappings["two_column"]["template_layout_index"] == 3
+    assert {
+        semantic: mapping["template_layout_index"] for semantic, mapping in mappings.items()
+    } == {
+        "title": 0,
+        "section": 2,
+        "bullets": 7,
+        "two_column": 3,
+        "big_statement": 5,
+        "closing": 0,
+        "code": 2,
+        "image": 7,
+        "quote": 2,
+    }
 
 
 def test_name_score_exact_match() -> None:

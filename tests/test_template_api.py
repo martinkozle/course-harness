@@ -1,8 +1,10 @@
 from pathlib import Path
+from typing import cast
 
 import httpx2
 import pytest
 from pptx import Presentation as PPTXPresentation
+from pydantic_ai.models import Model
 
 from course_harness.app import create_app
 from course_harness.course_plan import (
@@ -149,6 +151,37 @@ async def test_ai_mapping_suggestion_requires_explicit_metadata_consent(tmp_path
 
 
 @pytest.mark.anyio
+async def test_ai_mapping_failure_falls_back_to_heuristics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fail_suggestion(_inspection: dict, _model: object) -> list[dict]:
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr("course_harness.app.suggest_mappings_with_llm", fail_suggestion)
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    app = create_app(
+        workspace,
+        templates_data_path=tmp_path / "tpl-data",
+        templates_cache_path=tmp_path / "tpl-cache",
+        agent_model=cast(Model, object()),
+    )
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        upload = await _upload_pptx(client, _make_test_pptx())
+        profile_id = upload.json()["profile"]["id"]
+
+        response = await client.post(
+            f"/api/templates/{profile_id}/suggest-mappings",
+            json={"consent": True},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["source"] == "heuristic-fallback"
+    assert len(response.json()["mappings"]) == 9
+
+
+@pytest.mark.anyio
 async def test_duplicate_upload_names_are_disambiguated(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     workspace.mkdir()
@@ -236,6 +269,43 @@ async def test_update_mapping_bumps_version(tmp_path: Path) -> None:
         bullets_layout = next(m for m in body["layouts"] if m["semantic_layout"] == "bullets")
         assert bullets_layout["confidence"] == 1.0
         assert "corrected" in bullets_layout["rationale"].lower()
+
+
+@pytest.mark.anyio
+async def test_update_mapping_persists_assisted_metadata_and_slot_corrections(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    transport = httpx2.ASGITransport(
+        app=_app(workspace, tmp_path / "tpl-data", tmp_path / "tpl-cache")
+    )
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        upload = await _upload_pptx(client, _make_test_pptx())
+        profile_id = upload.json()["profile"]["id"]
+
+        update = await client.put(
+            f"/api/templates/{profile_id}",
+            json={
+                "mappings": [
+                    {
+                        "semantic_layout": "bullets",
+                        "template_layout_index": 3,
+                        "confidence": 0.87,
+                        "rationale": "Model selected the two-content layout.",
+                        "slot_mappings": {"title": 0, "body": 2},
+                    }
+                ]
+            },
+        )
+
+    assert update.status_code == 200
+    bullets = next(
+        mapping for mapping in update.json()["layouts"] if mapping["semantic_layout"] == "bullets"
+    )
+    assert bullets["confidence"] == 0.87
+    assert bullets["rationale"] == "Model selected the two-content layout."
+    assert bullets["slot_mappings"] == {"title": 0, "body": 2}
 
 
 @pytest.mark.anyio

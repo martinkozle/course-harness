@@ -3,12 +3,25 @@ import { responseError } from "./api";
 import type {
 	CalibrationSlide,
 	ModelCatalog,
+	SlideLayout,
 	TemplateInspection,
 	TemplateLayoutInspection,
 	TemplateProfile,
 	TemplateProfileSummary,
 	TemplateValidationFinding,
 } from "./models";
+
+const semanticSlots: Record<SlideLayout, string[]> = {
+	title: ["title", "subtitle"],
+	section: ["title"],
+	bullets: ["title", "body"],
+	two_column: ["title", "left", "right"],
+	big_statement: ["statement"],
+	closing: ["title", "body"],
+	code: ["title", "body"],
+	image: ["title", "image"],
+	quote: ["title", "body"],
+};
 
 type TemplatesViewProps = {
 	templates: TemplateProfileSummary[];
@@ -42,9 +55,9 @@ export function TemplatesView({
 	const [selectedProfile, setSelectedProfile] =
 		useState<TemplateProfile | null>(null);
 	const [inspection, setInspection] = useState<TemplateInspection | null>(null);
-	const [selectedLayouts, setSelectedLayouts] = useState<Map<string, number>>(
-		new Map(),
-	);
+	const [selectedLayouts, setSelectedLayouts] = useState<
+		Map<SlideLayout, number>
+	>(new Map());
 	const [saving, setSaving] = useState(false);
 	const [calibrating, setCalibrating] = useState(false);
 	const [calibrationSlides, setCalibrationSlides] = useState<
@@ -58,6 +71,7 @@ export function TemplatesView({
 	const [suggestionConsent, setSuggestionConsent] = useState(false);
 	const [suggesting, setSuggesting] = useState(false);
 	const [suggestionError, setSuggestionError] = useState<string | null>(null);
+	const [suggestionNotice, setSuggestionNotice] = useState<string | null>(null);
 	const [validating, setValidating] = useState(false);
 	const [validationFindings, setValidationFindings] = useState<
 		TemplateValidationFinding[] | null
@@ -74,6 +88,7 @@ export function TemplatesView({
 	function resetAssistance() {
 		setSuggestionConsent(false);
 		setSuggestionError(null);
+		setSuggestionNotice(null);
 		setValidationFindings(null);
 		setMappingsDirty(false);
 	}
@@ -157,7 +172,7 @@ export function TemplatesView({
 			setCalibrationSlides([]);
 			setCalibrationError(null);
 			resetAssistance();
-			const layoutMap = new Map<string, number>();
+			const layoutMap = new Map<SlideLayout, number>();
 			for (const m of profile.layouts) {
 				layoutMap.set(m.semantic_layout, m.template_layout_index);
 			}
@@ -208,7 +223,7 @@ export function TemplatesView({
 		}
 	}
 
-	function handleMappingChange(semantic: string, index: number) {
+	function handleMappingChange(semantic: SlideLayout, index: number) {
 		setValidationFindings(null);
 		setMappingsDirty(true);
 		setSelectedLayouts((prev) => {
@@ -216,6 +231,63 @@ export function TemplatesView({
 			next.set(semantic, index);
 			return next;
 		});
+		const availableSlots = new Set(
+			layoutInspection(index)?.placeholders.map(
+				(placeholder) => placeholder.idx,
+			),
+		);
+		setSelectedProfile((profile) =>
+			profile
+				? {
+						...profile,
+						layouts: profile.layouts.map((mapping) =>
+							mapping.semantic_layout === semantic
+								? {
+										...mapping,
+										template_layout_index: index,
+										confidence: 1,
+										rationale: `Manually corrected to ${layoutOptionLabel(index)}`,
+										slot_mappings: Object.fromEntries(
+											Object.entries(mapping.slot_mappings ?? {}).filter(
+												([, placeholderIndex]) =>
+													availableSlots.has(placeholderIndex),
+											),
+										),
+									}
+								: mapping,
+						),
+					}
+				: profile,
+		);
+	}
+
+	function handleSlotChange(
+		semantic: SlideLayout,
+		slot: string,
+		placeholderIndex: number,
+	) {
+		setValidationFindings(null);
+		setMappingsDirty(true);
+		setSelectedProfile((profile) =>
+			profile
+				? {
+						...profile,
+						layouts: profile.layouts.map((mapping) =>
+							mapping.semantic_layout === semantic
+								? {
+										...mapping,
+										confidence: 1,
+										rationale: `Course Author corrected the ${slot} slot.`,
+										slot_mappings: {
+											...(mapping.slot_mappings ?? {}),
+											[slot]: placeholderIndex,
+										},
+									}
+								: mapping,
+						),
+					}
+				: profile,
+		);
 	}
 
 	async function handleSaveMappings() {
@@ -223,12 +295,12 @@ export function TemplatesView({
 		setSaving(true);
 		setValidationFindings(null);
 		try {
-			const mappings = Array.from(selectedLayouts.entries()).map(
-				([semantic_layout, template_layout_index]) => ({
-					semantic_layout,
-					template_layout_index,
-				}),
-			);
+			const mappings = selectedProfile.layouts.map((mapping) => ({
+				...mapping,
+				template_layout_index:
+					selectedLayouts.get(mapping.semantic_layout) ??
+					mapping.template_layout_index,
+			}));
 			const response = await fetch(`/api/templates/${selectedProfile.id}`, {
 				method: "PUT",
 				headers: { "Content-Type": "application/json" },
@@ -255,6 +327,7 @@ export function TemplatesView({
 		if (!selectedProfile || !suggestionConsent || !selectedPreset) return;
 		setSuggesting(true);
 		setSuggestionError(null);
+		setSuggestionNotice(null);
 		setValidationFindings(null);
 		try {
 			const response = await fetch(
@@ -268,6 +341,8 @@ export function TemplatesView({
 			if (!response.ok) throw new Error(await responseError(response));
 			const body = (await response.json()) as {
 				mappings: TemplateProfile["layouts"];
+				source: "ai" | "heuristic-fallback";
+				notice: string | null;
 			};
 			setSelectedProfile({ ...selectedProfile, layouts: body.mappings });
 			setSelectedLayouts(
@@ -279,6 +354,7 @@ export function TemplatesView({
 				),
 			);
 			setMappingsDirty(true);
+			setSuggestionNotice(body.notice);
 		} catch (caught) {
 			setSuggestionError(
 				caught instanceof Error ? caught.message : "AI suggestion failed.",
@@ -544,60 +620,91 @@ export function TemplatesView({
 								</tr>
 							</thead>
 							<tbody>
-								{selectedProfile.layouts.map((m) => (
-									<tr key={m.semantic_layout}>
-										<td className="layout-semantic">
-											{snakeToTitle(m.semantic_layout)}
-										</td>
-										<td>
-											<select
-												value={
-													selectedLayouts.get(m.semantic_layout) ??
-													m.template_layout_index
-												}
-												onChange={(e) =>
-													handleMappingChange(
-														m.semantic_layout,
-														Number(e.target.value),
-													)
-												}
-												aria-label={`Template layout for ${m.semantic_layout}`}
-											>
-												{layoutIndices.map((i) => (
-													<option key={i} value={i}>
-														{layoutOptionLabel(i)}
-													</option>
-												))}
-											</select>
-											{layoutInspection(
-												selectedLayouts.get(m.semantic_layout) ??
-													m.template_layout_index,
-											) ? (
-												<small className="layout-slot-summary">
-													Slots:{" "}
-													{layoutInspection(
-														selectedLayouts.get(m.semantic_layout) ??
-															m.template_layout_index,
-													)
-														?.placeholders.map((slot) => slot.name)
-														.join(", ") || "none"}
+								{selectedProfile.layouts.map((m) => {
+									const selectedIndex =
+										selectedLayouts.get(m.semantic_layout) ??
+										m.template_layout_index;
+									const selectedInspection = layoutInspection(selectedIndex);
+									return (
+										<tr key={m.semantic_layout}>
+											<td className="layout-semantic">
+												{snakeToTitle(m.semantic_layout)}
+											</td>
+											<td>
+												<select
+													value={selectedIndex}
+													onChange={(e) =>
+														handleMappingChange(
+															m.semantic_layout,
+															Number(e.target.value),
+														)
+													}
+													aria-label={`Template layout for ${m.semantic_layout}`}
+												>
+													{layoutIndices.map((i) => (
+														<option key={i} value={i}>
+															{layoutOptionLabel(i)}
+														</option>
+													))}
+												</select>
+												{selectedInspection ? (
+													<small className="layout-slot-summary">
+														Available slots:{" "}
+														{selectedInspection.placeholders
+															.map((slot) => slot.name)
+															.join(", ") || "none"}
+													</small>
+												) : null}
+												<div className="slot-mapping-controls">
+													{semanticSlots[m.semantic_layout].map((slot) => (
+														<label key={slot}>
+															{snakeToTitle(slot)} slot
+															<select
+																aria-label={`${snakeToTitle(slot)} slot for ${m.semantic_layout}`}
+																value={m.slot_mappings?.[slot] ?? ""}
+																onChange={(event) =>
+																	handleSlotChange(
+																		m.semantic_layout,
+																		slot,
+																		Number(event.target.value),
+																	)
+																}
+															>
+																<option value="" disabled>
+																	Choose a placeholder
+																</option>
+																{selectedInspection?.placeholders.map(
+																	(placeholder) => (
+																		<option
+																			key={placeholder.idx}
+																			value={placeholder.idx}
+																		>
+																			{placeholder.idx}: {placeholder.name}
+																		</option>
+																	),
+																)}
+															</select>
+														</label>
+													))}
+												</div>
+											</td>
+											<td>
+												<span
+													className="confidence-badge"
+													style={{
+														backgroundColor: confidenceColor(m.confidence),
+													}}
+												>
+													{confidenceLabel(m.confidence)} (
+													{(m.confidence * 100).toFixed(0)}%)
+												</span>
+												<small className="mapping-rationale">
+													{m.rationale}
 												</small>
-											) : null}
-										</td>
-										<td>
-											<span
-												className="confidence-badge"
-												style={{
-													backgroundColor: confidenceColor(m.confidence),
-												}}
-											>
-												{confidenceLabel(m.confidence)} (
-												{(m.confidence * 100).toFixed(0)}%)
-											</span>
-											<small className="mapping-rationale">{m.rationale}</small>
-										</td>
-									</tr>
-								))}
+											</td>
+										</tr>
+									);
+								})}
 							</tbody>
 						</table>
 					</div>
@@ -688,6 +795,11 @@ export function TemplatesView({
 						{suggestionError ? (
 							<p className="notice error-notice" role="alert">
 								{suggestionError}
+							</p>
+						) : null}
+						{suggestionNotice ? (
+							<p className="notice" role="status">
+								{suggestionNotice}
 							</p>
 						) : null}
 					</section>

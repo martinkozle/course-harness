@@ -158,6 +158,7 @@ export type TemplateLayoutMapping = {
 	template_layout_index: number;
 	confidence: number;
 	rationale: string;
+	slot_mappings: Record<string, number>;
 };
 
 export type TemplateProfile = {
@@ -194,6 +195,9 @@ export type TemplateLayoutInspection = {
 	index: number;
 	name: string;
 	placeholders: TemplatePlaceholderInspection[];
+	master_index: number;
+	master_name: string;
+	master_placeholders: TemplatePlaceholderInspection[];
 };
 
 export type TemplateInspection = {

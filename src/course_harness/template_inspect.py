@@ -127,15 +127,33 @@ def _extract_theme(pptx_path: Path) -> dict:
 
 def _extract_masters(prs) -> list[dict]:
     masters = []
-    for master in prs.slide_masters:
+    for index, master in enumerate(prs.slide_masters):
         masters.append(
             {
-                "name": getattr(master, "name", ""),
+                "index": index,
+                "name": getattr(master, "name", "") or f"Master {index + 1}",
                 "preserved": getattr(master, "preserved", False),
                 "layout_count": len(master.slide_layouts),
+                "placeholders": [_inspect_placeholder(ph) for ph in master.placeholders],
             }
         )
     return masters
+
+
+def _inspect_placeholder(ph) -> dict:
+    try:
+        ph_type = int(ph.placeholder_format.type) if ph.placeholder_format.type is not None else 0
+    except Exception:
+        ph_type = 0
+    return {
+        "idx": ph.placeholder_format.idx,
+        "type": ph_type,
+        "name": getattr(ph, "name", ""),
+        "left": ph.left,
+        "top": ph.top,
+        "width": ph.width,
+        "height": ph.height,
+    }
 
 
 def _extract_example_slides(prs) -> list[dict]:
@@ -169,32 +187,19 @@ def _extract_example_slides(prs) -> list[dict]:
 
 def inspect_template(pptx_path: Path) -> dict:
     prs = PPTXPresentation(str(pptx_path))
+    masters = _extract_masters(prs)
     layout_infos = []
     for i, layout in enumerate(prs.slide_layouts):
-        placeholders = []
-        for ph in layout.placeholders:
-            try:
-                ph_type = (
-                    int(ph.placeholder_format.type) if ph.placeholder_format.type is not None else 0
-                )
-            except Exception:
-                ph_type = 0
-            placeholders.append(
-                {
-                    "idx": ph.placeholder_format.idx,
-                    "type": ph_type,
-                    "name": getattr(ph, "name", ""),
-                    "left": ph.left,
-                    "top": ph.top,
-                    "width": ph.width,
-                    "height": ph.height,
-                }
-            )
+        master_index = list(prs.slide_masters).index(layout.slide_master)
+        master = masters[master_index]
         layout_infos.append(
             {
                 "index": i,
                 "name": layout.name,
-                "placeholders": placeholders,
+                "placeholders": [_inspect_placeholder(ph) for ph in layout.placeholders],
+                "master_index": master_index,
+                "master_name": master["name"],
+                "master_placeholders": master["placeholders"],
             }
         )
     return {
@@ -202,7 +207,7 @@ def inspect_template(pptx_path: Path) -> dict:
         "slide_height": prs.slide_height,
         "slide_count": len(prs.slide_layouts),
         "layouts": layout_infos,
-        "masters": _extract_masters(prs),
+        "masters": masters,
         "theme": _extract_theme(pptx_path),
         "example_slides": _extract_example_slides(prs),
     }
@@ -233,10 +238,42 @@ def map_semantic_layouts(inspection: dict) -> list[dict]:
                 "template_layout_index": best_idx,
                 "confidence": min(best_score, 1.0),
                 "rationale": _build_rationale(best_layout, semantic, best_score, matched_keyword),
+                "slot_mappings": _infer_slot_mappings(best_layout, semantic),
             }
         )
 
     return results
+
+
+def _infer_slot_mappings(layout: dict, semantic: str) -> dict[str, int]:
+    placeholders = layout["placeholders"]
+    title = [ph for ph in placeholders if ph["type"] in _TITLE_LIKE]
+    subtitle = [ph for ph in placeholders if ph["type"] == SUBTITLE_PH]
+    content = [ph for ph in placeholders if ph["type"] in (BODY_PH, OBJECT_PH)]
+    pictures = [ph for ph in placeholders if ph["type"] == PICTURE_PH]
+    content.sort(key=lambda ph: (ph["left"], ph["top"], ph["idx"]))
+    result: dict[str, int] = {}
+
+    def assign(slot: str, candidates: list[dict]) -> None:
+        if candidates:
+            result[slot] = candidates[0]["idx"]
+
+    if semantic == "big_statement":
+        assign("statement", title or content or placeholders)
+        return result
+    assign("title", title)
+    if semantic == "title":
+        assign("subtitle", subtitle or content)
+    elif semantic in {"bullets", "code", "quote"}:
+        assign("body", content)
+    elif semantic == "closing":
+        assign("body", subtitle or content)
+    elif semantic == "two_column":
+        assign("left", content)
+        assign("right", content[1:])
+    elif semantic == "image":
+        assign("image", pictures or content)
+    return result
 
 
 def _matched_keyword(layout_name: str, semantic: str) -> str | None:
@@ -507,6 +544,7 @@ async def suggest_mappings_with_llm(
                 "template_layout_index": idx,
                 "confidence": max(0.0, min(float(confidence), 1.0)),
                 "rationale": str(s.get("rationale", "")),
+                "slot_mappings": _infer_slot_mappings(inspection["layouts"][idx], semantic),
             }
         )
 
