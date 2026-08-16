@@ -1353,6 +1353,19 @@ def create_app(
         except ValueError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
 
+    @app.get("/api/templates/{profile_id}/inspection")
+    async def api_inspect_template(profile_id: str) -> dict:
+        if profile_id == tpl.BUILTIN_DEFAULT_ID:
+            raise HTTPException(
+                status_code=400,
+                detail="The built-in default does not have an imported template file",
+            )
+        profile = tpl.read_profile(templates_data, profile_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Template profile not found")
+        template_file = tpl.profile_dir(templates_data, profile.id) / "template.pptx"
+        return inspect_template(template_file)
+
     class MappingUpdate(BaseModel):
         model_config = ConfigDict(extra="forbid")
         semantic_layout: str
@@ -1503,11 +1516,18 @@ def create_app(
         model_config = ConfigDict(extra="forbid")
         mappings: list[dict]
 
+    class SuggestMappingsRequest(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        consent: Literal[True]
+
     @app.post(
         "/api/templates/{profile_id}/suggest-mappings",
         response_model=SuggestMappingsResponse,
     )
-    async def api_suggest_mappings(profile_id: str) -> SuggestMappingsResponse:
+    async def api_suggest_mappings(
+        profile_id: str, request: SuggestMappingsRequest
+    ) -> SuggestMappingsResponse:
+        del request  # The Literal[True] field is the explicit transmission consent boundary.
         if profile_id == tpl.BUILTIN_DEFAULT_ID:
             raise HTTPException(
                 status_code=400,

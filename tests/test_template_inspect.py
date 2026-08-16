@@ -5,6 +5,8 @@ from pptx import Presentation as PPTXPresentation
 
 from course_harness.template_inspect import _name_score, inspect_template, map_semantic_layouts
 
+PUBLIC_TEMPLATE_FIXTURE = Path(__file__).parent / "fixtures" / "templates" / "python-pptx-test.pptx"
+
 
 def _make_test_template() -> bytes:
     prs = PPTXPresentation()
@@ -78,6 +80,21 @@ def test_map_semantic_layouts_title_gets_index_zero(test_template_path: Path) ->
     title_mapping = next(m for m in result if m["semantic_layout"] == "title")
     assert title_mapping["template_layout_index"] == 0
     assert title_mapping["confidence"] >= 0.8
+
+
+def test_public_template_fixture_maps_named_layouts_deterministically() -> None:
+    inspection = inspect_template(PUBLIC_TEMPLATE_FIXTURE)
+    mappings = {mapping["semantic_layout"]: mapping for mapping in map_semantic_layouts(inspection)}
+
+    assert [layout["name"] for layout in inspection["layouts"][:4]] == [
+        "Title Slide",
+        "Title and Content",
+        "Section Header",
+        "Two Content",
+    ]
+    assert mappings["title"]["template_layout_index"] == 0
+    assert mappings["section"]["template_layout_index"] == 2
+    assert mappings["two_column"]["template_layout_index"] == 3
 
 
 def test_name_score_exact_match() -> None:

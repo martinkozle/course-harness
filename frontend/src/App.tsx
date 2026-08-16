@@ -1161,6 +1161,7 @@ export function App() {
 				) : activeView === "templates" ? (
 					<TemplatesView
 						templates={templates}
+						catalog={catalog}
 						onTemplatesChange={setTemplates}
 					/>
 				) : activeView === "files" ? (

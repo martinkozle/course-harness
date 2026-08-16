@@ -180,6 +180,37 @@ export type TemplateProfileSummary = {
 	mapped_layouts: number;
 };
 
+export type TemplatePlaceholderInspection = {
+	idx: number;
+	type: number;
+	name: string;
+	left: number;
+	top: number;
+	width: number;
+	height: number;
+};
+
+export type TemplateLayoutInspection = {
+	index: number;
+	name: string;
+	placeholders: TemplatePlaceholderInspection[];
+};
+
+export type TemplateInspection = {
+	slide_width: number;
+	slide_height: number;
+	slide_count: number;
+	layouts: TemplateLayoutInspection[];
+	masters: unknown[];
+	theme: { name: string; colors: Record<string, string> };
+	example_slides: unknown[];
+};
+
+export type TemplateValidationFinding = {
+	level: "blocking" | "warning";
+	message: string;
+};
+
 export type CalibrationSlide = {
 	semantic_layout: string;
 	template_layout_index: number;

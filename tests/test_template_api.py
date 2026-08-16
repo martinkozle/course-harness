@@ -110,6 +110,45 @@ async def test_upload_and_get_template(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_template_inspection_is_available_for_mapping_correction(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    transport = httpx2.ASGITransport(
+        app=_app(workspace, tmp_path / "tpl-data", tmp_path / "tpl-cache")
+    )
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        upload = await _upload_pptx(client, _make_test_pptx())
+        profile_id = upload.json()["profile"]["id"]
+
+        response = await client.get(f"/api/templates/{profile_id}/inspection")
+
+    assert response.status_code == 200
+    layouts = response.json()["layouts"]
+    assert layouts[0]["name"] == "Title Slide"
+    assert layouts[0]["placeholders"][0]["name"] == "Title 1"
+
+
+@pytest.mark.anyio
+async def test_ai_mapping_suggestion_requires_explicit_metadata_consent(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    transport = httpx2.ASGITransport(
+        app=_app(workspace, tmp_path / "tpl-data", tmp_path / "tpl-cache")
+    )
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        upload = await _upload_pptx(client, _make_test_pptx())
+        profile_id = upload.json()["profile"]["id"]
+
+        response = await client.post(
+            f"/api/templates/{profile_id}/suggest-mappings",
+            json={"consent": False},
+        )
+
+    assert response.status_code == 422
+    assert "consent" in response.text.lower()
+
+
+@pytest.mark.anyio
 async def test_duplicate_upload_names_are_disambiguated(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     workspace.mkdir()
