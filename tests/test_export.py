@@ -121,6 +121,72 @@ def test_calibration_deck_uses_corrected_template_slots(tmp_path: Path) -> None:
     assert "Sample body text" in placeholders[2]
 
 
+def test_calibration_deck_uses_export_fallback_for_unmapped_slots(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.pptx"
+    PPTXPresentation().save(str(template_path))
+    profile = TemplateProfile(
+        id="tpl-000000000001",
+        name="Partial slots",
+        version=1,
+        template_filename="template.pptx",
+        slide_width=12_192_000,
+        slide_height=6_858_000,
+        slide_count=11,
+        layouts=[
+            TemplateLayoutMapping(
+                semantic_layout="bullets",
+                template_layout_index=1,
+                confidence=1,
+                rationale="Keep the inferred body fallback",
+                slot_mappings={"title": 0},
+            )
+        ],
+    )
+
+    calibrated = PPTXPresentation(BytesIO(_generate_calibration_deck(profile, template_path)))
+
+    placeholders = {
+        shape.placeholder_format.idx: shape.text_frame.text
+        for shape in calibrated.slides[-1].placeholders
+        if shape.has_text_frame
+    }
+    assert placeholders[0] == "[bullets] Sample Title"
+    assert "Sample body text" in placeholders[1]
+
+
+def test_calibration_deck_uses_two_column_fallback_for_unmapped_columns(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.pptx"
+    PPTXPresentation().save(str(template_path))
+    profile = TemplateProfile(
+        id="tpl-000000000001",
+        name="Partial columns",
+        version=1,
+        template_filename="template.pptx",
+        slide_width=12_192_000,
+        slide_height=6_858_000,
+        slide_count=11,
+        layouts=[
+            TemplateLayoutMapping(
+                semantic_layout="two_column",
+                template_layout_index=3,
+                confidence=1,
+                rationale="Keep inferred column fallbacks",
+                slot_mappings={"title": 0},
+            )
+        ],
+    )
+
+    calibrated = PPTXPresentation(BytesIO(_generate_calibration_deck(profile, template_path)))
+
+    placeholders = {
+        shape.placeholder_format.idx: shape.text_frame.text
+        for shape in calibrated.slides[-1].placeholders
+        if shape.has_text_frame
+    }
+    assert placeholders[1] == "Sample left-column content."
+    assert placeholders[2] == "Sample right-column content."
+
+
 def test_validation_blocks_incomplete_two_column_slot_mapping(tmp_path: Path) -> None:
     template_path = tmp_path / "template.pptx"
     PPTXPresentation().save(str(template_path))
@@ -154,6 +220,137 @@ def test_validation_blocks_incomplete_two_column_slot_mapping(tmp_path: Path) ->
             ),
         }
     ]
+
+
+def test_validation_blocks_two_column_layout_with_one_horizontal_group(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.pptx"
+    template = PPTXPresentation()
+    layout = template.slide_layouts[3]
+    layout.placeholders[2].left = layout.placeholders[1].left
+    template.save(str(template_path))
+    profile = TemplateProfile(
+        id="tpl-000000000001",
+        name="Stacked content",
+        version=1,
+        template_filename="template.pptx",
+        slide_width=12_192_000,
+        slide_height=6_858_000,
+        slide_count=11,
+        layouts=[
+            TemplateLayoutMapping(
+                semantic_layout="two_column",
+                template_layout_index=3,
+                confidence=1,
+                rationale="Not actually two columns",
+            )
+        ],
+    )
+
+    issues = validate_export_mapping(profile, template_path)
+
+    assert {
+        "level": "blocking",
+        "message": (
+            "'two_column' → 'Two Content' (index 3): only 1 content column group(s) "
+            "found, two_column needs at least 2"
+        ),
+    } in issues
+
+
+def test_validation_blocks_missing_required_content_placeholder(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.pptx"
+    PPTXPresentation().save(str(template_path))
+    profile = TemplateProfile(
+        id="tpl-000000000001",
+        name="Missing content",
+        version=1,
+        template_filename="template.pptx",
+        slide_width=12_192_000,
+        slide_height=6_858_000,
+        slide_count=11,
+        layouts=[
+            TemplateLayoutMapping(
+                semantic_layout="bullets",
+                template_layout_index=5,
+                confidence=1,
+                rationale="Unusable title-only layout",
+            )
+        ],
+    )
+
+    issues = validate_export_mapping(profile, template_path)
+
+    assert {
+        "level": "blocking",
+        "message": (
+            "'bullets' → 'Title Only' (index 5): slot 'body' has no compatible "
+            "placeholder (expected BODY or OBJECT)"
+        ),
+    } in issues
+
+
+def test_validation_uses_type_fallback_when_content_index_is_not_one(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.pptx"
+    template = PPTXPresentation()
+    content_placeholder = template.slide_layouts[1].placeholders[1]
+    content_placeholder.placeholder_format._ph.idx = 2
+    template.save(str(template_path))
+    profile = TemplateProfile(
+        id="tpl-000000000001",
+        name="Nonstandard content index",
+        version=1,
+        template_filename="template.pptx",
+        slide_width=12_192_000,
+        slide_height=6_858_000,
+        slide_count=11,
+        layouts=[
+            TemplateLayoutMapping(
+                semantic_layout="bullets",
+                template_layout_index=1,
+                confidence=1,
+                rationale="Usable type-based fallback",
+            )
+        ],
+    )
+
+    issues = validate_export_mapping(profile, template_path)
+
+    assert issues == []
+
+
+def test_validation_blocks_slot_collisions_and_unsuitable_column_types(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.pptx"
+    PPTXPresentation().save(str(template_path))
+    profile = TemplateProfile(
+        id="tpl-000000000001",
+        name="Colliding columns",
+        version=1,
+        template_filename="template.pptx",
+        slide_width=12_192_000,
+        slide_height=6_858_000,
+        slide_count=11,
+        layouts=[
+            TemplateLayoutMapping(
+                semantic_layout="two_column",
+                template_layout_index=3,
+                confidence=1,
+                rationale="Invalid correction",
+                slot_mappings={"title": 0, "left": 0, "right": 2},
+            )
+        ],
+    )
+
+    issues = validate_export_mapping(profile, template_path)
+
+    blocking_messages = [issue["message"] for issue in issues if issue["level"] == "blocking"]
+    assert any(
+        "slots 'left' and 'title' use the same placeholder idx=0" in message
+        for message in blocking_messages
+    )
+    assert any(
+        "slot 'left' maps to type TITLE, expected BODY or OBJECT" in message
+        for message in blocking_messages
+    )
 
 
 @pytest.mark.anyio

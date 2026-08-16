@@ -23,6 +23,16 @@ from course_harness.presentation import (
     TitleSlide,
     TwoColumnSlide,
 )
+from course_harness.template_slots import (
+    CONTENT_LIKE_TYPES,
+    find_body_placeholder,
+    find_column_placeholder_groups,
+    find_content_placeholders,
+    find_slot_placeholder,
+    find_slot_placeholder_or,
+    find_subtitle_or_body_placeholder,
+    find_title_placeholder,
+)
 
 if TYPE_CHECKING:
     from course_harness.template_profiles import TemplateProfile
@@ -97,57 +107,6 @@ def export_presentation(
     return buffer.getvalue()
 
 
-_TITLE_LIKE_TYPES = {PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE}
-_CONTENT_LIKE_TYPES = {PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.OBJECT}
-
-
-def _find_ph_of_type(pptx_slide, ph_types):
-    for shape in pptx_slide.placeholders:
-        if shape.placeholder_format.type in ph_types:
-            return shape
-    return None
-
-
-def _find_title_ph(pptx_slide):
-    return _find_ph_of_type(pptx_slide, _TITLE_LIKE_TYPES)
-
-
-def _find_body_ph(pptx_slide):
-    return _find_ph_of_type(pptx_slide, {PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.OBJECT})
-
-
-def _find_subtitle_ph(pptx_slide):
-    return _find_ph_of_type(pptx_slide, {PP_PLACEHOLDER.SUBTITLE})
-
-
-def _find_content_phs(pptx_slide):
-    phs = [s for s in pptx_slide.placeholders if s.placeholder_format.type in _CONTENT_LIKE_TYPES]
-    phs.sort(key=lambda s: s.placeholder_format.idx)
-    return phs
-
-
-def _find_slot_ph(pptx_slide, slot_mappings: dict[str, int], slot: str):
-    placeholder_index = slot_mappings.get(slot)
-    if placeholder_index is None:
-        return None
-    return next(
-        (
-            shape
-            for shape in pptx_slide.placeholders
-            if shape.placeholder_format.idx == placeholder_index
-        ),
-        None,
-    )
-
-
-def _find_slot_ph_or(pptx_slide, slot_mappings: dict[str, int], slot: str, fallback):
-    return _find_slot_ph(pptx_slide, slot_mappings, slot) or fallback(pptx_slide)
-
-
-def _find_subtitle_or_body_ph(pptx_slide):
-    return _find_subtitle_ph(pptx_slide) or _find_body_ph(pptx_slide)
-
-
 def _populate_slide(slide, pptx_slide, slot_mappings: dict[str, int]) -> None:
     handlers = {
         "title": _populate_title_slide,
@@ -166,8 +125,10 @@ def _populate_slide(slide, pptx_slide, slot_mappings: dict[str, int]) -> None:
 
 
 def _populate_title_slide(slide: TitleSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
-    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "title", _find_title_ph)
-    subtitle_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "subtitle", _find_subtitle_or_body_ph)
+    title_ph = find_slot_placeholder_or(pptx_slide, slot_mappings, "title", find_title_placeholder)
+    subtitle_ph = find_slot_placeholder_or(
+        pptx_slide, slot_mappings, "subtitle", find_subtitle_or_body_placeholder
+    )
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     if subtitle_ph and slide.subtitle:
@@ -175,14 +136,14 @@ def _populate_title_slide(slide: TitleSlide, pptx_slide, slot_mappings: dict[str
 
 
 def _populate_section_slide(slide: SectionSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
-    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "title", _find_title_ph)
+    title_ph = find_slot_placeholder_or(pptx_slide, slot_mappings, "title", find_title_placeholder)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
 
 
 def _populate_bullets_slide(slide: BulletsSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
-    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "title", _find_title_ph)
-    body_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "body", _find_body_ph)
+    title_ph = find_slot_placeholder_or(pptx_slide, slot_mappings, "title", find_title_placeholder)
+    body_ph = find_slot_placeholder_or(pptx_slide, slot_mappings, "body", find_body_placeholder)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     if body_ph and slide.bullets:
@@ -197,25 +158,18 @@ def _populate_bullets_slide(slide: BulletsSlide, pptx_slide, slot_mappings: dict
 def _populate_two_column_slide(
     slide: TwoColumnSlide, pptx_slide, slot_mappings: dict[str, int]
 ) -> None:
-    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "title", _find_title_ph)
+    title_ph = find_slot_placeholder_or(pptx_slide, slot_mappings, "title", find_title_placeholder)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
-    left_ph = _find_slot_ph(pptx_slide, slot_mappings, "left")
-    right_ph = _find_slot_ph(pptx_slide, slot_mappings, "right")
+    left_ph = find_slot_placeholder(pptx_slide, slot_mappings, "left")
+    right_ph = find_slot_placeholder(pptx_slide, slot_mappings, "right")
     if left_ph is not None or right_ph is not None:
         if left_ph is not None:
             left_ph.text_frame.text = slide.left_content or ""
         if right_ph is not None:
             right_ph.text_frame.text = slide.right_content or ""
         return
-    phs = [s for s in pptx_slide.placeholders if s.placeholder_format.type in _CONTENT_LIKE_TYPES]
-    phs.sort(key=lambda s: (s.left, s.top))
-    groups: list[list] = []
-    for ph in phs:
-        if not groups or abs(ph.left - groups[-1][0].left) > 500000:
-            groups.append([ph])
-        else:
-            groups[-1].append(ph)
+    groups = find_column_placeholder_groups(pptx_slide)
 
     for i, group in enumerate(groups):
         content = slide.left_content if i == 0 else slide.right_content
@@ -242,7 +196,9 @@ def _populate_two_column_slide(
 def _populate_big_statement_slide(
     slide: BigStatementSlide, pptx_slide, slot_mappings: dict[str, int]
 ) -> None:
-    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "statement", _find_title_ph)
+    title_ph = find_slot_placeholder_or(
+        pptx_slide, slot_mappings, "statement", find_title_placeholder
+    )
     if title_ph and slide.statement:
         title_ph.text_frame.text = slide.statement
         for paragraph in title_ph.text_frame.paragraphs:
@@ -250,8 +206,10 @@ def _populate_big_statement_slide(
 
 
 def _populate_closing_slide(slide: ClosingSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
-    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "title", _find_title_ph)
-    subtitle_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "body", _find_subtitle_or_body_ph)
+    title_ph = find_slot_placeholder_or(pptx_slide, slot_mappings, "title", find_title_placeholder)
+    subtitle_ph = find_slot_placeholder_or(
+        pptx_slide, slot_mappings, "body", find_subtitle_or_body_placeholder
+    )
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     if subtitle_ph and slide.text:
@@ -259,8 +217,8 @@ def _populate_closing_slide(slide: ClosingSlide, pptx_slide, slot_mappings: dict
 
 
 def _populate_code_slide(slide: CodeSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
-    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "title", _find_title_ph)
-    body_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "body", _find_body_ph)
+    title_ph = find_slot_placeholder_or(pptx_slide, slot_mappings, "title", find_title_placeholder)
+    body_ph = find_slot_placeholder_or(pptx_slide, slot_mappings, "body", find_body_placeholder)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     if body_ph and slide.code:
@@ -277,11 +235,13 @@ def _populate_code_slide(slide: CodeSlide, pptx_slide, slot_mappings: dict[str, 
 
 
 def _populate_image_slide(slide: ImageSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
-    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "title", _find_title_ph)
+    title_ph = find_slot_placeholder_or(pptx_slide, slot_mappings, "title", find_title_placeholder)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
-    mapped_image_ph = _find_slot_ph(pptx_slide, slot_mappings, "image")
-    phs = [mapped_image_ph] if mapped_image_ph is not None else _find_content_phs(pptx_slide)
+    mapped_image_ph = find_slot_placeholder(pptx_slide, slot_mappings, "image")
+    phs = (
+        [mapped_image_ph] if mapped_image_ph is not None else find_content_placeholders(pptx_slide)
+    )
     if phs and slide.caption:
         phs[0].text_frame.text = slide.caption
     elif phs and slide.image_url:
@@ -289,8 +249,8 @@ def _populate_image_slide(slide: ImageSlide, pptx_slide, slot_mappings: dict[str
 
 
 def _populate_quote_slide(slide: QuoteSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
-    title_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "title", _find_title_ph)
-    body_ph = _find_slot_ph_or(pptx_slide, slot_mappings, "body", _find_body_ph)
+    title_ph = find_slot_placeholder_or(pptx_slide, slot_mappings, "title", find_title_placeholder)
+    body_ph = find_slot_placeholder_or(pptx_slide, slot_mappings, "body", find_body_placeholder)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     if body_ph:
@@ -369,16 +329,14 @@ def _citation_note_lines(citations: list[SlideCitation]) -> list[str]:
 PLACEHOLDER_REQUIREMENTS: dict[str, dict[str, str]] = {
     "title": {"title": "TITLE or CENTER_TITLE"},
     "section": {"title": "TITLE or CENTER_TITLE"},
-    "bullets": {"title": "TITLE or CENTER_TITLE", "body": "BODY"},
+    "bullets": {"title": "TITLE or CENTER_TITLE", "body": "BODY or OBJECT"},
     "two_column": {"title": "TITLE or CENTER_TITLE"},
     "big_statement": {},
     "closing": {"title": "TITLE or CENTER_TITLE"},
-    "code": {"title": "TITLE or CENTER_TITLE", "body": "BODY"},
+    "code": {"title": "TITLE or CENTER_TITLE", "body": "BODY or OBJECT"},
     "image": {},
-    "quote": {"title": "TITLE or CENTER_TITLE", "body": "BODY"},
+    "quote": {"title": "TITLE or CENTER_TITLE", "body": "BODY or OBJECT"},
 }
-
-DEFAULT_SLOT_INDICES = {"title": 0, "body": 1}
 
 TITLE_LIKE_TYPES = {1, 3}  # TITLE, CENTER_TITLE
 
@@ -424,18 +382,56 @@ def validate_export_mapping(
         layout_name = layout.name or f"Layout {idx}"
         reqs = PLACEHOLDER_REQUIREMENTS.get(semantic, {})
 
+        required_indices: dict[str, int | None] = {}
         for slot, ph_desc in reqs.items():
-            idx_int = m.slot_mappings.get(slot, DEFAULT_SLOT_INDICES[slot])
-            actual = ph_by_idx.get(idx_int)
-            if actual is None:
-                level = "blocking" if ph_desc == "TITLE or CENTER_TITLE" else "warning"
+            if slot in m.slot_mappings:
+                required_indices[slot] = m.slot_mappings[slot]
+                continue
+            fallback = (
+                find_title_placeholder(layout)
+                if ph_desc == "TITLE or CENTER_TITLE"
+                else find_body_placeholder(layout)
+            )
+            required_indices[slot] = (
+                fallback.placeholder_format.idx if fallback is not None else None
+            )
+
+        resolved_slots = dict(m.slot_mappings)
+        for slot, placeholder_index in required_indices.items():
+            if placeholder_index is not None:
+                resolved_slots.setdefault(slot, placeholder_index)
+        slots_by_placeholder: dict[int, list[str]] = {}
+        for slot, placeholder_index in resolved_slots.items():
+            slots_by_placeholder.setdefault(placeholder_index, []).append(slot)
+        for placeholder_index, slots in slots_by_placeholder.items():
+            if len(slots) > 1:
+                sorted_slots = sorted(slots)
                 issues.append(
                     {
-                        "level": level,
+                        "level": "blocking",
                         "message": (
                             f"'{semantic}' → '{layout_name}' (index {idx}): "
-                            f"slot '{slot}' maps to missing placeholder idx={idx_int} "
-                            f"(expected {ph_desc})"
+                            f"slots '{sorted_slots[0]}' and '{sorted_slots[1]}' use the same "
+                            f"placeholder idx={placeholder_index}"
+                        ),
+                    }
+                )
+
+        for slot, ph_desc in reqs.items():
+            placeholder_index = required_indices[slot]
+            actual = ph_by_idx.get(placeholder_index) if placeholder_index is not None else None
+            if actual is None:
+                location = (
+                    f"missing placeholder idx={placeholder_index}"
+                    if placeholder_index is not None
+                    else "no compatible placeholder"
+                )
+                issues.append(
+                    {
+                        "level": "blocking",
+                        "message": (
+                            f"'{semantic}' → '{layout_name}' (index {idx}): "
+                            f"slot '{slot}' has {location} (expected {ph_desc})"
                         ),
                     }
                 )
@@ -445,19 +441,36 @@ def validate_export_mapping(
                         "level": "blocking",
                         "message": (
                             f"'{semantic}' → '{layout_name}' (index {idx}): "
-                            f"placeholder idx={idx_int} is type {actual}, "
+                            f"placeholder idx={placeholder_index} is type {actual}, "
                             f"expected {ph_desc}"
                         ),
                     }
                 )
-            elif ph_desc == "BODY" and actual != PP_PLACEHOLDER.BODY:
+            elif ph_desc == "BODY or OBJECT" and actual not in CONTENT_LIKE_TYPES:
                 issues.append(
                     {
-                        "level": "warning",
+                        "level": "blocking",
                         "message": (
                             f"'{semantic}' → '{layout_name}' (index {idx}): "
-                            f"placeholder idx={idx_int} is type {actual}, "
-                            f"expected BODY — content may not render correctly"
+                            f"slot '{slot}' maps to type {PP_PLACEHOLDER(actual).name}, "
+                            f"expected {ph_desc}"
+                        ),
+                    }
+                )
+
+        for slot in ("left", "right"):
+            placeholder_index = m.slot_mappings.get(slot)
+            if placeholder_index is None:
+                continue
+            actual = ph_by_idx.get(placeholder_index)
+            if actual is not None and actual not in CONTENT_LIKE_TYPES:
+                issues.append(
+                    {
+                        "level": "blocking",
+                        "message": (
+                            f"'{semantic}' → '{layout_name}' (index {idx}): "
+                            f"slot '{slot}' maps to type {PP_PLACEHOLDER(actual).name}, "
+                            "expected BODY or OBJECT"
                         ),
                     }
                 )
@@ -466,12 +479,7 @@ def validate_export_mapping(
             configured_columns = {
                 slot: m.slot_mappings[slot] for slot in ("left", "right") if slot in m.slot_mappings
             }
-            body_obj_phs = [
-                i
-                for i, ph in enumerate(layout.placeholders)
-                if ph.placeholder_format.idx != 0
-                and (ph.placeholder_format.type in (PP_PLACEHOLDER.BODY, PP_PLACEHOLDER.OBJECT))
-            ]
+            column_groups = find_column_placeholder_groups(layout)
             if configured_columns and len(configured_columns) != 2:
                 issues.append(
                     {
@@ -479,16 +487,6 @@ def validate_export_mapping(
                         "message": (
                             f"'{semantic}' → '{layout_name}' (index {idx}): "
                             "both left and right slots must be configured"
-                        ),
-                    }
-                )
-            elif len(set(configured_columns.values())) != len(configured_columns):
-                issues.append(
-                    {
-                        "level": "blocking",
-                        "message": (
-                            f"'{semantic}' → '{layout_name}' (index {idx}): "
-                            "left and right slots must use different placeholders"
                         ),
                     }
                 )
@@ -504,13 +502,13 @@ def validate_export_mapping(
                         ),
                     }
                 )
-            elif not configured_columns and len(body_obj_phs) < 2:
+            elif not configured_columns and len(column_groups) < 2:
                 issues.append(
                     {
                         "level": "blocking",
                         "message": (
                             f"'{semantic}' → '{layout_name}' (index {idx}): "
-                            f"only {len(body_obj_phs)} content placeholder(s) found, "
+                            f"only {len(column_groups)} content column group(s) found, "
                             f"two_column needs at least 2"
                         ),
                     }

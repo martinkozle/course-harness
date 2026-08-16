@@ -12,6 +12,13 @@ from pptx import Presentation as PPTXPresentation
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from course_harness.presentation import VALID_LAYOUTS
+from course_harness.template_slots import (
+    find_body_placeholder,
+    find_column_placeholder_groups,
+    find_content_placeholders,
+    find_subtitle_or_body_placeholder,
+    find_title_placeholder,
+)
 
 BUILTIN_DEFAULT_ID = "_builtin-default"
 TEMPLATE_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
@@ -476,8 +483,13 @@ def _populate_calibration_slide(slide, mapping: TemplateLayoutMapping) -> None:
             "image": "[Sample image or caption]",
         }
         placeholders = {shape.placeholder_format.idx: shape for shape in slide.placeholders}
-        for slot, placeholder_index in mapping.slot_mappings.items():
-            shape = placeholders.get(placeholder_index)
+        for slot in SEMANTIC_SLOTS[mapping.semantic_layout]:
+            placeholder_index = mapping.slot_mappings.get(slot)
+            shape = (
+                placeholders.get(placeholder_index)
+                if placeholder_index is not None
+                else _calibration_fallback_placeholder(slide, mapping.semantic_layout, slot)
+            )
             if shape is not None:
                 with contextlib.suppress(Exception):
                     shape.text_frame.text = sample_text[slot]
@@ -495,6 +507,23 @@ def _populate_calibration_slide(slide, mapping: TemplateLayoutMapping) -> None:
         else:
             with contextlib.suppress(Exception):
                 shape.text_frame.text = f"[placeholder idx={shape.placeholder_format.idx}]"
+
+
+def _calibration_fallback_placeholder(slide, semantic: str, slot: str):
+    if slot in {"title", "statement"}:
+        return find_title_placeholder(slide)
+    elif slot == "subtitle" or (slot == "body" and semantic == "closing"):
+        return find_subtitle_or_body_placeholder(slide)
+    elif slot == "body":
+        return find_body_placeholder(slide)
+    elif slot == "image":
+        placeholders = find_content_placeholders(slide)
+        return placeholders[0] if placeholders else None
+    elif slot in {"left", "right"}:
+        groups = find_column_placeholder_groups(slide)
+        column_index = 0 if slot == "left" else 1
+        return groups[column_index][0] if len(groups) > column_index else None
+    return None
 
 
 def _delete_all_slides(prs) -> None:
