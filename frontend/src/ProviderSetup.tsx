@@ -19,8 +19,22 @@ export function ModelsView({
 	const [providerId, setProviderId] = useState(
 		catalog.provider_accounts[0]?.id ?? "",
 	);
+	const [editingProviderId, setEditingProviderId] = useState<string | null>(
+		null,
+	);
+	const [replacementApiKey, setReplacementApiKey] = useState("");
+	const [deletingProviderId, setDeletingProviderId] = useState<string | null>(
+		null,
+	);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const presetCountByProvider = new Map<string, number>();
+	for (const preset of catalog.model_presets) {
+		presetCountByProvider.set(
+			preset.provider_account_id,
+			(presetCountByProvider.get(preset.provider_account_id) ?? 0) + 1,
+		);
+	}
 
 	async function reloadCatalog() {
 		const response = await fetch("/api/models");
@@ -91,6 +105,62 @@ export function ModelsView({
 		}
 	}
 
+	async function replaceCredential(
+		event: FormEvent<HTMLFormElement>,
+		accountId: string,
+	) {
+		event.preventDefault();
+		setBusy(true);
+		setError(null);
+		try {
+			const response = await fetch(
+				`/api/provider-accounts/${encodeURIComponent(accountId)}/credential`,
+				{
+					method: "PATCH",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ api_key: replacementApiKey }),
+				},
+			);
+			if (!response.ok) throw new Error(await responseError(response));
+			setEditingProviderId(null);
+			setReplacementApiKey("");
+		} catch (caught) {
+			setError(
+				caught instanceof Error
+					? caught.message
+					: "The Provider Account credential was not replaced.",
+			);
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function deleteProvider(accountId: string) {
+		setBusy(true);
+		setError(null);
+		try {
+			const response = await fetch(
+				`/api/provider-accounts/${encodeURIComponent(accountId)}?delete_model_presets=true`,
+				{ method: "DELETE" },
+			);
+			if (!response.ok) throw new Error(await responseError(response));
+			const next = (await response.json()) as ModelCatalog;
+			onCatalogChange(next);
+			setProviderId((current) =>
+				current === accountId ? (next.provider_accounts[0]?.id ?? "") : current,
+			);
+			setDeletingProviderId(null);
+		} catch (caught) {
+			setError(
+				caught instanceof Error
+					? caught.message
+					: "The Provider Account was not deleted.",
+			);
+		} finally {
+			setBusy(false);
+		}
+	}
+
 	return (
 		<main className="page-main models-main" aria-labelledby="models-heading">
 			<header className="page-heading models-heading">
@@ -103,7 +173,7 @@ export function ModelsView({
 			</header>
 
 			{error ? (
-				<p className="notice error-notice" role="alert">
+				<p className="notice error-notice" id="models-error" role="alert">
 					{error}
 				</p>
 			) : null}
@@ -123,13 +193,112 @@ export function ModelsView({
 				</div>
 				{catalog.provider_accounts.length > 0 ? (
 					<ul className="provider-account-list">
-						{catalog.provider_accounts.map((account) => (
-							<li key={account.id}>
-								<strong>{account.name}</strong>
-								<span>{account.kind}</span>
-								<small>{account.base_url}</small>
-							</li>
-						))}
+						{catalog.provider_accounts.map((account) => {
+							const presetCount = presetCountByProvider.get(account.id) ?? 0;
+							const isEditing = editingProviderId === account.id;
+							const isDeleting = deletingProviderId === account.id;
+							return (
+								<li key={account.id}>
+									<div className="provider-account-copy">
+										<strong>{account.name}</strong>
+										<span>{account.kind}</span>
+										<small>{account.base_url}</small>
+									</div>
+									<div className="provider-account-actions">
+										<button
+											className="quiet-action compact-action"
+											type="button"
+											disabled={busy}
+											aria-expanded={isEditing}
+											aria-controls={`replacement-form-${account.id}`}
+											onClick={() => {
+												setError(null);
+												setDeletingProviderId(null);
+												setReplacementApiKey("");
+												setEditingProviderId(isEditing ? null : account.id);
+											}}
+										>
+											{isEditing ? "Cancel replacement" : "Replace key"}
+										</button>
+										<button
+											className="quiet-action destructive-action compact-action"
+											type="button"
+											disabled={busy}
+											aria-expanded={isDeleting}
+											aria-controls={`delete-confirmation-${account.id}`}
+											onClick={() => {
+												setError(null);
+												setEditingProviderId(null);
+												setReplacementApiKey("");
+												setDeletingProviderId(isDeleting ? null : account.id);
+											}}
+										>
+											{isDeleting ? "Cancel deletion" : "Delete"}
+										</button>
+									</div>
+									{isEditing ? (
+										<form
+											id={`replacement-form-${account.id}`}
+											className="provider-account-inline-form"
+											onSubmit={(event) =>
+												void replaceCredential(event, account.id)
+											}
+											aria-busy={busy}
+										>
+											<div className="field">
+												<label htmlFor={`replacement-key-${account.id}`}>
+													New API key for {account.name}
+												</label>
+												<input
+													id={`replacement-key-${account.id}`}
+													type="password"
+													value={replacementApiKey}
+													onChange={(event) =>
+														setReplacementApiKey(event.target.value)
+													}
+													required
+													autoComplete="off"
+													aria-invalid={error ? true : undefined}
+													aria-describedby={error ? "models-error" : undefined}
+												/>
+											</div>
+											<p className="form-help">
+												Existing Model Presets will keep using this account.
+											</p>
+											<button
+												className="primary-action compact-action"
+												type="submit"
+												disabled={busy}
+											>
+												{busy ? "Verifying…" : "Save new key"}
+											</button>
+										</form>
+									) : null}
+									{isDeleting ? (
+										<div
+											id={`delete-confirmation-${account.id}`}
+											className="provider-account-delete-confirmation"
+										>
+											<p>
+												Delete <strong>{account.name}</strong> and its saved
+												credential?
+												{presetCount > 0
+													? ` This will also delete ${presetCount} attached Model ${presetCount === 1 ? "Preset" : "Presets"}.`
+													: ""}
+											</p>
+											<button
+												className="secondary-action destructive-action compact-action"
+												type="button"
+												disabled={busy}
+												onClick={() => void deleteProvider(account.id)}
+											>
+												{busy ? "Deleting…" : "Delete account"}
+											</button>
+										</div>
+									) : null}
+								</li>
+							);
+						})}
 					</ul>
 				) : (
 					<p className="empty-note">No Provider Accounts saved yet.</p>

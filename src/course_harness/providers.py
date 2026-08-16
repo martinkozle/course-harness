@@ -95,6 +95,12 @@ class ProviderAccountRequest(BaseModel):
         return self.base_url.rstrip("/")
 
 
+class ProviderAccountCredentialRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    api_key: SecretStr = Field(min_length=1)
+
+
 class ProviderAccount(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -146,6 +152,10 @@ class ProviderCapabilityError(ValueError):
 
 class ProviderValidationError(ValueError):
     """The provider or model could not be verified."""
+
+
+class ProviderAccountInUseError(ValueError):
+    """A Provider Account cannot be deleted without handling its Model Presets."""
 
 
 ProviderCapabilityValidator = Callable[
@@ -417,6 +427,81 @@ def save_provider_account(store_path: Path, request: ProviderAccountRequest) -> 
     credentials[account.id] = request.api_key.get_secret_value()
     _write_catalog(store_path, catalog, credentials)
     return account
+
+
+def provider_request_for_credential_rotation(
+    store_path: Path,
+    account_id: str,
+    request: ProviderAccountCredentialRequest,
+) -> ProviderAccountRequest:
+    account = next(
+        (
+            candidate
+            for candidate in read_model_catalog(store_path).provider_accounts
+            if candidate.id == account_id
+        ),
+        None,
+    )
+    if account is None:
+        raise KeyError(account_id)
+    return ProviderAccountRequest(
+        name=account.name,
+        kind=account.kind,
+        api_key=request.api_key,
+        base_url=account.base_url if account.kind == "openai-compatible" else None,
+    )
+
+
+def replace_provider_account_credential(
+    store_path: Path,
+    account_id: str,
+    request: ProviderAccountCredentialRequest,
+) -> ProviderAccount:
+    catalog = read_model_catalog(store_path)
+    account = next(
+        (candidate for candidate in catalog.provider_accounts if candidate.id == account_id), None
+    )
+    if account is None:
+        raise KeyError(account_id)
+    credentials = _read_credentials(store_path)
+    credentials[account_id] = request.api_key.get_secret_value()
+    _write_catalog(store_path, catalog, credentials)
+    return account
+
+
+def delete_provider_account(
+    store_path: Path,
+    account_id: str,
+    *,
+    delete_model_presets: bool = False,
+) -> ModelCatalog:
+    catalog = read_model_catalog(store_path)
+    if all(account.id != account_id for account in catalog.provider_accounts):
+        raise KeyError(account_id)
+    attached_presets = [
+        preset for preset in catalog.model_presets if preset.provider_account_id == account_id
+    ]
+    if attached_presets and not delete_model_presets:
+        count = len(attached_presets)
+        label = "Model Preset" if count == 1 else "Model Presets"
+        raise ProviderAccountInUseError(
+            f"This Provider Account is used by {count} {label}. "
+            "Confirm that those presets should also be deleted."
+        )
+
+    removed_preset_ids = {preset.id for preset in attached_presets}
+    catalog.provider_accounts = [
+        account for account in catalog.provider_accounts if account.id != account_id
+    ]
+    catalog.model_presets = [
+        preset for preset in catalog.model_presets if preset.id not in removed_preset_ids
+    ]
+    if catalog.selected_model_id in removed_preset_ids:
+        catalog.selected_model_id = catalog.model_presets[0].id if catalog.model_presets else None
+    credentials = _read_credentials(store_path)
+    credentials.pop(account_id, None)
+    _write_catalog(store_path, catalog, credentials)
+    return catalog
 
 
 def save_model_preset(

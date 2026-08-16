@@ -26,6 +26,15 @@ test("Course Author creates a Course through chat and revises its Syllabus", asy
 		await page.getByLabel("Model ID").fill("openai/gpt-oss-20b:free");
 		await page.getByRole("button", { name: "Save Model Preset" }).click();
 	}
+	await page.getByRole("button", { name: "Replace key" }).click();
+	await page
+		.getByLabel("New API key for My OpenRouter")
+		.fill("rotated-deterministic-test-key");
+	await page.getByRole("button", { name: "Save new key" }).click();
+	await expect(page.getByText("Planning model")).toBeVisible();
+	await expect(
+		page.getByLabel("New API key for My OpenRouter"),
+	).not.toBeVisible();
 	await page.getByRole("button", { name: "Authoring", exact: true }).click();
 	await expect(
 		page.getByRole("heading", { name: "Build the Lecture" }),
@@ -76,6 +85,15 @@ test("Course Author creates a Course through chat and revises its Syllabus", asy
 	await expect(
 		page.getByRole("heading", { name: "What should we work on?" }),
 	).toBeVisible();
+
+	await page.getByRole("button", { name: "Models", exact: true }).click();
+	await page.getByRole("button", { name: "Delete", exact: true }).click();
+	await expect(
+		page.getByText("This will also delete 1 attached Model Preset."),
+	).toBeVisible();
+	await page.getByRole("button", { name: "Delete account" }).click();
+	await expect(page.getByText("No Provider Accounts saved yet.")).toBeVisible();
+	await expect(page.getByText("Add a Model Preset after")).toBeVisible();
 
 	await page.getByRole("button", { name: "All courses" }).click();
 	await expect(

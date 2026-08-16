@@ -67,6 +67,8 @@ from course_harness.providers import (
     ModelPreset,
     ModelPresetRequest,
     ProviderAccount,
+    ProviderAccountCredentialRequest,
+    ProviderAccountInUseError,
     ProviderAccountRequest,
     ProviderAccountValidator,
     ProviderCapabilityError,
@@ -75,11 +77,14 @@ from course_harness.providers import (
     ProviderStatus,
     ProviderValidationError,
     default_provider_store_path,
+    delete_provider_account,
+    provider_request_for_credential_rotation,
     provider_request_for_model,
     provider_status,
     read_model_catalog,
     read_provider_api_key,
     read_provider_configuration,
+    replace_provider_account_credential,
     require_planning_capabilities,
     resolve_selected_model,
     save_model_preset,
@@ -444,6 +449,38 @@ def create_app(
         except ProviderValidationError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return save_provider_account(provider_path, request)
+
+    @app.patch("/api/provider-accounts/{account_id}/credential", response_model=ProviderAccount)
+    async def rotate_provider_account_credential(
+        account_id: str, request: ProviderAccountCredentialRequest
+    ) -> ProviderAccount:
+        require_workspace()
+        try:
+            validation_request = provider_request_for_credential_rotation(
+                provider_path, account_id, request
+            )
+            await provider_account_validator(validation_request)
+            return replace_provider_account_credential(provider_path, account_id, request)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Provider Account was not found") from error
+        except ProviderValidationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.delete("/api/provider-accounts/{account_id}", response_model=ModelCatalog)
+    async def remove_provider_account(
+        account_id: str, delete_model_presets: bool = False
+    ) -> ModelCatalog:
+        require_workspace()
+        try:
+            return delete_provider_account(
+                provider_path,
+                account_id,
+                delete_model_presets=delete_model_presets,
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Provider Account was not found") from error
+        except ProviderAccountInUseError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.post("/api/models", response_model=ModelPreset, status_code=201)
     async def create_model_preset(request: ModelPresetRequest) -> ModelPreset:

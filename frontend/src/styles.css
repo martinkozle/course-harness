@@ -1596,6 +1596,23 @@ h1 {
 	background: white;
 }
 
+.provider-account-copy {
+	display: grid;
+	min-width: 0;
+	gap: 0.25rem;
+}
+
+.provider-account-actions {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+}
+
+.provider-account-actions button {
+	min-height: 34px;
+	padding-inline: 10px;
+}
+
 .provider-account-list strong,
 .model-preset-list strong {
 	display: block;
@@ -1616,8 +1633,51 @@ h1 {
 }
 
 .provider-account-list small {
-	grid-column: 1 / -1;
 	overflow-wrap: anywhere;
+}
+
+.provider-account-inline-form,
+.provider-account-delete-confirmation {
+	grid-column: 1 / -1;
+	margin-top: 0.65rem;
+	padding-top: 0.9rem;
+	border-top: 1px solid var(--line);
+}
+
+.provider-account-inline-form {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(180px, auto) auto;
+	align-items: end;
+	gap: 0.75rem;
+}
+
+.provider-account-inline-form input {
+	width: 100%;
+	min-height: 42px;
+	padding: 0 10px;
+	border: 1px solid #aebbd2;
+	background: white;
+	color: var(--ink);
+}
+
+.provider-account-inline-form .form-help {
+	margin: 0 0 0.5rem;
+	color: var(--muted);
+	font-size: 0.72rem;
+}
+
+.provider-account-delete-confirmation {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	color: var(--danger);
+}
+
+.provider-account-delete-confirmation p {
+	margin: 0;
+	font-size: 0.78rem;
+	line-height: 1.45;
 }
 
 .settings-form-card {
@@ -1843,6 +1903,15 @@ h1 {
 	.recent-list {
 		grid-template-columns: 1fr;
 	}
+
+	.provider-account-inline-form {
+		grid-template-columns: 1fr;
+		align-items: stretch;
+	}
+
+	.provider-account-inline-form button {
+		justify-self: start;
+	}
 }
 
 @media (max-width: 560px) {
@@ -1867,6 +1936,19 @@ h1 {
 	.local-status span {
 		width: 9px;
 		height: 9px;
+	}
+
+	.provider-account-list li {
+		grid-template-columns: 1fr;
+	}
+
+	.provider-account-actions {
+		flex-wrap: wrap;
+	}
+
+	.provider-account-delete-confirmation {
+		align-items: flex-start;
+		flex-direction: column;
 	}
 
 	h1,

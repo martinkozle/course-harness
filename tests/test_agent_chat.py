@@ -24,6 +24,7 @@ from course_harness.course_agent import (
     apply_course_plan_command,
 )
 from course_harness.providers import (
+    ProviderAccountRequest,
     ProviderCapabilities,
     ProviderConfigurationRequest,
     ProviderValidationError,
@@ -251,6 +252,132 @@ async def test_one_provider_account_can_back_multiple_selectable_model_presets(
     assert catalog.json()["selected_model_id"] == second.json()["id"]
     credentials = (provider_store / "credentials.json").read_text(encoding="utf-8")
     assert credentials.count("one-reusable-secret") == 1
+
+
+@pytest.mark.anyio
+async def test_provider_account_credential_can_be_rotated_without_replacing_the_account(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    provider_store = tmp_path / "user-data" / "providers"
+    validated_keys: list[str] = []
+
+    async def validate_account(request: ProviderAccountRequest) -> None:
+        key = request.api_key.get_secret_value()
+        validated_keys.append(key)
+        if key == "rejected-secret":
+            raise ProviderValidationError("The replacement credential was rejected.")
+
+    transport = httpx2.ASGITransport(
+        app=create_app(
+            workspace,
+            provider_store_path=provider_store,
+            provider_validator=_verified_capabilities,
+            provider_account_validator=validate_account,
+        )
+    )
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        account = await client.post(
+            "/api/provider-accounts",
+            json={
+                "name": "My OpenRouter",
+                "kind": "openrouter",
+                "api_key": "original-secret",
+            },
+        )
+        account_id = account.json()["id"]
+        preset = await client.post(
+            "/api/models",
+            json={
+                "name": "Planning",
+                "provider_account_id": account_id,
+                "model": "openai/gpt-oss-20b:free",
+            },
+        )
+        rejected = await client.patch(
+            f"/api/provider-accounts/{account_id}/credential",
+            json={"api_key": "rejected-secret"},
+        )
+        rotated = await client.patch(
+            f"/api/provider-accounts/{account_id}/credential",
+            json={"api_key": "replacement-secret"},
+        )
+        catalog = await client.get("/api/models")
+
+    assert account.status_code == 201
+    assert preset.status_code == 201
+    assert rejected.status_code == 422
+    assert rotated.status_code == 200
+    assert rotated.json() == account.json()
+    assert catalog.json()["model_presets"][0]["provider_account_id"] == account_id
+    assert validated_keys == ["original-secret", "rejected-secret", "replacement-secret"]
+    credentials = (provider_store / "credentials.json").read_text(encoding="utf-8")
+    assert "replacement-secret" in credentials
+    assert "original-secret" not in credentials
+    assert "rejected-secret" not in credentials
+
+
+@pytest.mark.anyio
+async def test_provider_account_deletion_requires_explicit_preset_cleanup(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    provider_store = tmp_path / "user-data" / "providers"
+    transport = httpx2.ASGITransport(
+        app=create_app(
+            workspace,
+            provider_store_path=provider_store,
+            provider_validator=_verified_capabilities,
+            provider_account_validator=_verified_account,
+        )
+    )
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        first_account = await client.post(
+            "/api/provider-accounts",
+            json={"name": "Expired", "kind": "openrouter", "api_key": "expired-secret"},
+        )
+        second_account = await client.post(
+            "/api/provider-accounts",
+            json={"name": "Current", "kind": "openrouter", "api_key": "current-secret"},
+        )
+        first_preset = await client.post(
+            "/api/models",
+            json={
+                "name": "Old model",
+                "provider_account_id": first_account.json()["id"],
+                "model": "old/model",
+            },
+        )
+        second_preset = await client.post(
+            "/api/models",
+            json={
+                "name": "Current model",
+                "provider_account_id": second_account.json()["id"],
+                "model": "current/model",
+            },
+        )
+        selected = await client.put(
+            "/api/models/selected", json={"model_id": first_preset.json()["id"]}
+        )
+        guarded = await client.delete(f"/api/provider-accounts/{first_account.json()['id']}")
+        deleted = await client.delete(
+            f"/api/provider-accounts/{first_account.json()['id']}?delete_model_presets=true"
+        )
+
+    assert first_preset.status_code == 201
+    assert second_preset.status_code == 201
+    assert selected.status_code == 200
+    assert guarded.status_code == 409
+    assert "1 Model Preset" in guarded.json()["detail"]
+    assert deleted.status_code == 200
+    assert deleted.json()["provider_accounts"] == [second_account.json()]
+    assert deleted.json()["model_presets"] == [second_preset.json()]
+    assert deleted.json()["selected_model_id"] == second_preset.json()["id"]
+    credentials = (provider_store / "credentials.json").read_text(encoding="utf-8")
+    assert "current-secret" in credentials
+    assert "expired-secret" not in credentials
 
 
 @pytest.mark.anyio
