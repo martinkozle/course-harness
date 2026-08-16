@@ -26,7 +26,10 @@ test("Course Author creates a Course through chat and revises its Syllabus", asy
 		await page.getByLabel("Model ID").fill("openai/gpt-oss-20b:free");
 		await page.getByRole("button", { name: "Save Model Preset" }).click();
 	}
-	await page.getByRole("button", { name: "Course Plan" }).click();
+	await page.getByRole("button", { name: "Authoring", exact: true }).click();
+	await expect(
+		page.getByRole("heading", { name: "Build the Lecture" }),
+	).toBeVisible();
 	await page
 		.getByLabel("Message the Course Agent")
 		.fill(
@@ -35,22 +38,11 @@ test("Course Author creates a Course through chat and revises its Syllabus", asy
 	await page.getByRole("button", { name: "Send message" }).click();
 
 	await expect(
-		page.getByRole("heading", { name: "Apply this change?" }),
-	).toBeVisible();
-	await expect(page.getByText("Causal Inference in Practice")).toBeVisible();
-	await expect(
-		page.getByText("From association to intervention"),
-	).toBeVisible();
-	await expect(
-		page.getByRole("heading", { name: "Causal Inference in Practice" }),
-	).toHaveCount(0);
-	await page.getByRole("button", { name: "Save Course Plan" }).click();
-
-	await expect(
-		page.getByRole("heading", { name: "Causal Inference in Practice" }),
-	).toBeVisible();
-	await expect(
 		page.getByText("I created a two-Lecture Course Plan."),
+	).toBeVisible();
+	await page.getByRole("button", { name: "Course Plan" }).click();
+	await expect(
+		page.getByRole("heading", { name: "Causal Inference in Practice" }),
 	).toBeVisible();
 	const lectureSpine = page.getByRole("region", { name: "Lecture spine" });
 	await expect(lectureSpine.getByRole("listitem")).toHaveCount(2);
@@ -76,6 +68,14 @@ test("Course Author creates a Course through chat and revises its Syllabus", asy
 	await expect(lectureSpine.getByRole("listitem").nth(1)).toContainText(
 		"Interventions, not associations",
 	);
+
+	await page.getByRole("button", { name: "Authoring", exact: true }).click();
+	await page.getByRole("button", { name: "Clear conversation" }).click();
+	await expect(page.getByText("This cannot be undone.")).toBeVisible();
+	await page.getByRole("button", { name: "Clear now" }).click();
+	await expect(
+		page.getByRole("heading", { name: "What should we work on?" }),
+	).toBeVisible();
 
 	await page.getByRole("button", { name: "All courses" }).click();
 	await expect(

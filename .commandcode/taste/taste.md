@@ -33,6 +33,7 @@ See [course-harness/taste.md](course-harness/taste.md)
 
 # debugging
 - Set up FastAPI logging so API errors (422, 500, etc.) produce visible server-side logs with request details, not just silent HTTP status codes. Confidence: 0.60
+- Reproduce bugs locally using actual project data/templates before proposing fixes. Don't make speculative code changes and ask the user to verify them — inspect the output, check XML/state, and confirm the fix actually resolves the issue first. Confidence: 0.80
 
 # ui
 - Don't show "no results" placeholder text in search until the user has explicitly submitted a search query. Confidence: 0.70

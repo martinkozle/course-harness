@@ -14,6 +14,7 @@ from course_harness.template_profiles import (
     read_profile_version,
     read_registry,
     resolve_profile,
+    unique_profile_name,
     write_profile,
     write_profile_version,
     write_registry,
@@ -97,6 +98,33 @@ class TestRegistry:
         delete_profile(data_dir, cache_dir, profile.id)
         registry = read_registry(data_dir)
         assert len(registry.profiles) == 0
+
+    def test_unique_profile_name_disambiguates_case_insensitively(self) -> None:
+        registry = TemplateProfileRegistry(
+            profiles=[
+                TemplateProfileSummary(
+                    id="tpl-000000000001",
+                    name="Corporate",
+                    version=1,
+                    slide_count=5,
+                    mapped_layouts=2,
+                ),
+                TemplateProfileSummary(
+                    id="tpl-000000000002",
+                    name="Corporate (2)",
+                    version=1,
+                    slide_count=5,
+                    mapped_layouts=2,
+                ),
+            ]
+        )
+
+        assert unique_profile_name("corporate", registry) == "corporate (3)"
+        assert unique_profile_name("Built-in default", registry) == "Built-in default (2)"
+        assert (
+            unique_profile_name("Corporate", registry, exclude_profile_id="tpl-000000000001")
+            == "Corporate"
+        )
 
 
 class TestProfileStorage:

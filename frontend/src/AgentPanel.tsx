@@ -50,17 +50,22 @@ type Activity = { id: string; title: string; detail: string };
 type AgentMode = "guided" | "autonomous";
 
 type AgentPanelProps = {
+	embedded?: boolean;
 	initialMessages: ChatMessage[];
 	initialApproval: AgentInterrupt | null;
 	catalog: ModelCatalog;
 	onCatalogChange: (catalog: ModelCatalog) => void;
 	onOpenModels: () => void;
-	modelsOpen: boolean;
 	onCourseChange: (course: CoursePlan) => Promise<void>;
 	onRunningChange: (running: boolean) => void;
 	onPresentationsChange?: () => Promise<void>;
 	chatContext?: string | null;
 	onChatContextCleared?: () => void;
+	onConversationCleared: () => void;
+	onTranscriptChange: (
+		messages: ChatMessage[],
+		approval: AgentInterrupt | null,
+	) => void;
 };
 
 function updateAssistantMessage(
@@ -76,6 +81,16 @@ function updateAssistantMessage(
 			? { ...message, content: message.content + delta }
 			: message,
 	);
+}
+
+function messageParts(content: string): {
+	context: string | null;
+	body: string;
+} {
+	const match = /^\[Context: (.+)\]\n\n([\s\S]*)$/.exec(content);
+	return match
+		? { context: match[1], body: match[2] }
+		: { context: null, body: content };
 }
 
 function approvalProposal(interrupt: AgentInterrupt): {
@@ -252,17 +267,19 @@ function ApprovalCard({
 }
 
 export function AgentPanel({
+	embedded = false,
 	initialMessages,
 	initialApproval,
 	catalog,
 	onCatalogChange,
 	onOpenModels,
-	modelsOpen,
 	onCourseChange,
 	onRunningChange,
 	onPresentationsChange,
 	chatContext,
 	onChatContextCleared,
+	onConversationCleared,
+	onTranscriptChange,
 }: AgentPanelProps) {
 	const [messages, setMessages] = useState(initialMessages);
 	const [prompt, setPrompt] = useState("");
@@ -272,7 +289,7 @@ export function AgentPanel({
 	);
 	const [running, setRunning] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const [mode, setMode] = useState<AgentMode>("guided");
+	const [confirmingClear, setConfirmingClear] = useState(false);
 	const abortRef = useRef<AbortController | null>(null);
 	const chatEndRef = useRef<HTMLDivElement | null>(null);
 	const selected = catalog.model_presets.find(
@@ -299,15 +316,6 @@ export function AgentPanel({
 		[onRunningChange],
 	);
 
-	function isContinueUntilDone(text: string): boolean {
-		const lower = text.toLowerCase().trim();
-		return (
-			lower === "continue until done" ||
-			lower === "continue until finished" ||
-			lower === "carry on until done"
-		);
-	}
-
 	async function selectModel(modelId: string) {
 		setError(null);
 		const response = await fetch("/api/models/selected", {
@@ -325,7 +333,7 @@ export function AgentPanel({
 	async function run(
 		messagesForRun: ChatMessage[],
 		resume?: object[],
-		modeForRun: AgentMode = mode,
+		modeForRun: AgentMode = "autonomous",
 	) {
 		setActivities([]);
 		setError(null);
@@ -384,6 +392,7 @@ export function AgentPanel({
 				};
 				setMessages(transcript.messages);
 				setApproval(transcript.approval);
+				onTranscriptChange(transcript.messages, transcript.approval);
 			}
 		} catch (caught) {
 			if (caught instanceof DOMException && caught.name === "AbortError") {
@@ -408,6 +417,27 @@ export function AgentPanel({
 		}
 	}
 
+	async function clearConversation() {
+		if (running || approval) return;
+		setError(null);
+		try {
+			const response = await fetch("/api/chat", { method: "DELETE" });
+			if (!response.ok) {
+				throw new Error("The conversation could not be cleared.");
+			}
+			setMessages([]);
+			setActivities([]);
+			setConfirmingClear(false);
+			onConversationCleared();
+		} catch (caught) {
+			setError(
+				caught instanceof Error
+					? caught.message
+					: "The conversation could not be cleared.",
+			);
+		}
+	}
+
 	function sendMessage(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		const content = prompt.trim();
@@ -418,15 +448,11 @@ export function AgentPanel({
 			role: "user",
 			content: contextPrefix + content,
 		};
-		const modeForRun = isContinueUntilDone(content) ? "autonomous" : mode;
-		if (modeForRun === "autonomous" && mode !== "autonomous") {
-			setMode("autonomous");
-		}
 		setMessages((current) => [...current, userMessage]);
 		setPrompt("");
 		setApproval(null);
 		if (onChatContextCleared) onChatContextCleared();
-		void run([userMessage], undefined, modeForRun);
+		void run([userMessage]);
 	}
 
 	function resolveApproval(approved: boolean) {
@@ -436,103 +462,159 @@ export function AgentPanel({
 		void run(
 			[],
 			[{ interruptId: pending.id, status: "resolved", payload: { approved } }],
+			"guided",
 		);
 	}
 
 	return (
-		<aside className="agent-panel" id="agent" aria-labelledby="agent-heading">
-			<div className="agent-panel-heading">
+		<section
+			className={`agent-panel${embedded ? " is-embedded" : ""}`}
+			id="agent"
+			aria-labelledby="agent-heading"
+		>
+			<header className="agent-panel-heading">
 				<div className="agent-heading-line">
 					<div>
-						<p className="section-kicker">Course Agent</p>
-						<h2 id="agent-heading">Plan in conversation</h2>
+						<p className="section-kicker">
+							{embedded ? "Collaborate" : "Course Agent"}
+						</p>
+						{embedded ? (
+							<h2 id="agent-heading">Course Agent</h2>
+						) : (
+							<>
+								<h1 id="agent-heading">Work with your course</h1>
+								<p>
+									Ask for a change, review the result, and keep shaping it here.
+								</p>
+							</>
+						)}
 					</div>
 					<span className={`agent-status${running ? " is-running" : ""}`}>
 						{running ? "Working" : selected ? "Ready" : "Needs model"}
 					</span>
 				</div>
-				{running ? (
-					<button
-						className="secondary-action compact-action"
-						type="button"
-						onClick={cancelRun}
-					>
-						Cancel run
-					</button>
-				) : null}
-				<div className="agent-mode-toggle">
-					<label htmlFor="agent-mode">Behaviour</label>
-					<select
-						id="agent-mode"
-						value={mode}
-						disabled={running}
-						onChange={(event) => setMode(event.target.value as AgentMode)}
-					>
-						<option value="guided">Guided</option>
-						<option value="autonomous">Autonomous</option>
-					</select>
-					<small>
-						{mode === "guided"
-							? "Course Plan changes wait for your approval."
-							: "Course Plan changes apply automatically."}
-					</small>
-				</div>
-				{selected ? (
-					<div className="agent-model-picker">
-						<label htmlFor="agent-model">Model Preset</label>
-						<select
-							id="agent-model"
-							value={selected.id}
-							disabled={running}
-							onChange={(event) => void selectModel(event.target.value)}
-						>
-							{catalog.model_presets.map((preset) => (
-								<option key={preset.id} value={preset.id}>
-									{preset.name}
-								</option>
-							))}
-						</select>
-						<small>
-							{selected.model} · {selectedAccount?.name}
-						</small>
-					</div>
-				) : (
-					<div className="agent-model-empty">
-						<p>
-							Add a Provider Account and Model Preset before starting a run.
-						</p>
-						{!modelsOpen ? (
+
+				<div className="agent-toolbar">
+					{selected ? (
+						<div className="agent-model-picker">
+							<label htmlFor="agent-model">Model</label>
+							<select
+								id="agent-model"
+								value={selected.id}
+								disabled={running}
+								onChange={(event) => void selectModel(event.target.value)}
+							>
+								{catalog.model_presets.map((preset) => (
+									<option key={preset.id} value={preset.id}>
+										{preset.name}
+									</option>
+								))}
+							</select>
+							<small>
+								{selected.model} · {selectedAccount?.name}
+							</small>
+						</div>
+					) : (
+						<div className="agent-model-empty">
+							<p>Add a model before starting a conversation.</p>
 							<button
 								className="secondary-action compact-action"
 								type="button"
 								onClick={onOpenModels}
 							>
-								Open Models
+								Set up a model
 							</button>
-						) : null}
-					</div>
-				)}
-			</div>
+						</div>
+					)}
 
-			<div className="chat-scroll-container">
+					<div className="conversation-actions">
+						{running ? (
+							<button
+								className="secondary-action compact-action"
+								type="button"
+								onClick={cancelRun}
+							>
+								Stop
+							</button>
+						) : confirmingClear ? (
+							<fieldset className="clear-confirmation">
+								<legend>Confirm clear conversation</legend>
+								<span>This cannot be undone.</span>
+								<button
+									className="quiet-action compact-action"
+									type="button"
+									onClick={() => setConfirmingClear(false)}
+								>
+									Cancel
+								</button>
+								<button
+									className="secondary-action destructive-action compact-action"
+									type="button"
+									onClick={() => void clearConversation()}
+								>
+									Clear now
+								</button>
+							</fieldset>
+						) : (
+							<button
+								className="quiet-action compact-action"
+								type="button"
+								disabled={messages.length === 0 || approval !== null}
+								onClick={() => setConfirmingClear(true)}
+							>
+								Clear conversation
+							</button>
+						)}
+					</div>
+				</div>
+			</header>
+
+			<section className="chat-scroll-container" aria-label="Conversation">
 				<ol className="chat-messages" aria-label="Course Agent conversation">
 					{messages.length === 0 ? (
 						<li className="chat-empty">
-							The Course Agent currently creates and revises the Course Plan:
-							its intent and Lecture spine. Lecture content comes in a later
-							authoring step.
+							<p className="section-kicker">Start here</p>
+							<h2>What should we work on?</h2>
+							<p>
+								Describe the outcome you want. Changes are applied as the agent
+								works and remain editable in the course.
+							</p>
+							<div className="prompt-starters">
+								{[
+									"Draft a practical course plan",
+									"Review the lecture sequence",
+									"Create slides for the next lecture",
+								].map((starter) => (
+									<button
+										key={starter}
+										type="button"
+										onClick={() => setPrompt(starter)}
+										disabled={!selected}
+									>
+										{starter}
+									</button>
+								))}
+							</div>
 						</li>
 					) : (
-						messages.map((message) => (
-							<li className={`chat-message ${message.role}`} key={message.id}>
-								<span>{message.role === "user" ? "You" : "Course Agent"}</span>
-								<p>{message.content}</p>
-							</li>
-						))
+						messages.map((message) => {
+							const parts = messageParts(message.content);
+							return (
+								<li className={`chat-message ${message.role}`} key={message.id}>
+									<span>
+										{message.role === "user" ? "You" : "Course Agent"}
+									</span>
+									<div className="message-body">
+										{parts.context ? <small>{parts.context}</small> : null}
+										<p>{parts.body}</p>
+									</div>
+								</li>
+							);
+						})
 					)}
 				</ol>
 				<div ref={chatEndRef} />
-			</div>
+			</section>
 
 			<div className="agent-activity" aria-live="polite" aria-atomic="true">
 				{activities.map((activity) => (
@@ -570,7 +652,7 @@ export function AgentPanel({
 							className="quiet-action compact-action"
 							onClick={() => onChatContextCleared?.()}
 						>
-							Clear
+							Remove
 						</button>
 					</div>
 				) : null}
@@ -585,17 +667,16 @@ export function AgentPanel({
 							sendMessage(event as unknown as FormEvent<HTMLFormElement>);
 						}
 					}}
-					rows={4}
-					placeholder="Create a four-Lecture Course Plan for…"
+					rows={3}
+					placeholder="Ask for a change, a review, or a new draft…"
 					maxLength={4000}
 					disabled={running || approval !== null || !selected}
 					aria-describedby="course-agent-help"
 				/>
 				<div>
 					<small id="course-agent-help">
-						{mode === "guided"
-							? "Course Plan changes wait for your approval. Enter to send, Shift+Enter for newline."
-							: "Course Plan changes apply automatically. Enter to send, Shift+Enter for newline."}
+						Changes apply as the agent works. Enter to send; Shift+Enter adds a
+						line.
 					</small>
 					<button
 						className="primary-action compact-action"
@@ -608,6 +689,6 @@ export function AgentPanel({
 					</button>
 				</div>
 			</form>
-		</aside>
+		</section>
 	);
 }

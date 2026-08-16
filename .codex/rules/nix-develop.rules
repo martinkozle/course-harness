@@ -1,0 +1,15 @@
+# Project commands run through the flake-pinned development environment.
+prefix_rule(
+    pattern = ["nix", "develop", "-c"],
+    decision = "allow",
+    justification = "Allow commands required by AGENTS.md to run in the project's pinned Nix environment.",
+    match = [
+        "nix develop -c uv run pytest",
+        "nix develop -c bun run build",
+        "nix develop -c pre-commit run --all-files",
+    ],
+    not_match = [
+        "nix build",
+        "nix develop",
+    ],
+)

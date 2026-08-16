@@ -25,6 +25,7 @@ from course_harness import sources as sources_module
 from course_harness import template_profiles as tpl
 from course_harness.chat_history import (
     ChatTranscript,
+    clear_chat_history,
     read_chat_history,
     read_chat_transcript,
     save_chat_history,
@@ -470,6 +471,13 @@ def create_app(
         active = require_workspace()
         return read_chat_transcript(chat_path, active)
 
+    @app.delete("/api/chat", status_code=204)
+    async def clear_chat_transcript() -> Response:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            clear_chat_history(chat_path, active)
+        return Response(status_code=204)
+
     @app.post("/api/agent/cancel", status_code=204)
     async def cancel_agent_run() -> Response:
         active = require_workspace()
@@ -527,7 +535,7 @@ def create_app(
                 props = cast(dict[str, object], body_json.get("forwardedProps", {}))
         except _json_mod.JSONDecodeError:
             pass
-        mode = AgentMode(props.get("mode", AgentMode.GUIDED))
+        mode = AgentMode(props.get("mode", AgentMode.AUTONOMOUS))
 
         deps = CourseAgentDeps(
             course_state=CourseAgentState(
@@ -1303,6 +1311,8 @@ def create_app(
         if name.lower().endswith(".pptx") or name.lower().endswith(".potx"):
             name = name.rsplit(".", 1)[0]
 
+        registry = tpl.read_registry(templates_data)
+        name = tpl.unique_profile_name(name, registry)
         profile = tpl.TemplateProfile(
             id=profile_id,
             name=name[:200],
@@ -1323,7 +1333,6 @@ def create_app(
         )
         tpl.write_profile_version(templates_data, profile)
 
-        registry = tpl.read_registry(templates_data)
         registry.profiles.append(
             tpl.TemplateProfileSummary(
                 id=profile.id,
@@ -1352,6 +1361,44 @@ def create_app(
     class MappingUpdateRequest(BaseModel):
         model_config = ConfigDict(extra="forbid")
         mappings: list[MappingUpdate]
+
+    class TemplateRenameRequest(BaseModel):
+        model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+        name: str = Field(min_length=1, max_length=200)
+
+    @app.patch("/api/templates/{profile_id}", response_model=tpl.TemplateProfile)
+    async def api_rename_template(
+        profile_id: str, request: TemplateRenameRequest
+    ) -> tpl.TemplateProfile:
+        if profile_id == tpl.BUILTIN_DEFAULT_ID:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot rename the built-in default profile",
+            )
+        profile = tpl.read_profile(templates_data, profile_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Template profile not found")
+
+        registry = tpl.read_registry(templates_data)
+        available_name = tpl.unique_profile_name(
+            request.name,
+            registry,
+            exclude_profile_id=profile_id,
+        )
+        if available_name != request.name:
+            raise HTTPException(
+                status_code=409,
+                detail=f'A Template Profile named "{request.name}" already exists.',
+            )
+
+        updated_profile = profile.model_copy(update={"name": request.name})
+        tpl.write_profile(templates_data, updated_profile)
+        for summary in registry.profiles:
+            if summary.id == profile_id:
+                summary.name = request.name
+                break
+        tpl.write_registry(templates_data, registry)
+        return updated_profile
 
     @app.put("/api/templates/{profile_id}", response_model=tpl.TemplateProfile)
     async def api_update_template_mapping(

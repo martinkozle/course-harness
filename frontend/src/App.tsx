@@ -13,6 +13,7 @@ import type {
 } from "./models";
 import { PresentationView } from "./PresentationView";
 import { ModelsView } from "./ProviderSetup";
+import { ResizableSplit } from "./ResizableSplit";
 import { TemplatesView } from "./TemplatesView";
 
 type Workspace = {
@@ -47,10 +48,10 @@ type CourseRequest = {
 
 type WorkspaceView =
 	| "course"
+	| "author"
 	| "files"
 	| "models"
 	| "library"
-	| "presentations"
 	| "templates";
 
 type SectionLink = {
@@ -193,7 +194,6 @@ type WorkspaceShellProps = {
 	activeView: WorkspaceView;
 	onNavigate: (view: WorkspaceView) => void;
 	onAllCourses: () => Promise<void>;
-	agent: React.ReactNode;
 	children: React.ReactNode;
 };
 
@@ -204,11 +204,10 @@ function WorkspaceShell({
 	activeView,
 	onNavigate,
 	onAllCourses,
-	agent,
 	children,
 }: WorkspaceShellProps) {
 	return (
-		<div className="workspace-layout">
+		<div className={`workspace-layout view-${activeView}`}>
 			<aside className="workspace-rail" aria-label="Course navigation">
 				<button
 					className="all-courses"
@@ -238,12 +237,12 @@ function WorkspaceShell({
 								<span aria-hidden="true">
 									{section.id === "course"
 										? "CP"
-										: section.id === "files"
-											? "FL"
-											: section.id === "library"
-												? "LB"
-												: section.id === "presentations"
-													? "PR"
+										: section.id === "author"
+											? "AG"
+											: section.id === "files"
+												? "FL"
+												: section.id === "library"
+													? "LB"
 													: "MD"}
 								</span>
 								{section.label}
@@ -252,10 +251,7 @@ function WorkspaceShell({
 					</nav>
 				) : null}
 			</aside>
-			<div className={`workspace-stage view-${activeView}`}>
-				{children}
-				{agent}
-			</div>
+			<div className={`workspace-stage view-${activeView}`}>{children}</div>
 		</div>
 	);
 }
@@ -724,7 +720,7 @@ function FilesView({
 
 const workspaceViews: SectionLink[] = [
 	{ id: "course", label: "Course Plan" },
-	{ id: "presentations", label: "Presentations" },
+	{ id: "author", label: "Authoring" },
 	{ id: "files", label: "Files" },
 	{ id: "library", label: "Library" },
 	{ id: "templates", label: "Templates" },
@@ -757,6 +753,23 @@ export function App() {
 	const [agentRunning, setAgentRunning] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+
+	useEffect(() => {
+		void activeView;
+		const frame = window.requestAnimationFrame(scrollToTop);
+		return () => window.cancelAnimationFrame(frame);
+	}, [activeView]);
+
+	function openAgentWithContext(context: string) {
+		setChatContext(context);
+		if (activeView !== "author") scrollToTop();
+		setActiveView("author");
+	}
+
+	function navigateTo(view: WorkspaceView) {
+		scrollToTop();
+		setActiveView(view);
+	}
 
 	const loadWorkspace = useCallback(
 		async (active: Workspace, signal?: AbortSignal) => {
@@ -1059,32 +1072,84 @@ export function App() {
 				busy={busy || agentRunning}
 				sections={workspaceViews}
 				activeView={activeView}
-				onNavigate={setActiveView}
+				onNavigate={navigateTo}
 				onAllCourses={returnToCourses}
-				agent={
-					<AgentPanel
-						key={workspace.path}
-						initialMessages={chatMessages}
-						initialApproval={chatApproval}
-						catalog={catalog}
-						onCatalogChange={setCatalog}
-						onOpenModels={() => setActiveView("models")}
-						modelsOpen={activeView === "models"}
-						onRunningChange={setAgentRunning}
-						onCourseChange={async (updated) => {
-							setCourse(updated);
-							const filesResponse = await fetch("/api/workspace/files");
-							if (filesResponse.ok) {
-								setFiles((await filesResponse.json()) as WorkspaceEntry[]);
-							}
-						}}
-						onPresentationsChange={refreshPresentations}
-						chatContext={chatContext}
-						onChatContextCleared={() => setChatContext(null)}
-					/>
-				}
 			>
-				{activeView === "models" ? (
+				{activeView === "author" ? (
+					<main
+						className={`authoring-workspace${course ? "" : " is-course-empty"}`}
+						aria-labelledby="authoring-heading"
+					>
+						<header className="authoring-header">
+							<div>
+								<p className="eyebrow">Author</p>
+								<h1 id="authoring-heading">Build the Lecture</h1>
+							</div>
+							<p>
+								Shape the Presentation and direct the Course Agent in one place.
+							</p>
+						</header>
+						<div className="authoring-body">
+							<ResizableSplit
+								storageKey="course-harness:authoring-agent-width"
+								primary={
+									course ? (
+										<PresentationView
+											course={course}
+											busy={busy || agentRunning}
+											presentations={presentations}
+											presentationVersion={presentationVersion}
+											templates={templates}
+											onChange={refreshPresentations}
+											onChatContext={openAgentWithContext}
+										/>
+									) : (
+										<section className="authoring-course-empty">
+											<p className="section-kicker">Presentation</p>
+											<h2>Start with a Course Plan</h2>
+											<p>
+												Ask the Course Agent to draft one, or create it from the
+												Course Plan view.
+											</p>
+										</section>
+									)
+								}
+								secondary={
+									<AgentPanel
+										key={workspace.path}
+										embedded
+										initialMessages={chatMessages}
+										initialApproval={chatApproval}
+										catalog={catalog}
+										onCatalogChange={setCatalog}
+										onOpenModels={() => navigateTo("models")}
+										onRunningChange={setAgentRunning}
+										onCourseChange={async (updated) => {
+											setCourse(updated);
+											const filesResponse = await fetch("/api/workspace/files");
+											if (filesResponse.ok) {
+												setFiles(
+													(await filesResponse.json()) as WorkspaceEntry[],
+												);
+											}
+										}}
+										onPresentationsChange={refreshPresentations}
+										chatContext={chatContext}
+										onChatContextCleared={() => setChatContext(null)}
+										onConversationCleared={() => {
+											setChatMessages([]);
+											setChatApproval(null);
+										}}
+										onTranscriptChange={(messages, approval) => {
+											setChatMessages(messages);
+											setChatApproval(approval);
+										}}
+									/>
+								}
+							/>
+						</div>
+					</main>
+				) : activeView === "models" ? (
 					<ModelsView catalog={catalog} onCatalogChange={setCatalog} />
 				) : activeView === "library" ? (
 					<LibraryView
@@ -1100,16 +1165,6 @@ export function App() {
 					/>
 				) : activeView === "files" ? (
 					<FilesView workspace={workspace} files={files} />
-				) : activeView === "presentations" && course ? (
-					<PresentationView
-						course={course}
-						busy={busy || agentRunning}
-						presentations={presentations}
-						presentationVersion={presentationVersion}
-						templates={templates}
-						onChange={refreshPresentations}
-						onChatContext={setChatContext}
-					/>
 				) : course === undefined && error ? (
 					<CourseReadError
 						workspace={workspace}

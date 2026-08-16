@@ -457,7 +457,7 @@ async def test_chat_streams_a_validated_course_plan_and_survives_reopening(
         ],
         "tools": [],
         "context": [],
-        "forwardedProps": {},
+        "forwardedProps": {"mode": "guided"},
     }
 
     transport = httpx2.ASGITransport(app=app)
@@ -544,9 +544,13 @@ async def test_chat_streams_a_validated_course_plan_and_survives_reopening(
     async with httpx2.AsyncClient(transport=reopened_transport, base_url="http://test") as client:
         reopened_chat = await client.get("/api/chat")
         reopened_course = await client.get("/api/course")
+        clear_response = await client.delete("/api/chat")
+        cleared_chat = await client.get("/api/chat")
 
     assert reopened_chat.json() == chat_response.json()
     assert reopened_course.json() == plan
+    assert clear_response.status_code == 204
+    assert cleared_chat.json() == {"approval": None, "messages": []}
 
 
 @pytest.mark.anyio
@@ -649,7 +653,7 @@ async def test_live_openrouter_smoke_uses_only_an_explicitly_free_model(
 
 
 @pytest.mark.anyio
-async def test_autonomous_mode_applies_course_plan_changes_without_interrupt(
+async def test_agent_defaults_to_autonomous_changes_without_interrupt(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "auto-course"
@@ -731,7 +735,7 @@ async def test_autonomous_mode_applies_course_plan_changes_without_interrupt(
         "messages": [{"id": "auto-user", "role": "user", "content": "Plan a Course."}],
         "tools": [],
         "context": [],
-        "forwardedProps": {"mode": "autonomous"},
+        "forwardedProps": {},
     }
 
     transport = httpx2.ASGITransport(app=app)
@@ -1027,7 +1031,7 @@ async def test_agent_can_delete_presentation_and_requires_approval_in_guided(
                 "messages": [{"id": "u1", "role": "user", "content": "Delete the presentation"}],
                 "tools": [],
                 "context": [],
-                "forwardedProps": {},
+                "forwardedProps": {"mode": "guided"},
             },
         )
 
@@ -1053,7 +1057,7 @@ async def test_agent_can_delete_presentation_and_requires_approval_in_guided(
             "messages": [],
             "tools": [],
             "context": [],
-            "forwardedProps": {},
+            "forwardedProps": {"mode": "guided"},
             "resume": [
                 {
                     "interruptId": interrupt["id"],
@@ -1143,7 +1147,7 @@ async def test_presentation_approval_preview_contains_slide_outline(
                 "messages": [{"id": "u1", "role": "user", "content": "Create slides"}],
                 "tools": [],
                 "context": [],
-                "forwardedProps": {},
+                "forwardedProps": {"mode": "guided"},
             },
         )
 
@@ -1261,7 +1265,7 @@ async def test_presentation_state_snapshots_stream_on_canvas_updates(
                 "messages": [{"id": "u1", "role": "user", "content": "Create slides"}],
                 "tools": [],
                 "context": [],
-                "forwardedProps": {},
+                "forwardedProps": {"mode": "guided"},
             },
         )
 
@@ -1286,7 +1290,7 @@ async def test_presentation_state_snapshots_stream_on_canvas_updates(
             "messages": [],
             "tools": [],
             "context": [],
-            "forwardedProps": {},
+            "forwardedProps": {"mode": "guided"},
             "resume": [
                 {
                     "interruptId": interrupt["id"],

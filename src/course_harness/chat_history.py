@@ -64,6 +64,11 @@ def read_chat_transcript(store_path: Path, workspace: Path) -> ChatTranscript:
         return ChatTranscript(messages=[])
 
 
+def clear_chat_history(store_path: Path, workspace: Path) -> None:
+    """Remove the current Workspace conversation, if one exists."""
+    chat_session_path(store_path, workspace).unlink(missing_ok=True)
+
+
 def _pending_approval(history: list[ModelMessage]) -> PendingApproval | None:
     returned_ids = {
         part.tool_call_id

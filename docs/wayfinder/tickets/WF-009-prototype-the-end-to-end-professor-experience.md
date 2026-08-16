@@ -15,4 +15,4 @@ blocked_by:
 
 ## Question
 
-What UI flow best lets a Course Author open a folder, configure a provider, register and inspect Resources, converse with the Course Agent, toggle Autonomous Mode, approve or bypass checkpoints, observe delegated work, edit a multi-lecture Course, validate citations, map a template, and export presentations without needing the CLI?
+What UI flow best lets a Course Author open a folder, configure a provider, register and inspect Resources, converse with an autonomous Course Agent, answer targeted clarification questions, observe delegated work, edit a multi-lecture Course, validate citations, map a template, and export presentations without needing the CLI?

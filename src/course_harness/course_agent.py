@@ -263,13 +263,22 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
     def json_str(data: object) -> str:
         return _json_mod_inner.dumps(data, indent=2)
 
+    mutation_guidance = (
+        "Propose every authoritative change with replace_course_plan; the Course Author must "
+        "approve it before it is applied. "
+        if requires_approval
+        else "Apply authoritative working-state changes through the validated tools as you work. "
+    )
     agent = Agent(
         deps_type=CourseAgentDeps,
         name="course-agent",
         instructions=(
             "You are the persistent Course Agent. Collaborate with the Course Author to create "
-            "and revise one Course Plan. Propose every authoritative change with "
-            "replace_course_plan; the Course Author must approve it before it is applied. "
+            "and revise one Course Plan. "
+            f"{mutation_guidance}"
+            "Proceed without asking permission for routine, reversible authoring changes. Ask "
+            "one concise question in ordinary chat before acting when the request is materially "
+            "ambiguous or would discard substantial existing authored work. "
             "Preserve existing Lecture IDs supplied in shared state when revising a Lecture. "
             "Never set replace_all_lectures unless the Course Author explicitly asks to replace "
             "the entire Lecture spine. Explain the result clearly and concisely.\n\n"

@@ -366,7 +366,7 @@ function SlideDetail({
 										className="clickable-content"
 										onClick={() =>
 											onChatContext(
-												`I'm looking at slide ${slide.id} (layout: ${slide.layout}), bullet ${String(position + 1)}: "${bullet}"`,
+												`I'm looking at bullet ${String(position + 1)} on "${slidePreview(slide)}": "${bullet}"`,
 											)
 										}
 									>
@@ -384,7 +384,9 @@ function SlideDetail({
 								type="button"
 								className="content-context-action"
 								onClick={() =>
-									onChatContext(`I'm looking at the code on slide ${slide.id}`)
+									onChatContext(
+										`I'm looking at the code on "${slidePreview(slide)}"`,
+									)
 								}
 							>
 								Chat about code
@@ -397,7 +399,7 @@ function SlideDetail({
 								className="clickable-content"
 								onClick={() =>
 									onChatContext(
-										`I'm looking at the left column on slide ${slide.id}`,
+										`I'm looking at the left column on "${slidePreview(slide)}"`,
 									)
 								}
 							>
@@ -408,7 +410,7 @@ function SlideDetail({
 								className="clickable-content"
 								onClick={() =>
 									onChatContext(
-										`I'm looking at the right column on slide ${slide.id}`,
+										`I'm looking at the right column on "${slidePreview(slide)}"`,
 									)
 								}
 							>
@@ -427,7 +429,9 @@ function SlideDetail({
 								type="button"
 								className="content-context-action"
 								onClick={() =>
-									onChatContext(`I'm looking at the quote on slide ${slide.id}`)
+									onChatContext(
+										`I'm looking at the quote on "${slidePreview(slide)}"`,
+									)
 								}
 							>
 								Chat about quote
@@ -439,7 +443,7 @@ function SlideDetail({
 							className="content-block-button"
 							onClick={() =>
 								onChatContext(
-									`I'm looking at the statement on slide ${slide.id}`,
+									`I'm looking at the statement on "${slidePreview(slide)}"`,
 								)
 							}
 						>
@@ -557,15 +561,28 @@ export function PresentationView({
 
 	const selectLecture = useCallback(
 		async (lectureId: string) => {
+			const lecture = course.lectures.find((item) => item.id === lectureId);
 			setSelectedLectureId(lectureId);
 			setSelectedSlideId(null);
 			setCurrentPresentation(null);
 			setError(null);
 			setShowArchived(false);
+			onChatContext(
+				`I'm working on the Lecture "${lecture?.title ?? "Untitled Lecture"}"`,
+			);
 			await loadPresentation(lectureId);
 		},
-		[loadPresentation],
+		[course.lectures, loadPresentation, onChatContext],
 	);
+
+	useEffect(() => {
+		const selectionStillExists = course.lectures.some(
+			(lecture) => lecture.id === selectedLectureId,
+		);
+		if (!selectionStillExists && course.lectures[0]) {
+			void selectLecture(course.lectures[0].id);
+		}
+	}, [course.lectures, selectLecture, selectedLectureId]);
 
 	useEffect(() => {
 		if (presentationVersion !== prevVersion.current) {
@@ -673,27 +690,7 @@ export function PresentationView({
 		: [];
 
 	return (
-		<main
-			className="page-main presentation-main"
-			aria-labelledby="presentation-heading"
-		>
-			<header className="page-heading presentation-heading">
-				<p className="eyebrow">Presentations</p>
-				<h1 id="presentation-heading">Slide canvas</h1>
-				<p className="lede">
-					Select a Lecture to author or review its Presentation slides.
-				</p>
-				<button
-					type="button"
-					className="secondary-action compact-action"
-					onClick={() =>
-						onChatContext("I'm working on the course presentations")
-					}
-				>
-					Ask the agent about presentations
-				</button>
-			</header>
-
+		<section className="presentation-main" aria-label="Presentation authoring">
 			<div className="presentation-layout">
 				<section
 					className="lecture-selector-section"
@@ -701,14 +698,14 @@ export function PresentationView({
 				>
 					<div className="content-section-heading">
 						<div>
-							<p className="section-kicker">From syllabus</p>
+							<p className="section-kicker">Course Plan</p>
 							<h2 id="lecture-selector-heading">Lectures</h2>
 						</div>
 					</div>
 					<ol className="lecture-selector-list">
 						{course.lectures.map((lecture, index) => {
-							const hasPres = presentations.some(
-								(p) => p.lecture_id === lecture.id,
+							const presentation = presentations.find(
+								(item) => item.lecture_id === lecture.id,
 							);
 							return (
 								<li key={lecture.id} className="lecture-selector-row">
@@ -724,28 +721,11 @@ export function PresentationView({
 											{String(index + 1).padStart(2, "0")}
 										</span>
 										<span className="lecture-title">{lecture.title}</span>
-										{hasPres ? (
-											<span
-												className="presentation-indicator"
-												role="img"
-												aria-label="Has presentation"
-											>
-												¶
-											</span>
-										) : null}
-									</button>
-									<button
-										type="button"
-										className="quiet-action compact-action lecture-context-btn"
-										aria-label={`Chat about lecture: ${lecture.title}`}
-										title={`Chat about lecture: ${lecture.title}`}
-										onClick={() =>
-											onChatContext(
-												`I'm looking at the lecture "${lecture.title}" (id: ${lecture.id})`,
-											)
-										}
-									>
-										→
+										<span className="lecture-status">
+											{presentation
+												? `${presentation.slide_count} slides`
+												: "No slides"}
+										</span>
 									</button>
 								</li>
 							);
@@ -792,21 +772,9 @@ export function PresentationView({
 										{course.lectures.find((l) => l.id === selectedLectureId)
 											?.title ?? "Lecture"}
 									</p>
-									<h2 id="slide-canvas-heading">Slides</h2>
+									<h2 id="slide-canvas-heading">Presentation</h2>
 								</div>
 								<div className="section-actions">
-									<button
-										type="button"
-										className="quiet-action compact-action"
-										disabled={busy}
-										onClick={() =>
-											onChatContext(
-												`Refine the presentation for the lecture "${course.lectures.find((l) => l.id === selectedLectureId)?.title ?? selectedLectureId}"`,
-											)
-										}
-									>
-										Refine slides
-									</button>
 									<div className="export-row">
 										<select
 											value={selectedProfileId}
@@ -815,6 +783,14 @@ export function PresentationView({
 											className="profile-select"
 										>
 											<option value="_builtin-default">Default template</option>
+											{selectedProfileId !== "_builtin-default" &&
+											!templates.some(
+												(template) => template.id === selectedProfileId,
+											) ? (
+												<option value={selectedProfileId}>
+													Unavailable template
+												</option>
+											) : null}
 											{templates
 												.filter((t) => t.id !== "_builtin-default")
 												.map((t) => (
@@ -824,7 +800,7 @@ export function PresentationView({
 												))}
 										</select>
 										<button
-											className="quiet-action compact-action"
+											className="secondary-action compact-action"
 											type="button"
 											disabled={busy}
 											onClick={() => {
@@ -857,14 +833,17 @@ export function PresentationView({
 											Export PowerPoint
 										</button>
 									</div>
-									<button
-										className="quiet-action compact-action"
-										type="button"
-										disabled={busy}
-										onClick={() => void deletePresentation()}
-									>
-										Delete presentation
-									</button>
+									<details className="presentation-more">
+										<summary>More</summary>
+										<button
+											className="quiet-action destructive-action compact-action"
+											type="button"
+											disabled={busy}
+											onClick={() => void deletePresentation()}
+										>
+											Delete Presentation
+										</button>
+									</details>
 								</div>
 							</div>
 
@@ -936,7 +915,12 @@ export function PresentationView({
 													<button
 														type="button"
 														className="slide-card"
-														onClick={() => setSelectedSlideId(slide.id)}
+														onClick={() => {
+															setSelectedSlideId(slide.id);
+															onChatContext(
+																`I'm reviewing Slide ${idx + 1}, "${slidePreview(slide)}", in "${course.lectures.find((lecture) => lecture.id === selectedLectureId)?.title ?? "this Lecture"}"`,
+															);
+														}}
 													>
 														<span className="slide-number" aria-hidden="true">
 															{String(idx + 1).padStart(2, "0")}
@@ -1020,6 +1004,6 @@ export function PresentationView({
 					)}
 				</section>
 			</div>
-		</main>
+		</section>
 	);
 }

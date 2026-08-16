@@ -27,7 +27,7 @@ test("Course Author views Presentation canvas and slide outline", async ({
 		await page.getByRole("button", { name: "Save Model Preset" }).click();
 	}
 
-	await page.getByRole("button", { name: "Course Plan" }).click();
+	await page.getByRole("button", { name: "Authoring", exact: true }).click();
 	await page
 		.getByLabel("Message the Course Agent")
 		.fill(
@@ -36,13 +36,48 @@ test("Course Author views Presentation canvas and slide outline", async ({
 	await page.getByRole("button", { name: "Send message" }).click();
 
 	await expect(
-		page.getByRole("heading", { name: "Apply this change?" }),
+		page.getByText("I created a two-Lecture Course Plan."),
 	).toBeVisible();
-	await page.getByRole("button", { name: "Save Course Plan" }).click();
-
-	await expect(
-		page.getByRole("heading", { name: "Causal Inference in Practice" }),
-	).toBeVisible();
+	const course = (await (await page.request.get("/api/course")).json()) as {
+		lectures: { id: string; title: string }[];
+	};
+	const lectureId = course.lectures[0].id;
+	const createPresentation = await page.request.post(
+		`/api/presentations/${lectureId}`,
+		{
+			data: {
+				slides: [
+					{
+						layout: "title",
+						title: "Introduction to causal inference",
+						subtitle: "From association to intervention",
+					},
+					{
+						layout: "section",
+						title: "Why prediction is not enough",
+					},
+					{
+						layout: "bullets",
+						title: "The intervention question",
+						bullets: [
+							"What changes when treatment changes?",
+							"Which assumptions identify the effect?",
+						],
+					},
+					{
+						layout: "big_statement",
+						title: "A different question",
+						statement: "Prediction observes. Causal inference intervenes.",
+					},
+					...Array.from({ length: 14 }, (_, index) => ({
+						layout: "section",
+						title: `Supporting idea ${String(index + 5)}`,
+					})),
+				],
+			},
+		},
+	);
+	expect(createPresentation.ok()).toBe(true);
 
 	// The template manager shares the page shell and exposes one built-in option.
 	await page.getByRole("button", { name: "Templates" }).click();
@@ -58,14 +93,94 @@ test("Course Author views Presentation canvas and slide outline", async ({
 		page.getByText("The built-in template has predefined mappings."),
 	).toBeVisible();
 
-	// Navigate to Presentations view
-	await page.getByRole("button", { name: "Presentations" }).click();
+	// The merged Author workspace keeps the Presentation and Course Agent together.
+	await page.getByRole("button", { name: "Course Plan" }).click();
+	await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+	expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+	await page.getByRole("button", { name: "Authoring" }).click();
+	await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
 	await expect(
-		page.getByRole("heading", { name: "Slide canvas" }),
+		page.getByRole("heading", { name: "Build the Lecture" }),
 	).toBeVisible();
 	await expect(
-		page.getByText("Select a Lecture to view its slide canvas."),
+		page.getByRole("heading", { name: "Course Agent" }),
 	).toBeVisible();
+	await expect(
+		page.getByRole("heading", { name: "Presentation" }),
+	).toBeVisible();
+	await expect(page.locator(".slide-list > li")).toHaveCount(18);
+	await expect(page.locator(".authoring-body")).toHaveCSS("display", "block");
+	await expect(page.locator(".context-text")).toContainText(
+		"From association to intervention",
+	);
+	const desktopOverflow = await page.evaluate(() => {
+		const documentScroller = document.scrollingElement;
+		const slides = document.querySelector(".slide-canvas");
+		return {
+			documentClientHeight: documentScroller?.clientHeight ?? 0,
+			documentScrollHeight: documentScroller?.scrollHeight ?? 0,
+			slideClientHeight: slides?.clientHeight ?? 0,
+			slideScrollHeight: slides?.scrollHeight ?? 0,
+		};
+	});
+	expect(desktopOverflow.documentScrollHeight).toBeLessThanOrEqual(
+		desktopOverflow.documentClientHeight + 1,
+	);
+	expect(desktopOverflow.slideScrollHeight).toBeGreaterThan(
+		desktopOverflow.slideClientHeight,
+	);
+	const desktopComposerBefore = await page
+		.locator(".chat-composer")
+		.boundingBox();
+	await page.locator(".slide-canvas").evaluate((element) => {
+		element.scrollTop = element.scrollHeight;
+	});
+	const desktopComposerAfter = await page
+		.locator(".chat-composer")
+		.boundingBox();
+	expect(desktopComposerAfter?.y).toBe(desktopComposerBefore?.y);
+
+	const primaryPane = page.locator(".authoring-primary-pane");
+	const primaryWidthBefore = (await primaryPane.boundingBox())?.width ?? 0;
+	const separator = page.getByRole("separator", {
+		name: "Resize Presentation and Course Agent",
+	});
+	const separatorBox = await separator.boundingBox();
+	expect(separatorBox).not.toBeNull();
+	await page.mouse.move(
+		(separatorBox?.x ?? 0) + (separatorBox?.width ?? 0) / 2,
+		(separatorBox?.y ?? 0) + 120,
+	);
+	await page.mouse.down();
+	await page.mouse.move(
+		(separatorBox?.x ?? 0) - 70,
+		(separatorBox?.y ?? 0) + 120,
+	);
+	await page.mouse.up();
+	const primaryWidthAfterDrag = (await primaryPane.boundingBox())?.width ?? 0;
+	expect(primaryWidthAfterDrag).toBeLessThan(primaryWidthBefore);
+	await separator.focus();
+	await separator.press("ArrowRight");
+	const primaryWidthAfter = (await primaryPane.boundingBox())?.width ?? 0;
+	expect(primaryWidthAfter).toBeGreaterThan(primaryWidthAfterDrag);
+	expect(
+		await page.evaluate(() =>
+			localStorage.getItem("course-harness:authoring-agent-width"),
+		),
+	).not.toBeNull();
+	await page.evaluate(() =>
+		localStorage.setItem("course-harness:authoring-agent-width", "25"),
+	);
+	await page.reload();
+	await page.getByRole("button", { name: "Authoring", exact: true }).click();
+	await page.setViewportSize({ width: 1250, height: 844 });
+	await expect
+		.poll(
+			async () =>
+				(await page.locator(".authoring-secondary-pane").boundingBox())
+					?.width ?? 0,
+		)
+		.toBeGreaterThanOrEqual(339);
 
 	await page.setViewportSize({ width: 390, height: 844 });
 	await expect(page.locator(".presentation-layout")).toHaveCSS(
@@ -78,40 +193,49 @@ test("Course Author views Presentation canvas and slide outline", async ({
 			document.documentElement.clientWidth,
 	);
 	expect(hasHorizontalOverflow).toBe(false);
+	await expect(
+		page.getByRole("button", { name: "Presentation", exact: true }),
+	).toBeVisible();
+	await page.getByRole("button", { name: "Course Agent", exact: true }).click();
 
-	// Click a lecture context button to set contextual chat
-	await page
-		.getByRole("button", { name: /Chat about lecture/ })
-		.first()
-		.click();
-
-	// Verify the chat context indicator appears
+	// The agent remains in the same view and retains the active Lecture context.
 	await expect(page.locator(".chat-context-indicator")).toBeVisible();
 	await expect(page.locator(".context-text")).toContainText(
 		"From association to intervention",
 	);
+	await expect(
+		page.getByText("I created a two-Lecture Course Plan."),
+	).toBeVisible();
+	const portraitComposer = await page.locator(".chat-composer").boundingBox();
+	expect(portraitComposer).not.toBeNull();
+	expect(portraitComposer?.x).toBeGreaterThanOrEqual(0);
+	expect(
+		(portraitComposer?.x ?? 0) + (portraitComposer?.width ?? 0),
+	).toBeLessThanOrEqual(390);
+
+	await page.setViewportSize({ width: 844, height: 390 });
+	await expect(
+		page.getByText("I created a two-Lecture Course Plan."),
+	).toBeVisible();
+	const landscapeComposer = await page.locator(".chat-composer").boundingBox();
+	expect(landscapeComposer).not.toBeNull();
+	expect(
+		(landscapeComposer?.x ?? 0) + (landscapeComposer?.width ?? 0),
+	).toBeLessThanOrEqual(844);
+	await page.setViewportSize({ width: 390, height: 844 });
 
 	// Clear the context
-	await page.getByRole("button", { name: "Clear" }).click();
+	await page.getByRole("button", { name: "Remove" }).click();
 	await expect(page.locator(".chat-context-indicator")).not.toBeVisible();
-
-	// Click a lecture to select it
+	// Lecture selection and Presentation review remain usable in the same view.
 	const lectureButtons = page.locator(
 		".lecture-selector-list .lecture-selector-row > button:first-child",
 	);
+	await page.getByRole("button", { name: "Presentation", exact: true }).click();
 	await expect(lectureButtons).toHaveCount(2);
 
 	await lectureButtons.first().click();
-	await expect(
-		page.getByText("No Presentation for this Lecture yet."),
-	).toBeVisible();
-
-	// Verify "Create presentation" button sets context
-	await page.getByRole("button", { name: "Create presentation" }).click();
-	await expect(page.locator(".chat-context-indicator")).toBeVisible();
-	await expect(page.locator(".context-text")).toContainText(
-		"Create a presentation for the lecture",
-	);
+	await expect(page.locator(".slide-list > li")).toHaveCount(18);
 
 	// Navigate back to Course Plan
 	await page.getByRole("button", { name: "Course Plan" }).click();

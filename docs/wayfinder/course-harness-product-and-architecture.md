@@ -22,7 +22,7 @@ A decision-complete proof-of-concept specification for a local-first, agent-harn
 
 ## Decisions so far
 
-- [Sharpen the multi-lecture authoring model](tickets/WF-003-sharpen-the-course-authoring-model.md) — Use a chat-first, progressively authored flat Course Plan with stable identities, flexible shared Sources, guided-or-autonomous runs, recoverable partial Current State, and conservative Release validation.
+- [Sharpen the multi-lecture authoring model](tickets/WF-003-sharpen-the-course-authoring-model.md) — Use a chat-first, progressively authored flat Course Plan with stable identities, flexible shared Sources, autonomous validated working-state changes, recoverable partial Current State, and conservative Release validation.
 
 ## Not yet specified
 

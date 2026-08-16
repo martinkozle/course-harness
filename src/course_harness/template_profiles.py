@@ -98,6 +98,31 @@ class CalibrationSlide(BaseModel):
     image_url: str
 
 
+def unique_profile_name(
+    requested_name: str,
+    registry: TemplateProfileRegistry,
+    *,
+    exclude_profile_id: str | None = None,
+) -> str:
+    """Return a unique, human-readable profile name for the global catalog."""
+    base = requested_name.strip() or "Imported template"
+    base = base[:200].rstrip()
+    existing = {
+        summary.name.casefold() for summary in registry.profiles if summary.id != exclude_profile_id
+    }
+    existing.add(BUILTIN_DEFAULT_PROFILE_NAME.casefold())
+    if base.casefold() not in existing:
+        return base
+
+    suffix_number = 2
+    while True:
+        suffix = f" ({suffix_number})"
+        candidate = f"{base[: 200 - len(suffix)].rstrip()}{suffix}"
+        if candidate.casefold() not in existing:
+            return candidate
+        suffix_number += 1
+
+
 def templates_data_dir() -> Path:
     if sys.platform == "win32":
         root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))

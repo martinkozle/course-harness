@@ -64,14 +64,6 @@ _Avoid_: Resource, cache entry
 The immutable Snapshot of a Source pinned by a Course so its Evidence and Citations continue to refer to the content actually used.
 _Avoid_: Latest version, Resource URL
 
-**Approval Checkpoint**:
-An optional pause at a meaningful authoring boundary where the Course Author can accept, revise, or redirect the agent's proposed work before it continues.
-_Avoid_: Mandatory workflow stage, pipeline node
-
-**Autonomous Mode**:
-A per-run or persistent choice that lets the Course Agent pass routine authoring Approval Checkpoints until completion, while leaving steering, cancellation, and Release publication under Course Author control.
-_Avoid_: Autonomy Level, permission tier
-
 **Course Workspace**:
 The directory opened by the app that contains one Course's human-readable inputs, authored state, and Artifacts, plus hidden derived runtime data.
 _Avoid_: Project, repository, database
@@ -129,7 +121,7 @@ A recorded Course Author decision to publish a Course Release despite a specific
 _Avoid_: Error suppression, global ignore
 
 **Template Profile**:
-A versioned, reusable mapping between semantic Presentation layouts and the concrete layouts and placeholders of a PowerPoint template.
+A named, versioned, reusable mapping between semantic Presentation layouts and the concrete layouts and placeholders of a PowerPoint template. Its stable identity is independent of its unique, editable display name.
 _Avoid_: Theme, template file, renderer configuration
 
 **Slide Preview**:

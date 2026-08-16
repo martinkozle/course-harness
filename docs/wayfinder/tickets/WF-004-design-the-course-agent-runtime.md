@@ -13,4 +13,4 @@ blocked_by:
 
 ## Question
 
-How should Pydantic AI implement the persistent Course Agent, bounded Worker Agents, sequential typed state mutations, optional Approval Checkpoints, cancellation/resume, provider capability differences, and AG-UI event streaming without recreating a rigid FSM?
+How should Pydantic AI implement the persistent Course Agent, bounded Worker Agents, sequential typed state mutations, conversational clarification, cancellation/resume, provider capability differences, and AG-UI event streaming without recreating a rigid FSM?

@@ -110,6 +110,67 @@ async def test_upload_and_get_template(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_duplicate_upload_names_are_disambiguated(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    transport = httpx2.ASGITransport(
+        app=_app(workspace, tmp_path / "tpl-data", tmp_path / "tpl-cache")
+    )
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await _upload_pptx(client, _make_test_pptx(), "Corporate.pptx")
+        second = await _upload_pptx(client, _make_test_pptx(), "corporate.pptx")
+
+    assert first.json()["profile"]["name"] == "Corporate"
+    assert second.json()["profile"]["name"] == "corporate (2)"
+
+
+@pytest.mark.anyio
+async def test_rename_template_updates_display_name_without_bumping_version(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    transport = httpx2.ASGITransport(
+        app=_app(workspace, tmp_path / "tpl-data", tmp_path / "tpl-cache")
+    )
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        upload = await _upload_pptx(client, _make_test_pptx())
+        profile_id = upload.json()["profile"]["id"]
+        renamed = await client.patch(f"/api/templates/{profile_id}", json={"name": "Faculty Brand"})
+        listed = await client.get("/api/templates")
+
+    assert renamed.status_code == 200
+    assert renamed.json()["name"] == "Faculty Brand"
+    assert renamed.json()["version"] == 1
+    summary = next(item for item in listed.json() if item["id"] == profile_id)
+    assert summary["name"] == "Faculty Brand"
+    assert summary["version"] == 1
+
+
+@pytest.mark.anyio
+async def test_rename_template_rejects_duplicate_display_name(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    transport = httpx2.ASGITransport(
+        app=_app(workspace, tmp_path / "tpl-data", tmp_path / "tpl-cache")
+    )
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        first = await _upload_pptx(client, _make_test_pptx(), "Faculty.pptx")
+        second = await _upload_pptx(client, _make_test_pptx(), "Workshop.pptx")
+        duplicate = await client.patch(
+            f"/api/templates/{second.json()['profile']['id']}",
+            json={"name": "faculty"},
+        )
+        builtin = await client.patch(
+            f"/api/templates/{first.json()['profile']['id']}",
+            json={"name": "Built-in default"},
+        )
+
+    assert duplicate.status_code == 409
+    assert builtin.status_code == 409
+
+
+@pytest.mark.anyio
 async def test_update_mapping_bumps_version(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     workspace.mkdir()

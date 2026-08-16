@@ -1,4 +1,4 @@
-import { type ChangeEvent, useState } from "react";
+import { type ChangeEvent, type FormEvent, useState } from "react";
 import { responseError } from "./api";
 import type {
 	CalibrationSlide,
@@ -44,6 +44,10 @@ export function TemplatesView({
 		CalibrationSlide[]
 	>([]);
 	const [calibrationError, setCalibrationError] = useState<string | null>(null);
+	const [renaming, setRenaming] = useState(false);
+	const [renameValue, setRenameValue] = useState("");
+	const [renameSaving, setRenameSaving] = useState(false);
+	const [renameError, setRenameError] = useState<string | null>(null);
 
 	async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
 		const file = event.target.files?.[0];
@@ -51,6 +55,8 @@ export function TemplatesView({
 		setUploading(true);
 		setUploadError(null);
 		setSelectedProfile(null);
+		setRenaming(false);
+		setRenameError(null);
 		setCalibrationSlides([]);
 		setSelectedLayouts(new Map());
 		try {
@@ -66,6 +72,7 @@ export function TemplatesView({
 				inspection: Record<string, unknown>;
 			};
 			setSelectedProfile(body.profile);
+			setRenameValue(body.profile.name);
 			setSelectedLayouts(
 				new Map(
 					body.profile.layouts.map((mapping) => [
@@ -92,6 +99,8 @@ export function TemplatesView({
 		setUploadError(null);
 		if (profileId === "_builtin-default") {
 			setSelectedProfile(null);
+			setRenaming(false);
+			setRenameError(null);
 			setCalibrationSlides([]);
 			setSelectedLayouts(new Map());
 			return;
@@ -101,6 +110,9 @@ export function TemplatesView({
 			if (!response.ok) throw new Error(await responseError(response));
 			const profile = (await response.json()) as TemplateProfile;
 			setSelectedProfile(profile);
+			setRenameValue(profile.name);
+			setRenaming(false);
+			setRenameError(null);
 			setCalibrationSlides([]);
 			setCalibrationError(null);
 			const layoutMap = new Map<string, number>();
@@ -113,6 +125,43 @@ export function TemplatesView({
 			setUploadError(
 				caught instanceof Error ? caught.message : "Could not load template.",
 			);
+		}
+	}
+
+	async function handleRename(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		if (!selectedProfile) return;
+		const name = renameValue.trim();
+		if (!name) {
+			setRenameError("Enter a template name.");
+			return;
+		}
+		setRenameSaving(true);
+		setRenameError(null);
+		try {
+			const response = await fetch(`/api/templates/${selectedProfile.id}`, {
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ name }),
+			});
+			if (!response.ok) throw new Error(await responseError(response));
+			const updated = (await response.json()) as TemplateProfile;
+			setSelectedProfile(updated);
+			setRenameValue(updated.name);
+			setRenaming(false);
+			onTemplatesChange(
+				templates.map((template) =>
+					template.id === updated.id
+						? { ...template, name: updated.name }
+						: template,
+				),
+			);
+		} catch (caught) {
+			setRenameError(
+				caught instanceof Error ? caught.message : "Rename failed.",
+			);
+		} finally {
+			setRenameSaving(false);
 		}
 	}
 
@@ -256,8 +305,58 @@ export function TemplatesView({
 			{selectedProfile && selectedProfile.id !== "_builtin-default" ? (
 				<div className="profile-detail">
 					<div className="detail-header">
-						<div>
-							<h3>{selectedProfile.name}</h3>
+						<div className="template-identity">
+							{renaming ? (
+								<form className="template-rename-form" onSubmit={handleRename}>
+									<label htmlFor="template-profile-name">Template name</label>
+									<input
+										id="template-profile-name"
+										value={renameValue}
+										onChange={(event) => setRenameValue(event.target.value)}
+										maxLength={200}
+										disabled={renameSaving}
+									/>
+									<button
+										className="primary-action compact-action"
+										type="submit"
+										disabled={renameSaving || !renameValue.trim()}
+									>
+										{renameSaving ? "Saving…" : "Save"}
+									</button>
+									<button
+										className="quiet-action compact-action"
+										type="button"
+										disabled={renameSaving}
+										onClick={() => {
+											setRenameValue(selectedProfile.name);
+											setRenameError(null);
+											setRenaming(false);
+										}}
+									>
+										Cancel
+									</button>
+								</form>
+							) : (
+								<div className="template-name-row">
+									<h3>{selectedProfile.name}</h3>
+									<button
+										className="quiet-action compact-action"
+										type="button"
+										onClick={() => {
+											setRenameValue(selectedProfile.name);
+											setRenameError(null);
+											setRenaming(true);
+										}}
+									>
+										Rename
+									</button>
+								</div>
+							)}
+							{renameError ? (
+								<p className="template-rename-error" role="alert">
+									{renameError}
+								</p>
+							) : null}
 							<p className="detail-meta">
 								{selectedProfile.template_filename} •{" "}
 								{selectedProfile.slide_count} slide layouts • Version{" "}

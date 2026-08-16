@@ -269,6 +269,53 @@ h1 {
 	margin: 0 0 0.25rem;
 }
 
+.template-identity {
+	min-width: 0;
+}
+
+.template-name-row,
+.template-rename-form {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.template-name-row h3 {
+	overflow-wrap: anywhere;
+}
+
+.template-rename-form {
+	flex-wrap: wrap;
+	margin-bottom: 0.35rem;
+}
+
+.template-rename-form label {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+}
+
+.template-rename-form input {
+	width: min(24rem, 55vw);
+	min-height: 36px;
+	padding: 0.4rem 0.55rem;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	background: var(--paper);
+	color: var(--ink);
+	font: inherit;
+}
+
+.template-rename-error {
+	margin: 0 0 0.4rem;
+	color: var(--danger);
+	font-size: 0.78rem;
+}
+
 .detail-meta {
 	font-size: 0.8rem;
 	color: var(--muted);
@@ -1897,6 +1944,1197 @@ h1 {
 	}
 }
 
+/* ── Conversation workspace ────────────────────────────────────────────────
+   The agent is a destination, not a sidebar. Keeping it in normal document
+   flow gives both the transcript and every authoring canvas enough room. */
+
+.workspace-stage {
+	display: block;
+	min-width: 0;
+}
+
+.agent-panel {
+	position: static;
+	display: grid;
+	width: min(100%, 1120px);
+	min-height: calc(100vh - 64px);
+	max-height: none;
+	margin: 0;
+	padding: clamp(40px, 6vw, 72px) clamp(24px, 6vw, 76px) 64px;
+	overflow: visible;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+}
+
+.agent-panel-heading {
+	display: grid;
+	gap: 24px;
+	padding: 0 0 28px;
+	border-bottom: 1px solid rgba(21, 32, 59, 0.18);
+	background: transparent;
+}
+
+.agent-heading-line {
+	align-items: start;
+}
+
+.agent-panel-heading h1 {
+	max-width: 760px;
+	margin: 10px 0 12px;
+	font-size: clamp(3rem, 6vw, 4.8rem);
+}
+
+.agent-panel-heading h1 + p {
+	max-width: 620px;
+	margin: 0;
+	color: var(--muted);
+	font-size: 1rem;
+	line-height: 1.55;
+}
+
+.agent-toolbar {
+	display: flex;
+	min-width: 0;
+	align-items: end;
+	justify-content: space-between;
+	gap: 20px;
+}
+
+.agent-model-picker {
+	display: grid;
+	width: min(100%, 400px);
+	grid-template-columns: auto minmax(180px, 1fr);
+	gap: 5px 10px;
+	align-items: center;
+	margin: 0;
+}
+
+.agent-model-picker label {
+	font-family: "SFMono-Regular", Consolas, monospace;
+	font-size: 0.66rem;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+
+.agent-model-picker select {
+	min-width: 0;
+}
+
+.agent-model-picker small {
+	grid-column: 2;
+}
+
+.agent-model-empty {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin: 0;
+}
+
+.conversation-actions {
+	display: flex;
+	flex: 0 0 auto;
+	justify-content: flex-end;
+}
+
+.clear-confirmation {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+.clear-confirmation legend {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+}
+
+.clear-confirmation span {
+	margin-right: 4px;
+	color: var(--danger);
+	font-size: 0.72rem;
+}
+
+.chat-scroll-container {
+	display: block;
+	min-height: 300px;
+	overflow: visible;
+}
+
+.chat-messages {
+	position: relative;
+	display: grid;
+	min-height: 300px;
+	gap: 28px;
+	margin: 0;
+	padding: 44px 0 36px 30px;
+	overflow: visible;
+	content-visibility: visible;
+}
+
+.chat-messages::before {
+	position: absolute;
+	top: 44px;
+	bottom: 36px;
+	left: 6px;
+	width: 1px;
+	background: linear-gradient(var(--cobalt), var(--line));
+	content: "";
+}
+
+.chat-empty {
+	position: relative;
+	display: grid;
+	max-width: 760px;
+	gap: 10px;
+	padding: 26px;
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	background: rgba(255, 255, 255, 0.72);
+}
+
+.chat-empty::before,
+.chat-message::before {
+	position: absolute;
+	top: 18px;
+	left: -30px;
+	width: 13px;
+	height: 13px;
+	border: 3px solid var(--canvas);
+	border-radius: 50%;
+	background: var(--cobalt);
+	content: "";
+}
+
+.chat-empty h2,
+.chat-empty p {
+	margin: 0;
+}
+
+.chat-empty h2 {
+	font-family: "Charter", "Bitstream Charter", Georgia, serif;
+	font-size: 1.55rem;
+}
+
+.prompt-starters {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 6px;
+}
+
+.prompt-starters button {
+	min-height: 38px;
+	padding: 0 12px;
+	border: 1px solid #b8c5ee;
+	background: white;
+	color: var(--cobalt-dark);
+	font-size: 0.78rem;
+	font-weight: 700;
+}
+
+.prompt-starters button:hover:not(:disabled) {
+	border-color: var(--cobalt);
+	background: var(--cobalt-soft);
+}
+
+.chat-message {
+	position: relative;
+	display: grid;
+	max-width: min(760px, 92%);
+	gap: 7px;
+}
+
+.chat-message.user {
+	justify-self: end;
+	justify-items: stretch;
+}
+
+.chat-message.user::before {
+	background: var(--ink);
+}
+
+.chat-message.user > span {
+	text-align: right;
+}
+
+.message-body {
+	min-width: 0;
+	padding: 16px 18px;
+	border: 1px solid var(--line);
+	border-radius: 4px 14px 14px;
+	background: rgba(255, 255, 255, 0.94);
+	box-shadow: 0 7px 24px rgba(31, 48, 86, 0.045);
+}
+
+.chat-message.user .message-body {
+	border-color: #b8c5ee;
+	border-radius: 14px 4px 14px 14px;
+	background: var(--cobalt-soft);
+}
+
+.message-body p {
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	font-size: 0.95rem;
+	line-height: 1.65;
+	white-space: pre-wrap;
+}
+
+.message-body small {
+	display: block;
+	margin-bottom: 9px;
+	padding-bottom: 8px;
+	border-bottom: 1px solid rgba(49, 91, 234, 0.18);
+	color: var(--cobalt-dark);
+	font-size: 0.72rem;
+	line-height: 1.4;
+}
+
+.agent-activity {
+	min-height: 0;
+	padding: 0 0 0 30px;
+}
+
+.approval-card {
+	margin: 0 0 24px 30px;
+	padding: 20px;
+}
+
+.proposal-sheet li {
+	grid-template-columns: 30px auto minmax(0, 1fr);
+	align-items: baseline;
+}
+
+.agent-panel > .notice {
+	margin-left: 30px;
+}
+
+.chat-composer {
+	position: sticky;
+	z-index: 5;
+	bottom: 16px;
+	display: grid;
+	gap: 9px;
+	margin: 0 0 0 30px;
+	padding: 16px;
+	border: 1px solid #b9c5dd;
+	border-radius: 14px;
+	background: rgba(255, 255, 255, 0.96);
+	box-shadow: 0 18px 50px rgba(31, 48, 86, 0.14);
+	backdrop-filter: blur(16px);
+}
+
+.chat-composer textarea {
+	min-height: 84px;
+	max-height: 220px;
+	padding: 12px 14px;
+	border-color: #9eacc8;
+	font-size: 0.95rem;
+}
+
+.chat-context-indicator {
+	min-width: 0;
+	margin-bottom: 2px;
+}
+
+@media (max-width: 700px) {
+	.agent-panel {
+		min-height: 0;
+		padding: 36px 16px 40px;
+	}
+
+	.agent-heading-line,
+	.agent-toolbar,
+	.agent-model-empty {
+		display: grid;
+		gap: 16px;
+	}
+
+	.agent-status {
+		justify-self: start;
+	}
+
+	.agent-model-picker {
+		grid-template-columns: 1fr;
+	}
+
+	.agent-model-picker small {
+		grid-column: 1;
+	}
+
+	.conversation-actions {
+		justify-content: start;
+	}
+
+	.clear-confirmation {
+		flex-wrap: wrap;
+		justify-content: start;
+	}
+
+	.chat-messages {
+		padding-left: 22px;
+	}
+
+	.chat-messages::before {
+		left: 4px;
+	}
+
+	.chat-empty::before,
+	.chat-message::before {
+		left: -24px;
+	}
+
+	.chat-message {
+		max-width: 100%;
+	}
+
+	.chat-message.user {
+		justify-self: stretch;
+	}
+
+	.agent-activity,
+	.agent-panel > .notice,
+	.approval-card,
+	.chat-composer {
+		margin-left: 22px;
+	}
+
+	.chat-composer > div:last-child {
+		display: grid;
+	}
+
+	.chat-composer {
+		position: static;
+	}
+
+	.chat-composer button[type="submit"] {
+		width: 100%;
+	}
+}
+
+/* ── Authoring workbench v2 ───────────────────────────────────────────────
+   The Authoring view owns the available viewport. Only its two working
+   surfaces scroll; navigation, controls, and the composer remain stationary. */
+
+.workspace-layout.view-author {
+	height: calc(100dvh - 64px);
+	min-height: 0;
+	overflow: hidden;
+}
+
+.workspace-layout.view-author > .workspace-stage {
+	height: 100%;
+	min-height: 0;
+	overflow: hidden;
+}
+
+.authoring-workspace {
+	display: flex;
+	height: 100%;
+	min-height: 0;
+	flex-direction: column;
+	padding: 10px 12px 12px;
+	overflow: hidden;
+}
+
+.authoring-header {
+	display: flex;
+	min-height: 52px;
+	flex: 0 0 auto;
+	align-items: center;
+	margin: 0;
+	padding: 0 2px 9px;
+}
+
+.authoring-header .eyebrow {
+	display: none;
+}
+
+.authoring-header h1 {
+	margin: 0;
+	font-size: clamp(1.65rem, 2.2vw, 2.15rem);
+	line-height: 1;
+}
+
+.authoring-header > p {
+	max-width: none;
+	font-size: 0.78rem;
+}
+
+.authoring-body {
+	display: block;
+	min-height: 0;
+	flex: 1 1 auto;
+}
+
+.authoring-split {
+	display: grid;
+	height: 100%;
+	min-height: 0;
+	grid-template-columns: minmax(0, 1fr) 12px minmax(0, var(--agent-pane-width));
+}
+
+.authoring-primary-pane,
+.authoring-secondary-pane {
+	height: 100%;
+	min-width: 0;
+	min-height: 0;
+	overflow: hidden;
+}
+
+.authoring-primary-pane {
+	grid-column: 1;
+}
+
+.authoring-secondary-pane {
+	grid-column: 3;
+}
+
+.authoring-resizer {
+	position: relative;
+	z-index: 5;
+	display: grid;
+	min-width: 12px;
+	height: 100%;
+	grid-column: 2;
+	place-items: center;
+	cursor: col-resize;
+	touch-action: none;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+}
+
+.authoring-resizer::before {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 5px;
+	width: 2px;
+	background: #c4cee1;
+	content: "";
+}
+
+.authoring-resizer::after {
+	position: relative;
+	z-index: 1;
+	display: block;
+	width: 6px;
+	height: 42px;
+	border: 1px solid #aebbd3;
+	border-radius: 999px;
+	background: var(--paper);
+	box-shadow: 0 2px 8px rgba(31, 48, 86, 0.12);
+	content: "";
+}
+
+.authoring-resizer:hover::before,
+.authoring-resizer:focus-visible::before {
+	background: var(--cobalt);
+}
+
+.authoring-resizer:focus-visible {
+	outline: 3px solid var(--cobalt);
+	outline-offset: -3px;
+}
+
+.authoring-pane-tabs {
+	display: none;
+}
+
+.authoring-pane-tabs legend {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+}
+
+.authoring-workspace .presentation-main,
+.authoring-workspace .presentation-layout {
+	height: 100%;
+	min-height: 0;
+}
+
+.authoring-workspace .presentation-layout {
+	display: grid;
+	grid-template-columns: 1fr;
+	grid-template-rows: auto minmax(0, 1fr);
+	gap: 8px;
+	margin: 0;
+}
+
+.authoring-workspace .lecture-selector-section {
+	position: static;
+	display: flex;
+	width: auto;
+	max-height: none;
+	min-height: 70px;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 10px;
+	overflow: hidden;
+}
+
+.authoring-workspace .lecture-selector-section .content-section-heading {
+	min-width: max-content;
+	padding: 0 10px 0 0;
+	border-right: 1px solid var(--line);
+}
+
+.authoring-workspace .lecture-selector-section .section-kicker {
+	display: none;
+}
+
+.authoring-workspace .lecture-selector-section h2 {
+	min-width: 0;
+	margin: 0;
+	font-size: 1rem;
+}
+
+.authoring-workspace .lecture-selector-list {
+	display: flex;
+	min-width: 0;
+	flex: 1 1 auto;
+	gap: 6px;
+	margin: 0;
+	overflow-x: auto;
+	overscroll-behavior-x: contain;
+	scrollbar-width: thin;
+}
+
+.authoring-workspace .lecture-selector-row {
+	min-width: min(220px, 35vw);
+}
+
+.authoring-workspace .lecture-selector-row > button:first-child {
+	display: grid;
+	min-height: 50px;
+	grid-template-columns: 30px minmax(0, 1fr);
+	padding: 6px 9px;
+}
+
+.authoring-workspace .lecture-selector-list .lecture-index {
+	width: 30px;
+	height: 30px;
+	min-width: 30px;
+}
+
+.authoring-workspace .lecture-selector-list .lecture-title {
+	overflow: hidden;
+	font-size: 0.78rem;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.authoring-workspace .lecture-status {
+	font-size: 0.55rem;
+}
+
+.authoring-workspace .slide-canvas-section {
+	display: flex;
+	height: 100%;
+	min-height: 0;
+	flex-direction: column;
+	padding: 12px;
+	overflow: hidden;
+}
+
+.authoring-workspace .slide-canvas-section > .content-section-heading {
+	min-height: 58px;
+	flex: 0 0 auto;
+	align-items: center;
+	padding-bottom: 10px;
+}
+
+.authoring-workspace .slide-canvas-section .content-section-heading h2 {
+	font-size: 1.55rem;
+}
+
+.authoring-workspace .profile-select {
+	max-width: 170px;
+	min-height: 36px;
+}
+
+.authoring-workspace .section-actions button,
+.authoring-workspace .presentation-more summary {
+	min-height: 36px;
+}
+
+.authoring-workspace .slide-canvas {
+	min-height: 0;
+	flex: 1 1 auto;
+	margin-top: 8px;
+	padding-right: 4px;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	scrollbar-gutter: stable;
+}
+
+.authoring-workspace .agent-panel.is-embedded {
+	position: static;
+	display: flex;
+	height: 100%;
+	max-height: none;
+	min-height: 0;
+}
+
+.agent-panel.is-embedded .agent-panel-heading {
+	flex: 0 0 auto;
+	padding: 11px 14px;
+}
+
+.agent-panel.is-embedded .chat-scroll-container {
+	min-height: 0;
+	max-height: none;
+	flex: 1 1 auto;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	scrollbar-gutter: stable;
+}
+
+.agent-panel.is-embedded .chat-messages {
+	min-height: 100%;
+	overflow: visible;
+}
+
+.agent-panel.is-embedded .agent-activity,
+.agent-panel.is-embedded .approval-card,
+.agent-panel.is-embedded > .notice {
+	max-height: 180px;
+	flex: 0 1 auto;
+	overflow-y: auto;
+}
+
+.agent-panel.is-embedded .chat-composer {
+	flex: 0 0 auto;
+	padding: 10px 14px 12px;
+}
+
+.agent-panel.is-embedded .chat-composer textarea {
+	min-height: 62px;
+	max-height: 110px;
+}
+
+.agent-panel.is-embedded .chat-context-indicator {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.agent-panel.is-embedded .context-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+@container authoring-workspace (max-width: 912px) {
+	.authoring-split {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: auto minmax(0, 1fr);
+		gap: 8px;
+	}
+
+	.authoring-pane-tabs {
+		display: grid;
+		grid-row: 1;
+		grid-template-columns: 1fr 1fr;
+		padding: 3px;
+		border: 1px solid var(--line);
+		border-radius: 9px;
+		background: rgba(233, 238, 248, 0.72);
+	}
+
+	.authoring-pane-tabs button {
+		min-height: 34px;
+		border: 0;
+		background: transparent;
+		color: var(--muted);
+		font-weight: 750;
+	}
+
+	.authoring-pane-tabs button[aria-pressed="true"] {
+		background: var(--paper);
+		color: var(--cobalt-dark);
+		box-shadow: 0 2px 8px rgba(31, 48, 86, 0.1);
+	}
+
+	.authoring-primary-pane,
+	.authoring-secondary-pane {
+		display: none;
+		grid-row: 2;
+		grid-column: 1;
+	}
+
+	.authoring-split[data-active-pane="primary"] .authoring-primary-pane,
+	.authoring-split[data-active-pane="secondary"] .authoring-secondary-pane {
+		display: block;
+	}
+
+	.authoring-resizer {
+		display: none;
+	}
+}
+
+@media (max-width: 800px) {
+	.workspace-layout.view-author {
+		grid-template-rows: auto minmax(0, 1fr);
+	}
+
+	.workspace-layout.view-author > .workspace-stage {
+		min-height: 0;
+	}
+
+	.authoring-workspace {
+		padding: 8px;
+	}
+
+	.authoring-header {
+		display: none;
+	}
+}
+
+/* ── Authoring workbench ───────────────────────────────────────────────────
+   Presentation state and the Course Agent share one deliberate workspace. */
+
+.authoring-workspace {
+	container-name: authoring-workspace;
+	container-type: inline-size;
+	width: 100%;
+	min-width: 0;
+	padding: 22px clamp(18px, 2.2vw, 36px) 48px;
+}
+
+.authoring-header {
+	display: flex;
+	align-items: end;
+	justify-content: space-between;
+	gap: 24px;
+	margin-bottom: 18px;
+	padding-bottom: 16px;
+	border-bottom: 1px solid rgba(21, 32, 59, 0.16);
+}
+
+.authoring-header h1 {
+	margin: 4px 0 0;
+	font-size: clamp(2rem, 3.4vw, 3rem);
+	line-height: 1;
+}
+
+.authoring-header > p {
+	max-width: 440px;
+	margin: 0;
+	color: var(--muted);
+	font-size: 0.86rem;
+	line-height: 1.5;
+	text-align: right;
+}
+
+.authoring-body {
+	display: grid;
+	min-width: 0;
+	grid-template-columns: minmax(690px, 1fr) minmax(390px, 450px);
+	gap: 16px;
+	align-items: start;
+}
+
+.authoring-workspace .presentation-main {
+	width: 100%;
+	min-width: 0;
+	padding: 0;
+}
+
+.authoring-workspace .presentation-layout {
+	display: grid;
+	grid-template-columns: minmax(190px, 220px) minmax(0, 1fr);
+	gap: 16px;
+	margin: 0;
+}
+
+.authoring-workspace .lecture-selector-section,
+.authoring-workspace .slide-canvas-section,
+.authoring-course-empty {
+	min-width: 0;
+	padding: 18px;
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	background: rgba(255, 255, 255, 0.84);
+	box-shadow: 0 8px 28px rgba(31, 48, 86, 0.045);
+}
+
+.authoring-workspace .lecture-selector-section {
+	position: sticky;
+	top: 86px;
+	width: auto;
+	max-height: calc(100vh - 108px);
+	overflow-y: auto;
+}
+
+.authoring-workspace .content-section-heading {
+	min-width: 0;
+	align-items: start;
+	padding-bottom: 14px;
+}
+
+.authoring-workspace .content-section-heading h2 {
+	min-width: max-content;
+	font-size: clamp(1.5rem, 2.2vw, 2rem);
+	overflow-wrap: normal;
+}
+
+.authoring-workspace .lecture-selector-list {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: 7px;
+	margin-top: 14px;
+}
+
+.authoring-workspace .lecture-selector-row {
+	display: block;
+}
+
+.authoring-workspace .lecture-selector-row > button:first-child {
+	display: grid;
+	width: 100%;
+	grid-template-columns: 34px minmax(0, 1fr);
+	gap: 4px 9px;
+	padding: 10px;
+	border-radius: 8px;
+}
+
+.authoring-workspace .lecture-selector-list .lecture-index {
+	grid-row: 1 / 3;
+	align-self: center;
+	width: 34px;
+	height: 34px;
+	min-width: 34px;
+	font-size: 0.66rem;
+}
+
+.authoring-workspace .lecture-selector-list .lecture-title {
+	align-self: end;
+	font-weight: 750;
+	line-height: 1.25;
+	white-space: normal;
+}
+
+.lecture-status {
+	grid-column: 2;
+	color: var(--muted);
+	font-family: "SFMono-Regular", Consolas, monospace;
+	font-size: 0.6rem;
+	font-weight: 500;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.authoring-workspace .slide-canvas-section .content-section-heading {
+	display: flex;
+	gap: 16px;
+}
+
+.authoring-workspace .slide-canvas-section .section-actions {
+	display: flex;
+	min-width: 0;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+}
+
+.authoring-workspace .export-row {
+	display: flex;
+	min-width: 0;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+}
+
+.authoring-workspace .profile-select {
+	width: auto;
+	max-width: 190px;
+	min-width: 130px;
+	min-height: 40px;
+}
+
+.presentation-more {
+	position: relative;
+}
+
+.presentation-more summary {
+	display: grid;
+	min-height: 40px;
+	place-items: center;
+	padding: 0 13px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--paper);
+	color: var(--muted);
+	font-size: 0.8rem;
+	font-weight: 750;
+	cursor: pointer;
+	list-style: none;
+}
+
+.presentation-more summary::-webkit-details-marker {
+	display: none;
+}
+
+.presentation-more[open] > button {
+	position: absolute;
+	z-index: 4;
+	top: calc(100% + 6px);
+	right: 0;
+	width: max-content;
+	background: var(--paper);
+	box-shadow: var(--shadow);
+}
+
+.authoring-workspace .slide-canvas {
+	margin-top: 16px;
+}
+
+.authoring-workspace .slide-card {
+	min-height: 62px;
+	padding: 11px 14px;
+}
+
+.authoring-workspace .agent-panel.is-embedded {
+	position: sticky;
+	top: 86px;
+	display: flex;
+	width: 100%;
+	min-width: 0;
+	min-height: 680px;
+	height: calc(100vh - 108px);
+	max-height: calc(100vh - 108px);
+	margin: 0;
+	padding: 0;
+	overflow: hidden;
+	border: 1px solid #bcc9df;
+	border-radius: 12px;
+	background: rgba(255, 255, 255, 0.92);
+	box-shadow: 0 10px 34px rgba(31, 48, 86, 0.07);
+}
+
+.agent-panel.is-embedded .agent-panel-heading {
+	display: grid;
+	gap: 10px;
+	padding: 14px 16px;
+	border-bottom: 1px solid var(--line);
+	background: rgba(255, 255, 255, 0.96);
+}
+
+.agent-panel.is-embedded .agent-panel-heading h2 {
+	margin: 4px 0 0;
+	font-family: "Charter", "Bitstream Charter", Georgia, serif;
+	font-size: 1.4rem;
+	letter-spacing: -0.02em;
+}
+
+.agent-panel.is-embedded .agent-toolbar {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 8px 12px;
+	align-items: end;
+}
+
+.agent-panel.is-embedded .agent-model-picker {
+	width: 100%;
+	grid-template-columns: auto minmax(0, 1fr);
+}
+
+.agent-panel.is-embedded .conversation-actions {
+	justify-content: end;
+}
+
+.agent-panel.is-embedded .chat-scroll-container {
+	display: flex;
+	min-height: 0;
+	flex: 1 1 auto;
+	overflow-y: auto;
+}
+
+.agent-panel.is-embedded .chat-messages {
+	min-height: 0;
+	gap: 18px;
+	padding: 22px 18px 22px 34px;
+}
+
+.agent-panel.is-embedded .chat-messages::before {
+	top: 22px;
+	bottom: 22px;
+	left: 12px;
+}
+
+.agent-panel.is-embedded .chat-empty {
+	padding: 18px;
+}
+
+.agent-panel.is-embedded .chat-empty::before,
+.agent-panel.is-embedded .chat-message::before {
+	left: -28px;
+}
+
+.agent-panel.is-embedded .chat-message {
+	max-width: 100%;
+}
+
+.agent-panel.is-embedded .message-body {
+	padding: 12px 14px;
+}
+
+.agent-panel.is-embedded .message-body p {
+	font-size: 0.86rem;
+	line-height: 1.55;
+}
+
+.agent-panel.is-embedded .agent-activity {
+	padding: 0 18px;
+}
+
+.agent-panel.is-embedded .approval-card,
+.agent-panel.is-embedded > .notice {
+	margin-right: 18px;
+	margin-left: 18px;
+}
+
+.agent-panel.is-embedded .chat-composer {
+	position: static;
+	margin: 0;
+	padding: 14px 18px 18px;
+	border: 0;
+	border-top: 1px solid var(--line);
+	border-radius: 0;
+	box-shadow: none;
+	backdrop-filter: none;
+}
+
+.agent-panel.is-embedded .chat-composer textarea {
+	min-height: 72px;
+}
+
+.authoring-course-empty {
+	min-height: 360px;
+}
+
+.authoring-course-empty h2 {
+	margin: 6px 0 10px;
+	font-family: "Charter", "Bitstream Charter", Georgia, serif;
+	font-size: 1.8rem;
+}
+
+.authoring-course-empty p:last-child {
+	max-width: 480px;
+	color: var(--muted);
+	line-height: 1.55;
+}
+
+@container authoring-workspace (max-width: 1120px) {
+	.authoring-body {
+		grid-template-columns: 1fr;
+	}
+
+	.authoring-workspace .agent-panel.is-embedded {
+		position: static;
+		min-height: 620px;
+		height: auto;
+		max-height: none;
+	}
+
+	.agent-panel.is-embedded .chat-scroll-container {
+		min-height: 320px;
+		max-height: 620px;
+	}
+}
+
+@container authoring-workspace (max-width: 820px) {
+	.authoring-header {
+		display: grid;
+		gap: 8px;
+	}
+
+	.authoring-header > p {
+		text-align: left;
+	}
+
+	.authoring-workspace .presentation-layout {
+		grid-template-columns: 1fr;
+	}
+
+	.authoring-workspace .lecture-selector-section {
+		position: static;
+		max-height: none;
+	}
+
+	.authoring-workspace .lecture-selector-list {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	.agent-panel.is-embedded .agent-toolbar {
+		grid-template-columns: 1fr;
+	}
+
+	.agent-panel.is-embedded .conversation-actions {
+		justify-content: start;
+	}
+}
+
+@container authoring-workspace (max-width: 560px) {
+	.authoring-workspace {
+		padding: 22px 12px 36px;
+	}
+
+	.authoring-workspace .lecture-selector-list {
+		grid-template-columns: 1fr;
+	}
+
+	.authoring-workspace .slide-canvas-section .content-section-heading,
+	.authoring-workspace .slide-canvas-section .section-actions,
+	.authoring-workspace .export-row {
+		display: grid;
+		justify-content: stretch;
+	}
+
+	.authoring-workspace .profile-select,
+	.authoring-workspace .section-actions button,
+	.presentation-more summary {
+		width: 100%;
+		max-width: none;
+	}
+
+	.authoring-workspace .agent-panel.is-embedded {
+		min-height: 0;
+	}
+
+	.agent-panel.is-embedded .chat-scroll-container {
+		min-height: 260px;
+	}
+
+	.slide-order-btn {
+		width: 40px;
+		height: 40px;
+	}
+}
+
+@media (max-height: 520px) {
+	.chat-composer {
+		position: static;
+	}
+}
+
 @media (prefers-reduced-motion: no-preference) {
 	.launcher-heading,
 	.page-heading {
@@ -2757,5 +3995,243 @@ h1 {
 		width: 100%;
 		align-items: stretch;
 		flex-direction: column;
+	}
+}
+
+/* Final canvas constraints live after the legacy presentation rules so the
+   layout cannot squeeze either column into vertical letter-stacks. */
+.presentation-main {
+	width: min(100%, 1240px);
+}
+
+.presentation-layout {
+	display: grid;
+	grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+	gap: clamp(24px, 4vw, 48px);
+	margin-top: 36px;
+}
+
+.lecture-selector-section {
+	width: auto;
+	min-width: 0;
+}
+
+.slide-canvas-section .content-section-heading {
+	align-items: start;
+}
+
+.slide-canvas-section .section-actions,
+.slide-canvas-section .export-row {
+	justify-content: flex-end;
+	flex-wrap: wrap;
+}
+
+@media (max-width: 1100px) {
+	.presentation-layout {
+		grid-template-columns: 1fr;
+	}
+
+	.lecture-selector-section {
+		position: static;
+		max-height: none;
+		overflow: visible;
+	}
+
+	.lecture-selector-list {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 8px;
+	}
+}
+
+@media (max-width: 700px) {
+	.lecture-selector-list {
+		grid-template-columns: 1fr;
+	}
+
+	.slide-canvas-section .content-section-heading,
+	.slide-canvas-section .section-actions,
+	.slide-canvas-section .export-row {
+		display: grid;
+		justify-content: stretch;
+	}
+
+	.profile-select,
+	.slide-canvas-section .section-actions button {
+		width: 100%;
+	}
+}
+
+/* Authoring cascade closure. Keep this after the legacy Presentation rules. */
+.workspace-layout.view-author > .workspace-stage,
+.workspace-layout.view-author .authoring-workspace,
+.workspace-layout.view-author .authoring-body,
+.workspace-layout.view-author .authoring-split,
+.workspace-layout.view-author .authoring-primary-pane,
+.workspace-layout.view-author .authoring-secondary-pane {
+	min-width: 0;
+	min-height: 0;
+}
+
+.workspace-layout.view-author .authoring-workspace {
+	height: 100%;
+	padding: 10px 12px 12px;
+	overflow: hidden;
+}
+
+.workspace-layout.view-author .authoring-header {
+	min-height: 52px;
+	margin: 0;
+	padding: 0 2px 9px;
+}
+
+.workspace-layout.view-author .authoring-header h1 {
+	margin: 0;
+	font-size: clamp(1.65rem, 2.2vw, 2.15rem);
+}
+
+.workspace-layout.view-author .authoring-body {
+	display: block;
+	width: 100%;
+	flex: 1 1 auto;
+}
+
+.workspace-layout.view-author .authoring-split {
+	display: grid;
+	width: 100%;
+	height: 100%;
+	grid-template-columns: minmax(0, 1fr) 12px minmax(0, var(--agent-pane-width));
+}
+
+.workspace-layout.view-author .presentation-main,
+.workspace-layout.view-author .presentation-layout {
+	width: 100%;
+	height: 100%;
+}
+
+.workspace-layout.view-author .presentation-layout {
+	display: grid;
+	grid-template-columns: 1fr;
+	grid-template-rows: auto minmax(0, 1fr);
+	gap: 8px;
+	margin: 0;
+}
+
+.workspace-layout.view-author .lecture-selector-section {
+	position: static;
+	display: flex;
+	width: auto;
+	max-height: none;
+	min-height: 70px;
+	align-items: center;
+	gap: 12px;
+	padding: 8px 10px;
+	overflow: hidden;
+}
+
+.workspace-layout.view-author
+	.lecture-selector-section
+	.content-section-heading {
+	min-width: max-content;
+	padding: 0 10px 0 0;
+	border-right: 1px solid var(--line);
+}
+
+.workspace-layout.view-author .lecture-selector-section h2 {
+	min-width: 0;
+	margin: 0;
+	font-size: 1rem;
+}
+
+.workspace-layout.view-author .lecture-selector-list {
+	display: flex;
+	min-width: 0;
+	flex: 1 1 auto;
+	grid-template-columns: none;
+	gap: 6px;
+	margin: 0;
+	overflow-x: auto;
+}
+
+.workspace-layout.view-author .lecture-selector-row {
+	display: block;
+	min-width: min(220px, 35vw);
+}
+
+.workspace-layout.view-author .lecture-selector-row > button:first-child {
+	display: grid;
+	width: 100%;
+	min-height: 50px;
+	grid-template-columns: 30px minmax(0, 1fr);
+	padding: 6px 9px;
+}
+
+.workspace-layout.view-author .lecture-selector-list .lecture-title {
+	overflow: hidden;
+	font-size: 0.78rem;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.workspace-layout.view-author .slide-canvas-section {
+	display: flex;
+	height: 100%;
+	min-height: 0;
+	flex-direction: column;
+	padding: 12px;
+	overflow: hidden;
+}
+
+.workspace-layout.view-author .slide-canvas {
+	min-height: 0;
+	flex: 1 1 auto;
+	margin-top: 8px;
+	overflow-y: auto;
+}
+
+.workspace-layout.view-author .agent-panel.is-embedded {
+	position: static;
+	height: 100%;
+	max-height: none;
+	min-height: 0;
+}
+
+.workspace-layout.view-author .agent-panel.is-embedded .chat-scroll-container {
+	min-height: 0;
+	max-height: none;
+	flex: 1 1 auto;
+	overflow-y: auto;
+}
+
+.workspace-layout.view-author .agent-panel.is-embedded .chat-messages {
+	min-height: 100%;
+	overflow: visible;
+}
+
+.workspace-layout.view-author .agent-panel.is-embedded .chat-composer {
+	position: static;
+	flex: 0 0 auto;
+}
+
+@container authoring-workspace (max-width: 912px) {
+	.workspace-layout.view-author .authoring-split {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: auto minmax(0, 1fr);
+	}
+
+	.workspace-layout.view-author .authoring-primary-pane,
+	.workspace-layout.view-author .authoring-secondary-pane {
+		display: none;
+		grid-row: 2;
+		grid-column: 1;
+	}
+
+	.workspace-layout.view-author
+		.authoring-split[data-active-pane="primary"]
+		.authoring-primary-pane,
+	.workspace-layout.view-author
+		.authoring-split[data-active-pane="secondary"]
+		.authoring-secondary-pane {
+		display: block;
 	}
 }

@@ -18,7 +18,7 @@ Course Harness is a local-first, chat-first application that starts in a restric
 
 The application maintains a reusable global Library while keeping each Course portable and inspectable through human-readable files and Git-backed history. Local files, uploads, URLs, papers, GitHub material, and future connectors enter a provider-neutral Resource lifecycle, with immutable Source Versions, Evidence, and human-verifiable Citations. Research can remain exploratory until a Resource is admitted as a Course Source.
 
-PowerPoint remains the flagship deliverable. Course Harness onboards arbitrary structurally usable templates into versioned Template Profiles, combines deterministic inspection with optional LLM and vision assistance, streams responsive template-backed Slide Previews in React, and exports native editable `.pptx` files. Guided authoring is the default; one Autonomous Mode toggle lets the agent proceed until completion while preserving steering, cancellation, Current State inspection, validation, revisions, and explicit publication.
+PowerPoint remains the flagship deliverable. Course Harness onboards arbitrary structurally usable templates into versioned Template Profiles, combines deterministic inspection with optional LLM and vision assistance, streams responsive template-backed Slide Previews in React, and exports native editable `.pptx` files. The Course Agent applies validated working-state changes as it proceeds, asks concise conversational questions when intent is materially ambiguous or substantial authored work would be discarded, and leaves Course Release publication explicit.
 
 ## User Stories
 
@@ -57,8 +57,8 @@ PowerPoint remains the flagship deliverable. Course Harness onboards arbitrary s
 33. As a Course Author, I want simple direct controls for rename, reorder, approve, archive, restore, and small corrections, so that trivial actions do not require elaborate prompting.
 34. As a Course Author, I want one persistent Course Agent accountable for changes, so that the experience remains coherent across many Lectures.
 35. As a Course Author, I want the Course Agent to delegate bounded work to Worker Agents, so that research and drafting can scale without concurrent authoritative writes.
-36. As a Course Author, I want Guided authoring by default, so that I can review the Course Plan and important outlines before substantial generation.
-37. As a Course Author, I want one Autonomous Mode toggle or a natural-language “continue until done” instruction, so that trusted runs can proceed without repeated approval.
+36. As a Course Author, I want validated working-state changes to apply as the Course Agent works, so that conversational authoring is not interrupted by repetitive approval prompts.
+37. As a Course Author, I want the Course Agent to ask a concise chat question before acting on materially ambiguous intent or discarding substantial authored work, so that autonomy does not become guesswork.
 38. As a Course Author, I want to steer an active run at safe boundaries, so that I can redirect work without racing state mutations.
 39. As a Course Author, I want to cancel a run while preserving valid partial Current State, so that useful work is not discarded.
 40. As a Course Author, I want mutating UI actions locked during an active run, so that state changes cannot race the Course Agent.
@@ -71,7 +71,7 @@ PowerPoint remains the flagship deliverable. Course Harness onboards arbitrary s
 47. As a Course Author, I want Template Profile onboarding to infer layouts and slots automatically, so that common templates require little setup.
 48. As a Course Author, I want low-confidence mappings explained and visually correctable, so that unusual templates remain usable.
 49. As a Course Author, I want a calibration deck, so that I can validate how semantic content maps into the template before generating a Course.
-50. As a Course Author, I want Template Profiles saved and versioned globally, so that one corrected institutional template can be reused safely across Courses.
+50. As a Course Author, I want globally saved Template Profiles to have unique editable display names and stable internal identities, so that a growing template library remains understandable and reusable across Courses.
 51. As a Course Author, I want each Course to pin a Template Profile version, so that later mapping changes do not silently alter old Course output.
 52. As a Course Author, I want immediate template-backed Slide Previews, so that backgrounds, logos, and placeholder geometry appear while the agent writes.
 53. As a Course Author, I want authoritative rendered thumbnails when PowerPoint or LibreOffice is available, so that I can inspect high-fidelity output before export.
@@ -116,10 +116,10 @@ PowerPoint remains the flagship deliverable. Course Harness onboards arbitrary s
 - Start retrieval with source listing, bounded reading, and SQLite FTS5 over Derived Representations. Preserve a provider-neutral Evidence coordinate model. Add semantic retrieval only after evaluation demonstrates material benefit.
 - Use one persistent Course Agent for conversation and authoritative typed mutations. Worker Agents may perform bounded research or drafting and return proposals/Evidence but cannot mutate Course state.
 - Allow only one mutating run per Workspace. Stream read-only progress through AG-UI, lock competing mutations, accept steering at safe boundaries, and preserve valid partial state on cancellation.
-- Make Guided authoring the default with Approval Checkpoints around the Course Plan and significant Lecture outlines. One Autonomous Mode toggle or explicit natural-language instruction bypasses routine checkpoints; Course Release publication is always explicit.
+- Apply validated working-state changes autonomously by default. Ask through ordinary chat only when intent is materially ambiguous or an operation would discard substantial authored work; keep Course Release publication explicit. Do not require approval cards without a useful semantic diff.
 - Route both chat intent and limited direct UI actions through the same validated application commands. Emphasize contextual chat instructions over building a general PowerPoint editor.
 - Use AG-UI shared state/events for chat, run lifecycle, activity, and live Course projection. Persist sessions server-side; do not make browser framework context authoritative.
-- Import structurally usable `.pptx` or `.potx` files into versioned Template Profiles. Inspect masters, layouts, placeholders, names, types, geometry, inheritance, themes, and example slides deterministically.
+- Import structurally usable `.pptx` or `.potx` files into versioned Template Profiles. Give each profile a stable internal ID and a case-insensitively unique, editable display name derived initially from its filename. Renaming is catalog metadata and does not create a new profile version. Inspect masters, layouts, placeholders, names, types, geometry, inheritance, themes, and example slides deterministically.
 - Infer Template Profile mappings using structural heuristics first, text-LLM classification for ambiguity, and rendered calibration images plus vision only when structural confidence remains low. Show the configured provider and obtain onboarding consent for image transmission.
 - Automatically accept high-confidence mappings as unverified, generate a calibration deck, allow visual correction, and block export only for genuinely unusable required mappings or placeholders.
 - Let each Template Profile expose concrete layouts mapped to core semantic archetypes and typed slots, plus custom layouts. The Course Agent chooses only layouts declared by the pinned Profile.
@@ -166,6 +166,7 @@ PowerPoint remains the flagship deliverable. Course Harness onboards arbitrary s
 - Hosted multi-user authentication beyond a later safe single-user self-hosted mode.
 - Automated LLM-judge scoring as the primary definition of Course quality.
 - Unrestricted shell, filesystem, Git, Office macro, or MCP access for the Course Agent.
+- Template Profile archival and referential protection after hard deletion in the first proof of concept.
 
 ## Further Notes
 
