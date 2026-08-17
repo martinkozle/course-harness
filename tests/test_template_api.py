@@ -1,4 +1,6 @@
+import asyncio
 from pathlib import Path
+from threading import Event
 from typing import cast
 
 import httpx2
@@ -14,6 +16,7 @@ from course_harness.course_plan import (
     create_course_plan_file,
     initialize_workspace_history,
 )
+from course_harness.slide_preview import PreviewContext
 
 PP_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 POTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.template"
@@ -31,6 +34,7 @@ def _app(workspace: Path, templates_data: Path, templates_cache: Path):
         workspace,
         templates_data_path=templates_data,
         templates_cache_path=templates_cache,
+        precompute_template_backgrounds=False,
     )
 
 
@@ -73,6 +77,49 @@ async def test_upload_template_returns_profile(tmp_path: Path) -> None:
         assert profile["version"] == 1
         assert len(profile["layouts"]) == 9
         assert body["inspection"]["slide_count"] >= 9
+
+
+@pytest.mark.anyio
+async def test_upload_schedules_empty_layout_backgrounds_when_renderer_is_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    rendered = Event()
+    rendered_versions: list[int] = []
+
+    class AvailableRenderer:
+        available = True
+
+    def record_render(context: PreviewContext) -> None:
+        rendered_versions.append(context.profile.version)
+        rendered.set()
+
+    monkeypatch.setattr("course_harness.app.renderer_capability", AvailableRenderer)
+    monkeypatch.setattr("course_harness.app.render_layout_backgrounds", record_render)
+    app = create_app(
+        workspace,
+        templates_data_path=tmp_path / "tpl-data",
+        templates_cache_path=tmp_path / "tpl-cache",
+    )
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await _upload_pptx(client, _make_test_pptx())
+        completed = await asyncio.to_thread(rendered.wait, 2)
+        profile_id = response.json()["profile"]["id"]
+        rendered.clear()
+        updated = await client.put(
+            f"/api/templates/{profile_id}",
+            json={"mappings": [{"semantic_layout": "title", "template_layout_index": 1}]},
+        )
+        correction_completed = await asyncio.to_thread(rendered.wait, 2)
+
+    assert response.status_code == 200
+    assert completed is True
+    assert updated.status_code == 200
+    assert correction_completed is True
+    assert rendered_versions == [1, 2]
 
 
 @pytest.mark.anyio
@@ -165,6 +212,7 @@ async def test_ai_mapping_failure_falls_back_to_heuristics(
         templates_data_path=tmp_path / "tpl-data",
         templates_cache_path=tmp_path / "tpl-cache",
         agent_model=cast(Model, object()),
+        precompute_template_backgrounds=False,
     )
     transport = httpx2.ASGITransport(app=app)
     async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:

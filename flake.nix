@@ -76,6 +76,8 @@
                 bun
                 chromium
                 git
+                imagemagick
+                libreoffice
                 nodejs_24
                 python314
                 uv

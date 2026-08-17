@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from pptx import Presentation as PPTXPresentation
 from pptx.enum.shapes import PP_PLACEHOLDER
+from pptx.oxml.ns import qn
 
 from course_harness.template_profiles import SEMANTIC_SLOTS
 
@@ -102,7 +103,7 @@ def _extract_theme(pptx_path: Path) -> dict:
                 n for n in zf.namelist() if n.startswith("ppt/theme/theme") and n.endswith(".xml")
             ]
             if not theme_files:
-                return {"name": "", "colors": {}}
+                return {"name": "", "colors": {}, "fonts": {}}
             theme_xml = zf.read(theme_files[0])
             root = ET.fromstring(theme_xml)
             theme_name_el = root.attrib.get("name", "")
@@ -122,12 +123,19 @@ def _extract_theme(pptx_path: Path) -> dict:
                             val = sys_clr.attrib.get("lastClr", "")
                             if val:
                                 colors[tag] = f"#{val}"
-            return {"name": theme_name_el, "colors": colors}
+            fonts: dict[str, str] = {}
+            font_scheme = root.find(f".//{{{_A_NS}}}fontScheme")
+            if font_scheme is not None:
+                for key, tag in (("major", "majorFont"), ("minor", "minorFont")):
+                    family = font_scheme.find(f"{{{_A_NS}}}{tag}/{{{_A_NS}}}latin")
+                    if family is not None and family.attrib.get("typeface"):
+                        fonts[key] = family.attrib["typeface"]
+            return {"name": theme_name_el, "colors": colors, "fonts": fonts}
     except Exception:
-        return {"name": "", "colors": {}}
+        return {"name": "", "colors": {}, "fonts": {}}
 
 
-def _extract_masters(prs) -> list[dict]:
+def _extract_masters(prs, theme: dict) -> list[dict]:
     masters = []
     for index, master in enumerate(prs.slide_masters):
         masters.append(
@@ -136,17 +144,77 @@ def _extract_masters(prs) -> list[dict]:
                 "name": getattr(master, "name", "") or f"Master {index + 1}",
                 "preserved": getattr(master, "preserved", False),
                 "layout_count": len(master.slide_layouts),
-                "placeholders": [_inspect_placeholder(ph) for ph in master.placeholders],
+                "placeholders": [
+                    _inspect_placeholder(ph, _placeholder_typography(master, ph, theme))
+                    for ph in master.placeholders
+                ],
             }
         )
     return masters
 
 
-def _inspect_placeholder(ph) -> dict:
+def _placeholder_typography(container, placeholder, theme: dict) -> dict:
+    try:
+        placeholder_type = int(placeholder.placeholder_format.type)
+    except Exception:
+        placeholder_type = 0
+    style_name = "titleStyle" if placeholder_type in _TITLE_LIKE else "bodyStyle"
+    master = getattr(container, "slide_master", container)
+    levels = master._element.xpath(f"./p:txStyles/p:{style_name}/a:lvl1pPr")
+    level = levels[0] if levels else None
+    default_run = level.find(qn("a:defRPr")) if level is not None else None
+    size = None
+    family = None
+    bold = False
+    if default_run is not None:
+        raw_size = default_run.get("sz")
+        size = int(raw_size) / 100 if raw_size else None
+        bold = default_run.get("b") in {"1", "true"}
+        latin = default_run.find(qn("a:latin"))
+        family = latin.get("typeface") if latin is not None else None
+    fonts = theme.get("fonts", {})
+    if not family or family == "+mj-lt":
+        family = fonts.get("major") if placeholder_type in _TITLE_LIKE else fonts.get("minor")
+    elif family == "+mn-lt":
+        family = fonts.get("minor")
+    alignment = level.get("algn") if level is not None else None
+    alignment = {"ctr": "center", "r": "right", "l": "left"}.get(alignment, alignment)
+    return {
+        "font_family": family,
+        "font_size": size,
+        "bold": bold,
+        "alignment": alignment,
+    }
+
+
+def _inspect_placeholder(ph, inherited: dict | None = None) -> dict:
     try:
         ph_type = int(ph.placeholder_format.type) if ph.placeholder_format.type is not None else 0
     except Exception:
         ph_type = 0
+    font_size = None
+    font_family = None
+    bold = False
+    alignment = None
+    try:
+        paragraph = ph.text_frame.paragraphs[0]
+        font_size = paragraph.font.size.pt if paragraph.font.size is not None else None
+        font_family = paragraph.font.name
+        bold = bool(paragraph.font.bold)
+        alignment = (
+            str(paragraph.alignment).split(".")[-1].lower()
+            if paragraph.alignment is not None
+            else None
+        )
+    except Exception:
+        pass
+    inherited = inherited or {}
+    if font_size is None:
+        font_size = inherited.get("font_size") or (32 if ph_type in _TITLE_LIKE else 18)
+    if not font_family:
+        font_family = inherited.get("font_family") or "Aptos"
+    bold = bold or bool(inherited.get("bold"))
+    alignment = alignment or inherited.get("alignment")
     return {
         "idx": ph.placeholder_format.idx,
         "type": ph_type,
@@ -155,6 +223,10 @@ def _inspect_placeholder(ph) -> dict:
         "top": ph.top,
         "width": ph.width,
         "height": ph.height,
+        "font_family": font_family,
+        "font_size": font_size,
+        "bold": bold,
+        "alignment": alignment,
     }
 
 
@@ -189,7 +261,8 @@ def _extract_example_slides(prs) -> list[dict]:
 
 def inspect_template(pptx_path: Path) -> dict:
     prs = PPTXPresentation(str(pptx_path))
-    masters = _extract_masters(prs)
+    theme = _extract_theme(pptx_path)
+    masters = _extract_masters(prs, theme)
     layout_infos = []
     for i, layout in enumerate(prs.slide_layouts):
         master_index = list(prs.slide_masters).index(layout.slide_master)
@@ -198,7 +271,10 @@ def inspect_template(pptx_path: Path) -> dict:
             {
                 "index": i,
                 "name": layout.name,
-                "placeholders": [_inspect_placeholder(ph) for ph in layout.placeholders],
+                "placeholders": [
+                    _inspect_placeholder(ph, _placeholder_typography(layout, ph, theme))
+                    for ph in layout.placeholders
+                ],
                 "master_index": master_index,
                 "master_name": master["name"],
                 "master_placeholders": master["placeholders"],
@@ -210,7 +286,7 @@ def inspect_template(pptx_path: Path) -> dict:
         "slide_count": len(prs.slide_layouts),
         "layouts": layout_infos,
         "masters": masters,
-        "theme": _extract_theme(pptx_path),
+        "theme": theme,
         "example_slides": _extract_example_slides(prs),
         "semantic_slots": {semantic: list(slots) for semantic, slots in SEMANTIC_SLOTS.items()},
     }
@@ -241,14 +317,14 @@ def map_semantic_layouts(inspection: dict) -> list[dict]:
                 "template_layout_index": best_idx,
                 "confidence": min(best_score, 1.0),
                 "rationale": _build_rationale(best_layout, semantic, best_score, matched_keyword),
-                "slot_mappings": _infer_slot_mappings(best_layout, semantic),
+                "slot_mappings": infer_slot_mappings(best_layout, semantic),
             }
         )
 
     return results
 
 
-def _infer_slot_mappings(layout: dict, semantic: str) -> dict[str, int]:
+def infer_slot_mappings(layout: dict, semantic: str) -> dict[str, int]:
     placeholders = layout["placeholders"]
     title = [ph for ph in placeholders if ph["type"] in _TITLE_LIKE]
     subtitle = [ph for ph in placeholders if ph["type"] == SUBTITLE_PH]
@@ -547,7 +623,7 @@ async def suggest_mappings_with_llm(
                 "template_layout_index": idx,
                 "confidence": max(0.0, min(float(confidence), 1.0)),
                 "rationale": str(s.get("rationale", "")),
-                "slot_mappings": _infer_slot_mappings(inspection["layouts"][idx], semantic),
+                "slot_mappings": infer_slot_mappings(inspection["layouts"][idx], semantic),
             }
         )
 

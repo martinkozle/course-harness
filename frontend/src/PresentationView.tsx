@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 
 import type { CoursePlan } from "./AgentPanel";
 import { responseError } from "./api";
 import type {
 	Presentation,
+	PresentationPreview,
 	PresentationSummary,
+	PreviewSlot,
 	Slide,
 	SlideCitation,
+	SlidePreviewDescriptor,
 	TemplateProfileSummary,
 } from "./models";
 
@@ -60,6 +64,102 @@ function citationDetail(citation: SlideCitation): string {
 	return parts.join(" ");
 }
 
+function slotContent(slide: Slide, slot: string): string | string[] | null {
+	if (slot === "title") return slide.title ?? null;
+	if (slot === "subtitle") return slide.subtitle ?? null;
+	if (slot === "body") {
+		return slide.bullets ?? slide.code ?? slide.quote ?? slide.text ?? null;
+	}
+	if (slot === "left") return slide.left_content ?? null;
+	if (slot === "right") return slide.right_content ?? null;
+	if (slot === "statement") return slide.statement ?? null;
+	if (slot === "image") return slide.caption ?? "Image";
+	return null;
+}
+
+function slotStyle(slot: PreviewSlot): CSSProperties {
+	return {
+		left: `${String(slot.left * 100)}%`,
+		top: `${String(slot.top * 100)}%`,
+		width: `${String(slot.width * 100)}%`,
+		height: `${String(slot.height * 100)}%`,
+		fontFamily: slot.font_family,
+		fontWeight: slot.bold ? 700 : 400,
+		textAlign:
+			slot.alignment === "center" || slot.alignment === "right"
+				? slot.alignment
+				: "left",
+		fontSize: `clamp(5px, ${String(slot.font_size / 9.6)}cqw, ${String(slot.font_size)}px)`,
+	};
+}
+
+function SlideVisualPreview({
+	slide,
+	preview,
+	interactive = false,
+	onChatContext,
+	aspectRatio,
+}: {
+	slide: Slide;
+	preview: SlidePreviewDescriptor | null;
+	interactive?: boolean;
+	onChatContext?: (instruction: string) => void;
+	aspectRatio: number;
+}) {
+	const authoritative = Boolean(preview?.thumbnail_url);
+	return (
+		<div
+			className={`visual-slide-preview ${authoritative ? "authoritative-preview" : "semantic-preview"}`}
+			style={
+				preview?.background_url
+					? {
+							aspectRatio,
+							backgroundImage: `url("${preview.background_url}")`,
+						}
+					: { aspectRatio }
+			}
+		>
+			{preview?.thumbnail_url ? (
+				<img src={preview.thumbnail_url} alt="" />
+			) : null}
+			{(!authoritative || interactive) &&
+				Object.entries(preview?.slots ?? {}).map(([name, slot]) => {
+					const content = slotContent(slide, name);
+					if (!content) return null;
+					const rendered = Array.isArray(content)
+						? content.join("\n")
+						: content;
+					return interactive ? (
+						<button
+							type="button"
+							className={`preview-content-slot ${authoritative ? "authoritative-content-slot" : ""}`}
+							style={slotStyle(slot)}
+							key={name}
+							onClick={() =>
+								onChatContext?.(
+									`I'm looking at the ${name} content on "${slidePreview(slide)}"`,
+								)
+							}
+						>
+							{rendered}
+						</button>
+					) : (
+						<span
+							className="preview-content-slot"
+							style={slotStyle(slot)}
+							key={name}
+						>
+							{rendered}
+						</span>
+					);
+				})}
+			{!authoritative && Object.keys(preview?.slots ?? {}).length === 0 ? (
+				<span className="preview-fallback-title">{slidePreview(slide)}</span>
+			) : null}
+		</div>
+	);
+}
+
 function SlideDetail({
 	slide,
 	lectureId,
@@ -67,6 +167,8 @@ function SlideDetail({
 	onChatContext,
 	onArchiveChange,
 	busy,
+	preview,
+	aspectRatio,
 }: {
 	slide: Slide;
 	lectureId: string;
@@ -74,6 +176,8 @@ function SlideDetail({
 	onChatContext: (instruction: string) => void;
 	onArchiveChange: () => void;
 	busy: boolean;
+	preview: SlidePreviewDescriptor | null;
+	aspectRatio: number;
 }) {
 	const [editing, setEditing] = useState(false);
 	const [editTitle, setEditTitle] = useState(slide.title ?? "");
@@ -186,6 +290,13 @@ function SlideDetail({
 
 	return (
 		<section className="slide-detail" aria-label={`Slide ${slide.id} detail`}>
+			<SlideVisualPreview
+				slide={slide}
+				preview={preview}
+				interactive={!editing}
+				onChatContext={onChatContext}
+				aspectRatio={aspectRatio}
+			/>
 			<div className="slide-detail-header">
 				{editing ? (
 					<div className="field slide-title-field">
@@ -518,6 +629,9 @@ export function PresentationView({
 		useState<Presentation | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [loadingPresentation, setLoadingPresentation] = useState(false);
+	const [preview, setPreview] = useState<PresentationPreview | null>(null);
+	const [previewMessage, setPreviewMessage] = useState<string | null>(null);
+	const [renderingPreview, setRenderingPreview] = useState(false);
 	const [showArchived, setShowArchived] = useState(false);
 	const [selectedProfileId, setSelectedProfileId] = useState<string>(
 		course.template_profile_id ?? "_builtin-default",
@@ -597,6 +711,66 @@ export function PresentationView({
 		setSelectedProfileId(course.template_profile_id ?? "_builtin-default");
 	}, [course.template_profile_id]);
 
+	useEffect(() => {
+		if (!selectedLectureId || !currentPresentation) {
+			setPreview(null);
+			return;
+		}
+		const controller = new AbortController();
+		const expectedProfileId = selectedProfileId;
+		let renderTimer: ReturnType<typeof setTimeout> | undefined;
+		const previewUrl = `/api/presentations/${encodeURIComponent(selectedLectureId)}/preview`;
+		void (async () => {
+			try {
+				const response = await fetch(previewUrl, { signal: controller.signal });
+				if (!response.ok) throw new Error(await responseError(response));
+				const semanticPreview = (await response.json()) as PresentationPreview;
+				if (semanticPreview.profile_id !== expectedProfileId) return;
+				setPreview(semanticPreview);
+				setPreviewMessage(semanticPreview.renderer.detail);
+				if (!semanticPreview.renderer.available) return;
+				renderTimer = setTimeout(() => {
+					setRenderingPreview(true);
+					void fetch(`${previewUrl}/render`, {
+						method: "POST",
+						signal: controller.signal,
+					})
+						.then(async (renderResponse) => {
+							if (!renderResponse.ok)
+								throw new Error(await responseError(renderResponse));
+							setPreview((await renderResponse.json()) as PresentationPreview);
+							setPreviewMessage("High-fidelity thumbnails are ready.");
+						})
+						.catch((caught: unknown) => {
+							if (
+								caught instanceof DOMException &&
+								caught.name === "AbortError"
+							)
+								return;
+							setPreviewMessage(
+								caught instanceof Error
+									? `Thumbnail rendering failed: ${caught.message}`
+									: "Thumbnail rendering failed. Semantic previews remain available.",
+							);
+						})
+						.finally(() => setRenderingPreview(false));
+				}, 700);
+			} catch (caught) {
+				if (caught instanceof DOMException && caught.name === "AbortError")
+					return;
+				setPreviewMessage(
+					caught instanceof Error
+						? `Preview unavailable: ${caught.message}`
+						: "Preview unavailable.",
+				);
+			}
+		})();
+		return () => {
+			controller.abort();
+			if (renderTimer) clearTimeout(renderTimer);
+		};
+	}, [currentPresentation, selectedLectureId, selectedProfileId]);
+
 	async function deletePresentation() {
 		if (!selectedLectureId) return;
 		if (!window.confirm("Delete this Presentation and all of its Slides?"))
@@ -638,6 +812,7 @@ export function PresentationView({
 				}),
 			});
 			if (!response.ok) throw new Error(await responseError(response));
+			await onChange();
 		} catch (caught) {
 			setSelectedProfileId(previous);
 			setError(
@@ -688,6 +863,12 @@ export function PresentationView({
 	const archivedSlides = currentPresentation
 		? currentPresentation.slides.filter((s) => s.archived)
 		: [];
+	const previewBySlide = new Map(
+		(preview?.slides ?? []).map((item) => [item.slide_id, item]),
+	);
+	const slideAspectRatio = preview
+		? preview.slide_width / preview.slide_height
+		: 16 / 9;
 
 	return (
 		<section className="presentation-main" aria-label="Presentation authoring">
@@ -846,6 +1027,12 @@ export function PresentationView({
 									</details>
 								</div>
 							</div>
+							{previewMessage ? (
+								<p className="preview-renderer-status" role="status">
+									{renderingPreview ? "Rendering thumbnails… " : ""}
+									{previewMessage}
+								</p>
+							) : null}
 
 							<div className="slide-canvas">
 								{selectedSlide ? (
@@ -859,6 +1046,8 @@ export function PresentationView({
 											setSelectedSlideId(null);
 										}}
 										busy={busy}
+										preview={previewBySlide.get(selectedSlide.id) ?? null}
+										aspectRatio={slideAspectRatio}
 									/>
 								) : activeSlides.length === 0 ? (
 									<p className="empty-note">
@@ -926,6 +1115,11 @@ export function PresentationView({
 															{String(idx + 1).padStart(2, "0")}
 														</span>
 														<div className="slide-card-body">
+															<SlideVisualPreview
+																slide={slide}
+																preview={previewBySlide.get(slide.id) ?? null}
+																aspectRatio={slideAspectRatio}
+															/>
 															<div className="slide-card-header">
 																<span className="slide-layout-badge">
 																	{layoutLabel(slide.layout)}

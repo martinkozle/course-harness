@@ -94,6 +94,14 @@ from course_harness.providers import (
     validate_provider_account,
     validate_provider_capabilities,
 )
+from course_harness.slide_preview import (
+    PresentationPreview,
+    PreviewContext,
+    build_preview,
+    render_layout_backgrounds,
+    render_presentation_preview,
+    renderer_capability,
+)
 from course_harness.template_inspect import (
     inspect_template,
     map_semantic_layouts,
@@ -190,6 +198,7 @@ def create_app(
     agent_model: Model | None = None,
     provider_validator: ProviderCapabilityValidator = validate_provider_capabilities,
     provider_account_validator: ProviderAccountValidator = validate_provider_account,
+    precompute_template_backgrounds: bool = True,
 ) -> FastAPI:
     """Create the HTTP application, optionally bound to one Course Workspace."""
     if not logging.getLogger("course-harness").handlers:
@@ -197,6 +206,29 @@ def create_app(
     logger = logging.getLogger("course-harness")
 
     app = FastAPI(title="Course Harness")
+    background_render_tasks: set[asyncio.Task[None]] = set()
+
+    def finish_background_render(task: asyncio.Task[None]) -> None:
+        background_render_tasks.discard(task)
+        try:
+            task.result()
+        except Exception as error:
+            logger.warning("Template background rendering failed: %s", error)
+
+    def schedule_template_background_render(
+        profile: tpl.TemplateProfile,
+        template_path: Path,
+    ) -> None:
+        if not precompute_template_backgrounds or not renderer_capability().available:
+            return
+        render_task = asyncio.create_task(
+            asyncio.to_thread(
+                render_layout_backgrounds,
+                PreviewContext(profile, template_path, templates_cache),
+            )
+        )
+        background_render_tasks.add(render_task)
+        render_task.add_done_callback(finish_background_render)
 
     @app.exception_handler(HTTPException)
     async def _log_http_exception(request: Request, exc: HTTPException) -> StarletteResponse:
@@ -734,6 +766,72 @@ def create_app(
                 detail="No Presentation exists for this lecture",
             )
         return pres
+
+    def preview_context(lecture_id: str) -> tuple[Presentation, PreviewContext]:
+        active, plan = require_course_plan()
+        presentation = read_presentation_for_lecture(active, lecture_id)
+        if presentation is None:
+            raise HTTPException(status_code=404, detail="No Presentation exists for this lecture")
+        try:
+            profile = tpl.resolve_profile(
+                templates_data,
+                plan.template_profile_id,
+                plan.template_profile_version,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        template_path = (
+            tpl.profile_dir(templates_data, profile.id) / "template.pptx"
+            if profile.id != tpl.BUILTIN_DEFAULT_ID
+            else None
+        )
+        return presentation, PreviewContext(profile, template_path, templates_cache)
+
+    @app.get(
+        "/api/presentations/{lecture_id}/preview",
+        response_model=PresentationPreview,
+    )
+    async def api_get_presentation_preview(lecture_id: str) -> PresentationPreview:
+        presentation, context = preview_context(lecture_id)
+        return await asyncio.to_thread(
+            build_preview,
+            presentation,
+            context,
+        )
+
+    @app.post(
+        "/api/presentations/{lecture_id}/preview/render",
+        response_model=PresentationPreview,
+    )
+    async def api_render_presentation_preview(lecture_id: str) -> PresentationPreview:
+        presentation, context = preview_context(lecture_id)
+        try:
+            return await asyncio.to_thread(
+                render_presentation_preview,
+                presentation,
+                context,
+            )
+        except (ExportError, RuntimeError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.get("/api/preview-assets/{profile_id}/{kind}/{version_or_key}/{filename}")
+    async def api_preview_asset(
+        profile_id: str,
+        kind: Literal["backgrounds", "previews"],
+        version_or_key: str,
+        filename: str,
+    ) -> StarletteResponse:
+        if (
+            not profile_id.startswith(("tpl-", "_builtin-default"))
+            or not version_or_key.replace("v", "", 1).isalnum()
+            or not filename.endswith(".png")
+            or any(part in filename for part in ("..", "/", "\\"))
+        ):
+            raise HTTPException(status_code=404, detail="Not found")
+        asset = templates_cache / profile_id / kind / version_or_key / filename
+        if not asset.is_file():
+            raise HTTPException(status_code=404, detail="Not found")
+        return StarletteResponse(content=asset.read_bytes(), media_type="image/png")
 
     @app.post("/api/presentations/{lecture_id}", response_model=Presentation, status_code=201)
     async def api_create_presentation(
@@ -1364,6 +1462,7 @@ def create_app(
                     template_layout_index=m["template_layout_index"],
                     confidence=m["confidence"],
                     rationale=m["rationale"],
+                    slot_mappings=m["slot_mappings"],
                 )
                 for m in mappings
             ],
@@ -1380,6 +1479,8 @@ def create_app(
             )
         )
         tpl.write_registry(templates_data, registry)
+
+        schedule_template_background_render(profile, template_path)
 
         return TemplateUploadResponse(profile=profile, inspection=inspection)
 
@@ -1518,6 +1619,8 @@ def create_app(
                 s.mapped_layouts = len(updated_profile.layouts)
                 break
         tpl.write_registry(templates_data, registry)
+        template_path = tpl.profile_dir(templates_data, updated_profile.id) / "template.pptx"
+        schedule_template_background_render(updated_profile, template_path)
         return updated_profile
 
     @app.delete("/api/templates/{profile_id}", status_code=204)

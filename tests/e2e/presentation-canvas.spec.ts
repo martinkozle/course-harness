@@ -78,6 +78,53 @@ test("Course Author views Presentation canvas and slide outline", async ({
 		},
 	);
 	expect(createPresentation.ok()).toBe(true);
+	const createdPresentation = (await createPresentation.json()) as {
+		slides: { id: string; layout: string }[];
+	};
+	const previewPayload = {
+		profile_id: "_builtin-default",
+		profile_version: 1,
+		slide_width: 12192000,
+		slide_height: 6858000,
+		renderer: {
+			available: true,
+			name: "LibreOffice",
+			detail: "High-fidelity thumbnails are available.",
+		},
+		render_key: "stable-browser-fixture",
+		slides: createdPresentation.slides.map((slide) => ({
+			slide_id: slide.id,
+			layout: slide.layout,
+			background_url: null,
+			thumbnail_url: null,
+			slots: {
+				title: {
+					left: 0.08,
+					top: 0.08,
+					width: 0.84,
+					height: 0.2,
+					font_family: "Aptos",
+					font_size: 30,
+					bold: true,
+					alignment: "left",
+				},
+			},
+		})),
+	};
+	const renderedPreviewPayload = {
+		...previewPayload,
+		slides: previewPayload.slides.map((slide) => ({
+			...slide,
+			thumbnail_url:
+				"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X2NDWQAAAABJRU5ErkJggg==",
+		})),
+	};
+	await page.route(/\/api\/presentations\/[^/]+\/preview\/render$/, (route) =>
+		route.fulfill({ json: renderedPreviewPayload }),
+	);
+	await page.route(/\/api\/presentations\/[^/]+\/preview$/, (route) =>
+		route.fulfill({ json: previewPayload }),
+	);
 
 	// The template manager shares the page shell and exposes one built-in option.
 	await page.getByRole("button", { name: "Templates" }).click();
@@ -109,6 +156,22 @@ test("Course Author views Presentation canvas and slide outline", async ({
 		page.getByRole("heading", { name: "Presentation" }),
 	).toBeVisible();
 	await expect(page.locator(".slide-list > li")).toHaveCount(18);
+	await expect(page.locator(".semantic-preview")).toHaveCount(18);
+	await expect(page.locator(".slide-list > li").first()).toHaveScreenshot(
+		"presentation-preview-chrome.png",
+		{
+			mask: [page.locator(".visual-slide-preview").first()],
+			maxDiffPixelRatio: 0.01,
+		},
+	);
+	await expect(
+		page.getByText("High-fidelity thumbnails are ready."),
+	).toBeVisible();
+	await page.locator(".slide-card").first().click();
+	await expect(
+		page.getByRole("button", { name: "Introduction to causal inference" }),
+	).toBeVisible();
+	await page.getByRole("button", { name: "Close slide detail" }).click();
 	await expect(page.locator(".authoring-body")).toHaveCSS("display", "block");
 	await expect(page.locator(".context-text")).toContainText(
 		"From association to intervention",

@@ -206,7 +206,11 @@ export type TemplateInspection = {
 	slide_count: number;
 	layouts: TemplateLayoutInspection[];
 	masters: unknown[];
-	theme: { name: string; colors: Record<string, string> };
+	theme: {
+		name: string;
+		colors: Record<string, string>;
+		fonts: Record<string, string>;
+	};
 	example_slides: unknown[];
 	semantic_slots: Record<SlideLayout, string[]>;
 };
@@ -220,4 +224,33 @@ export type CalibrationSlide = {
 	semantic_layout: string;
 	template_layout_index: number;
 	image_url: string;
+};
+
+export type PreviewSlot = {
+	left: number;
+	top: number;
+	width: number;
+	height: number;
+	font_family: string;
+	font_size: number;
+	bold: boolean;
+	alignment: string | null;
+};
+
+export type SlidePreviewDescriptor = {
+	slide_id: string;
+	layout: SlideLayout;
+	slots: Record<string, PreviewSlot>;
+	background_url: string | null;
+	thumbnail_url: string | null;
+};
+
+export type PresentationPreview = {
+	profile_id: string;
+	profile_version: number;
+	slide_width: number;
+	slide_height: number;
+	renderer: { available: boolean; name: string; detail: string };
+	render_key: string;
+	slides: SlidePreviewDescriptor[];
 };
