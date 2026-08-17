@@ -95,6 +95,7 @@ test("Course Author views Presentation canvas and slide outline", async ({
 		slides: createdPresentation.slides.map((slide) => ({
 			slide_id: slide.id,
 			layout: slide.layout,
+			render_key: `render-${slide.id}`,
 			background_url: null,
 			thumbnail_url: null,
 			slots: {
@@ -119,11 +120,21 @@ test("Course Author views Presentation canvas and slide outline", async ({
 				"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X2NDWQAAAABJRU5ErkJggg==",
 		})),
 	};
-	await page.route(/\/api\/presentations\/[^/]+\/preview\/render$/, (route) =>
-		route.fulfill({ json: renderedPreviewPayload }),
+	let renderRequests = 0;
+	let renderComplete = false;
+	await page.route(
+		/\/api\/presentations\/[^/]+\/preview\/render$/,
+		async (route) => {
+			renderRequests += 1;
+			await new Promise((resolve) => setTimeout(resolve, 500));
+			renderComplete = true;
+			await route.fulfill({ json: renderedPreviewPayload });
+		},
 	);
 	await page.route(/\/api\/presentations\/[^/]+\/preview$/, (route) =>
-		route.fulfill({ json: previewPayload }),
+		route.fulfill({
+			json: renderComplete ? renderedPreviewPayload : previewPayload,
+		}),
 	);
 
 	// The template manager shares the page shell and exposes one built-in option.
@@ -157,6 +168,12 @@ test("Course Author views Presentation canvas and slide outline", async ({
 	).toBeVisible();
 	await expect(page.locator(".slide-list > li")).toHaveCount(18);
 	await expect(page.locator(".semantic-preview")).toHaveCount(18);
+	await expect(
+		page.getByText("Updating 18 high-fidelity previews…"),
+	).toBeVisible();
+	await expect(page.locator(".preview-freshness").first()).toHaveText(
+		"Updating preview…",
+	);
 	await expect(page.locator(".slide-list > li").first()).toHaveScreenshot(
 		"presentation-preview-chrome.png",
 		{
@@ -167,6 +184,8 @@ test("Course Author views Presentation canvas and slide outline", async ({
 	await expect(
 		page.getByText("High-fidelity thumbnails are ready."),
 	).toBeVisible();
+	expect(renderRequests).toBe(1);
+	await expect(page.locator(".preview-freshness")).toHaveCount(0);
 	await page.locator(".slide-card").first().click();
 	await expect(
 		page.getByRole("button", { name: "Introduction to causal inference" }),
@@ -299,6 +318,7 @@ test("Course Author views Presentation canvas and slide outline", async ({
 
 	await lectureButtons.first().click();
 	await expect(page.locator(".slide-list > li")).toHaveCount(18);
+	expect(renderRequests).toBe(1);
 
 	// Navigate back to Course Plan
 	await page.getByRole("button", { name: "Course Plan" }).click();

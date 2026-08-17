@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import subprocess
 import tempfile
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -13,7 +16,7 @@ from pptx import Presentation as PPTXPresentation
 from pydantic import BaseModel, ConfigDict
 
 from course_harness.export import export_presentation
-from course_harness.presentation import Presentation
+from course_harness.presentation import Presentation, Slide
 from course_harness.template_inspect import infer_slot_mappings, inspect_template
 from course_harness.template_profiles import TemplateProfile
 
@@ -51,6 +54,7 @@ class SlidePreview(BaseModel):
 
     slide_id: str
     layout: str
+    render_key: str
     slots: dict[str, PreviewSlot]
     background_url: str | None
     thumbnail_url: str | None
@@ -114,9 +118,46 @@ def normalized_layout_slots(
     return result
 
 
+_PREVIEW_CACHE_VERSION = 2
+_RENDER_LOCK = threading.Lock()
+
+
+def slide_render_key(slide: Slide, profile: TemplateProfile) -> str:
+    mapping = next((item for item in profile.layouts if item.semantic_layout == slide.layout), None)
+    payload = {
+        "cache_version": _PREVIEW_CACHE_VERSION,
+        "profile_id": profile.id,
+        "profile_version": profile.version,
+        "mapping": (
+            {
+                "semantic_layout": mapping.semantic_layout,
+                "template_layout_index": mapping.template_layout_index,
+                "slot_mappings": mapping.slot_mappings,
+            }
+            if mapping is not None
+            else None
+        ),
+        "slide": slide.model_dump(
+            mode="json",
+            exclude={"id", "archived", "speaker_notes", "purpose"},
+        ),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:20]
+
+
 def presentation_render_key(presentation: Presentation, profile: TemplateProfile) -> str:
-    payload = presentation.model_dump_json() + profile.model_dump_json()
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
+    payload = [slide_render_key(slide, profile) for slide in presentation.slides]
+    return hashlib.sha256("".join(payload).encode("utf-8")).hexdigest()[:20]
+
+
+def _render_cached_png(target: Path, make_pptx: Callable[[], bytes]) -> None:
+    if target.is_file():
+        return
+    with _RENDER_LOCK:
+        if target.is_file():
+            return
+        _render_pptx_png(make_pptx(), target)
 
 
 def build_preview(
@@ -130,16 +171,17 @@ def build_preview(
         inspect_template(template_path) if template_path is not None else _builtin_inspection()
     )
     render_key = presentation_render_key(presentation, profile)
-    preview_dir = cache_dir / profile.id / "previews" / render_key
     background_dir = cache_dir / profile.id / "backgrounds" / f"v{profile.version}"
     slides = []
     for slide in presentation.slides:
-        thumbnail = preview_dir / f"{slide.id}.png"
+        slide_key = slide_render_key(slide, profile)
+        thumbnail = cache_dir / profile.id / "previews" / slide_key / "thumbnail.png"
         background = background_dir / f"{slide.layout}.png"
         slides.append(
             SlidePreview(
                 slide_id=slide.id,
                 layout=slide.layout,
+                render_key=slide_key,
                 slots=normalized_layout_slots(profile, inspection, slide.layout),
                 background_url=(
                     f"/api/preview-assets/{profile.id}/backgrounds/v{profile.version}/{slide.layout}.png"
@@ -147,7 +189,7 @@ def build_preview(
                     else None
                 ),
                 thumbnail_url=(
-                    f"/api/preview-assets/{profile.id}/previews/{render_key}/{slide.id}.png"
+                    f"/api/preview-assets/{profile.id}/previews/{slide_key}/thumbnail.png"
                     if thumbnail.is_file()
                     else None
                 ),
@@ -175,16 +217,16 @@ def render_presentation_preview(
     if not capability.available:
         raise RuntimeError(capability.detail)
     render_layout_backgrounds(context)
-    render_key = presentation_render_key(presentation, profile)
-    preview_dir = cache_dir / profile.id / "previews" / render_key
     for slide in presentation.slides:
-        target = preview_dir / f"{slide.id}.png"
-        if target.is_file():
-            continue
-        renderable_slide = slide.model_copy(update={"archived": False})
-        single_slide = presentation.model_copy(update={"slides": [renderable_slide]})
-        pptx_bytes = export_presentation(single_slide, profile=profile, template_path=template_path)
-        _render_pptx_png(pptx_bytes, target)
+        slide_key = slide_render_key(slide, profile)
+        target = cache_dir / profile.id / "previews" / slide_key / "thumbnail.png"
+
+        def make_pptx(slide=slide) -> bytes:
+            renderable_slide = slide.model_copy(update={"archived": False})
+            single_slide = presentation.model_copy(update={"slides": [renderable_slide]})
+            return export_presentation(single_slide, profile=profile, template_path=template_path)
+
+        _render_cached_png(target, make_pptx)
     return build_preview(presentation, context)
 
 
@@ -214,9 +256,13 @@ def render_layout_backgrounds(
         if mapping.template_layout_index >= len(presentation.slide_layouts):
             continue
         presentation.slides.add_slide(presentation.slide_layouts[mapping.template_layout_index])
-        buffer = BytesIO()
-        presentation.save(buffer)
-        _render_pptx_png(buffer.getvalue(), target)
+
+        def make_background_pptx(presentation=presentation) -> bytes:
+            buffer = BytesIO()
+            presentation.save(buffer)
+            return buffer.getvalue()
+
+        _render_cached_png(target, make_background_pptx)
         rendered_layouts[mapping.template_layout_index] = target
 
 

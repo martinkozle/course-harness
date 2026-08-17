@@ -96,12 +96,14 @@ function slotStyle(slot: PreviewSlot): CSSProperties {
 function SlideVisualPreview({
 	slide,
 	preview,
+	freshness = "ready",
 	interactive = false,
 	onChatContext,
 	aspectRatio,
 }: {
 	slide: Slide;
 	preview: SlidePreviewDescriptor | null;
+	freshness?: "checking" | "rendering" | "ready";
 	interactive?: boolean;
 	onChatContext?: (instruction: string) => void;
 	aspectRatio: number;
@@ -156,6 +158,11 @@ function SlideVisualPreview({
 			{!authoritative && Object.keys(preview?.slots ?? {}).length === 0 ? (
 				<span className="preview-fallback-title">{slidePreview(slide)}</span>
 			) : null}
+			{freshness !== "ready" ? (
+				<span className="preview-freshness" aria-hidden="true">
+					{freshness === "checking" ? "Checking preview…" : "Updating preview…"}
+				</span>
+			) : null}
 		</div>
 	);
 }
@@ -168,6 +175,7 @@ function SlideDetail({
 	onArchiveChange,
 	busy,
 	preview,
+	previewFreshness,
 	aspectRatio,
 }: {
 	slide: Slide;
@@ -177,6 +185,7 @@ function SlideDetail({
 	onArchiveChange: () => void;
 	busy: boolean;
 	preview: SlidePreviewDescriptor | null;
+	previewFreshness: "checking" | "rendering" | "ready";
 	aspectRatio: number;
 }) {
 	const [editing, setEditing] = useState(false);
@@ -293,6 +302,7 @@ function SlideDetail({
 			<SlideVisualPreview
 				slide={slide}
 				preview={preview}
+				freshness={previewFreshness}
 				interactive={!editing}
 				onChatContext={onChatContext}
 				aspectRatio={aspectRatio}
@@ -631,6 +641,7 @@ export function PresentationView({
 	const [loadingPresentation, setLoadingPresentation] = useState(false);
 	const [preview, setPreview] = useState<PresentationPreview | null>(null);
 	const [previewMessage, setPreviewMessage] = useState<string | null>(null);
+	const [checkingPreview, setCheckingPreview] = useState(false);
 	const [renderingPreview, setRenderingPreview] = useState(false);
 	const [showArchived, setShowArchived] = useState(false);
 	const [selectedProfileId, setSelectedProfileId] = useState<string>(
@@ -702,6 +713,8 @@ export function PresentationView({
 		if (presentationVersion !== prevVersion.current) {
 			prevVersion.current = presentationVersion;
 			if (selectedLectureId) {
+				setCheckingPreview(true);
+				setPreviewMessage("Checking preview freshness…");
 				void loadPresentation(selectedLectureId);
 			}
 		}
@@ -714,23 +727,47 @@ export function PresentationView({
 	useEffect(() => {
 		if (!selectedLectureId || !currentPresentation) {
 			setPreview(null);
+			setCheckingPreview(false);
+			setRenderingPreview(false);
 			return;
 		}
 		const controller = new AbortController();
-		const expectedProfileId = selectedProfileId;
+		const expectedProfileId = course.template_profile_id ?? "_builtin-default";
+		const expectedProfileVersion = course.template_profile_version;
 		let renderTimer: ReturnType<typeof setTimeout> | undefined;
 		const previewUrl = `/api/presentations/${encodeURIComponent(selectedLectureId)}/preview`;
+		setCheckingPreview(true);
+		setRenderingPreview(false);
+		setPreviewMessage("Checking preview freshness…");
 		void (async () => {
 			try {
 				const response = await fetch(previewUrl, { signal: controller.signal });
 				if (!response.ok) throw new Error(await responseError(response));
 				const semanticPreview = (await response.json()) as PresentationPreview;
-				if (semanticPreview.profile_id !== expectedProfileId) return;
+				if (
+					semanticPreview.profile_id !== expectedProfileId ||
+					(expectedProfileVersion != null &&
+						semanticPreview.profile_version !== expectedProfileVersion)
+				)
+					return;
 				setPreview(semanticPreview);
-				setPreviewMessage(semanticPreview.renderer.detail);
-				if (!semanticPreview.renderer.available) return;
+				setCheckingPreview(false);
+				const missingThumbnailCount = semanticPreview.slides.filter(
+					(slide) => !slide.thumbnail_url,
+				).length;
+				if (!semanticPreview.renderer.available) {
+					setPreviewMessage(semanticPreview.renderer.detail);
+					return;
+				}
+				if (missingThumbnailCount === 0) {
+					setPreviewMessage("High-fidelity thumbnails are ready.");
+					return;
+				}
+				setRenderingPreview(true);
+				setPreviewMessage(
+					`Updating ${String(missingThumbnailCount)} high-fidelity ${missingThumbnailCount === 1 ? "preview" : "previews"}…`,
+				);
 				renderTimer = setTimeout(() => {
-					setRenderingPreview(true);
 					void fetch(`${previewUrl}/render`, {
 						method: "POST",
 						signal: controller.signal,
@@ -753,11 +790,15 @@ export function PresentationView({
 									: "Thumbnail rendering failed. Semantic previews remain available.",
 							);
 						})
-						.finally(() => setRenderingPreview(false));
+						.finally(() => {
+							if (!controller.signal.aborted) setRenderingPreview(false);
+						});
 				}, 700);
 			} catch (caught) {
 				if (caught instanceof DOMException && caught.name === "AbortError")
 					return;
+				setCheckingPreview(false);
+				setRenderingPreview(false);
 				setPreviewMessage(
 					caught instanceof Error
 						? `Preview unavailable: ${caught.message}`
@@ -769,7 +810,12 @@ export function PresentationView({
 			controller.abort();
 			if (renderTimer) clearTimeout(renderTimer);
 		};
-	}, [currentPresentation, selectedLectureId, selectedProfileId]);
+	}, [
+		course.template_profile_id,
+		course.template_profile_version,
+		currentPresentation,
+		selectedLectureId,
+	]);
 
 	async function deletePresentation() {
 		if (!selectedLectureId) return;
@@ -866,6 +912,13 @@ export function PresentationView({
 	const previewBySlide = new Map(
 		(preview?.slides ?? []).map((item) => [item.slide_id, item]),
 	);
+	const previewFreshness = (
+		descriptor: SlidePreviewDescriptor | null,
+	): "checking" | "rendering" | "ready" => {
+		if (checkingPreview) return "checking";
+		if (renderingPreview && !descriptor?.thumbnail_url) return "rendering";
+		return "ready";
+	};
 	const slideAspectRatio = preview
 		? preview.slide_width / preview.slide_height
 		: 16 / 9;
@@ -1029,7 +1082,6 @@ export function PresentationView({
 							</div>
 							{previewMessage ? (
 								<p className="preview-renderer-status" role="status">
-									{renderingPreview ? "Rendering thumbnails… " : ""}
 									{previewMessage}
 								</p>
 							) : null}
@@ -1042,11 +1094,16 @@ export function PresentationView({
 										onClose={() => setSelectedSlideId(null)}
 										onChatContext={onChatContext}
 										onArchiveChange={() => {
+											setCheckingPreview(true);
+											setPreviewMessage("Checking preview freshness…");
 											void loadPresentation(selectedLectureId);
 											setSelectedSlideId(null);
 										}}
 										busy={busy}
 										preview={previewBySlide.get(selectedSlide.id) ?? null}
+										previewFreshness={previewFreshness(
+											previewBySlide.get(selectedSlide.id) ?? null,
+										)}
 										aspectRatio={slideAspectRatio}
 									/>
 								) : activeSlides.length === 0 ? (
@@ -1118,6 +1175,9 @@ export function PresentationView({
 															<SlideVisualPreview
 																slide={slide}
 																preview={previewBySlide.get(slide.id) ?? null}
+																freshness={previewFreshness(
+																	previewBySlide.get(slide.id) ?? null,
+																)}
 																aspectRatio={slideAspectRatio}
 															/>
 															<div className="slide-card-header">

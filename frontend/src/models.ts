@@ -240,6 +240,7 @@ export type PreviewSlot = {
 export type SlidePreviewDescriptor = {
 	slide_id: string;
 	layout: SlideLayout;
+	render_key: string;
 	slots: Record<string, PreviewSlot>;
 	background_url: string | null;
 	thumbnail_url: string | null;

@@ -4,6 +4,9 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import httpx2
@@ -18,7 +21,7 @@ from course_harness.course_plan import (
     create_course_plan_file,
     initialize_workspace_history,
 )
-from course_harness.presentation import BulletsSlide, Presentation
+from course_harness.presentation import BulletsSlide, Presentation, Slide
 from course_harness.slide_preview import (
     PreviewContext,
     build_preview,
@@ -153,8 +156,113 @@ def test_render_populates_cached_background_and_authoritative_thumbnail(
 
     assert rendered.slides[0].background_url is not None
     assert rendered.slides[0].thumbnail_url is not None
-    assert rendered.render_key in rendered.slides[0].thumbnail_url
+    assert rendered.slides[0].render_key in rendered.slides[0].thumbnail_url
     assert rendered.slides[1].thumbnail_url is not None
+
+
+def test_editing_one_slide_only_renders_that_slide_again(tmp_path: Path, monkeypatch) -> None:
+    template_path = tmp_path / "template.pptx"
+    PPTXPresentation().save(str(template_path))
+    profile = _profile(template_path)
+    slides: list[Slide] = [
+        BulletsSlide(
+            id=f"slide-abc123def45{index}",
+            title=f"Slide {index}",
+            bullets=["Body"],
+        )
+        for index in range(3)
+    ]
+    presentation = Presentation(
+        id="presentation-abc123def456",
+        lecture_id="lecture-abc123def456",
+        slides=slides,
+    )
+    context = PreviewContext(profile, template_path, tmp_path / "cache")
+    rendered_targets: list[Path] = []
+
+    def fake_render(_pptx_bytes: bytes, target: Path) -> None:
+        rendered_targets.append(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"png")
+
+    monkeypatch.setattr(
+        "course_harness.slide_preview.shutil.which", lambda _name: "/bin/libreoffice"
+    )
+    monkeypatch.setattr("course_harness.slide_preview.render_layout_backgrounds", lambda _: None)
+    monkeypatch.setattr("course_harness.slide_preview._render_pptx_png", fake_render)
+
+    original = render_presentation_preview(presentation, context)
+    edited = presentation.model_copy(
+        update={
+            "slides": [
+                slides[0],
+                slides[1].model_copy(update={"title": "Edited slide"}),
+                slides[2],
+            ]
+        }
+    )
+    updated = render_presentation_preview(edited, context)
+    notes_only = edited.model_copy(
+        update={
+            "slides": [
+                edited.slides[0],
+                edited.slides[1].model_copy(update={"speaker_notes": "New notes"}),
+                edited.slides[2],
+            ]
+        }
+    )
+    notes_updated = render_presentation_preview(notes_only, context)
+
+    assert len(rendered_targets) == 4
+    assert original.slides[0].thumbnail_url == updated.slides[0].thumbnail_url
+    assert original.slides[1].thumbnail_url != updated.slides[1].thumbnail_url
+    assert original.slides[2].thumbnail_url == updated.slides[2].thumbnail_url
+    assert notes_updated.slides[1].thumbnail_url == updated.slides[1].thumbnail_url
+
+
+def test_concurrent_requests_render_each_thumbnail_once(tmp_path: Path, monkeypatch) -> None:
+    template_path = tmp_path / "template.pptx"
+    PPTXPresentation().save(str(template_path))
+    profile = _profile(template_path)
+    presentation = Presentation(
+        id="presentation-abc123def456",
+        lecture_id="lecture-abc123def456",
+        slides=[
+            BulletsSlide(
+                id="slide-abc123def456",
+                title="One render",
+                bullets=["Shared by every request"],
+            )
+        ],
+    )
+    context = PreviewContext(profile, template_path, tmp_path / "cache")
+    render_count = 0
+    count_lock = threading.Lock()
+
+    def fake_render(_pptx_bytes: bytes, target: Path) -> None:
+        nonlocal render_count
+        with count_lock:
+            render_count += 1
+        time.sleep(0.05)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"png")
+
+    monkeypatch.setattr(
+        "course_harness.slide_preview.shutil.which", lambda _name: "/bin/libreoffice"
+    )
+    monkeypatch.setattr("course_harness.slide_preview.render_layout_backgrounds", lambda _: None)
+    monkeypatch.setattr("course_harness.slide_preview._render_pptx_png", fake_render)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        previews = list(
+            executor.map(
+                lambda _: render_presentation_preview(presentation, context),
+                range(4),
+            )
+        )
+
+    assert render_count == 1
+    assert all(preview.slides[0].thumbnail_url for preview in previews)
 
 
 def test_libreoffice_adapter_produces_png_without_pixel_identity_requirement(
@@ -186,8 +294,8 @@ def test_libreoffice_adapter_produces_png_without_pixel_identity_requirement(
         / "cache"
         / profile.id
         / "previews"
-        / rendered.render_key
-        / "slide-abc123def456.png"
+        / rendered.slides[0].render_key
+        / "thumbnail.png"
     )
     png = thumbnail.read_bytes()
     assert png.startswith(b"\x89PNG\r\n\x1a\n")
