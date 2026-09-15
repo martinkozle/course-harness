@@ -143,7 +143,7 @@ def publish_release(
     release_data_root: Path,
     templates_data_root: Path,
     request: PublishReleaseRequest,
-    evidence_line_counts: Mapping[str, int] | None = None,
+    evidence_line_counts: Mapping[str, int],
 ) -> CourseRelease:
     """Validate, export, persist, and atomically name one immutable Release."""
     if len(request.selection.lecture_ids) > 1_000 or len(request.selection.artifact_ids) > 1_000:

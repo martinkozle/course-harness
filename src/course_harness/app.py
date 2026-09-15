@@ -700,6 +700,7 @@ def create_app(
                         release_data_root=release_data,
                         templates_data_root=templates_data,
                         request=request,
+                        evidence_line_counts={},
                     )
                 sources = sources_module.read_sources_index(active) or sources_module.SourcesIndex()
                 return publish_release(

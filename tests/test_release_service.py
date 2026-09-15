@@ -7,8 +7,9 @@ import pytest
 from pptx import Presentation as PPTXPresentation
 from pydantic import ValidationError
 
+from course_harness.canonical_mutation import capture_canonical_files
 from course_harness.course_plan import CoursePlan, Lecture, write_course_plan
-from course_harness.presentation import Presentation, TitleSlide, write_presentation
+from course_harness.presentation import Presentation, SlideCitation, TitleSlide, write_presentation
 from course_harness.release_service import (
     PublishReleaseRequest,
     ReleaseConflict,
@@ -143,6 +144,7 @@ def test_publish_release_exports_artifacts_and_records_a_bounded_annotated_tag(
         workspace=workspace,
         release_data_root=release_data,
         templates_data_root=tmp_path / "templates",
+        evidence_line_counts={},
         request=PublishReleaseRequest(
             slug="fall-2026",
             name="Fall 2026",
@@ -173,6 +175,7 @@ def test_publish_release_exports_artifacts_and_records_a_bounded_annotated_tag(
     assert release.included_lecture_ids == [LECTURE_ID]
     assert release.planned_unpublished_lecture_ids == [SECOND_LECTURE_ID]
     assert release.artifacts[0].sha256 == hashlib.sha256(artifact.read_bytes()).hexdigest()
+
     assert list_releases(workspace) == [release]
     assert read_release(workspace, "fall-2026") == release
 
@@ -215,6 +218,67 @@ def test_publish_release_exports_artifacts_and_records_a_bounded_annotated_tag(
     )
 
 
+def test_publish_release_requires_resolvable_coordinate_evidence(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    source = Source(
+        id="source-aaaaaaaaaaaa",
+        resource_id="resource-aaaaaaaaaaaa",
+        source_version_id="a" * 64,
+        label="Foundations",
+        admitted_at="2026-09-15T00:00:00+00:00",
+    )
+    _clean_course(workspace, sources=SourcesIndex(sources=[source]))
+    write_presentation(
+        workspace,
+        Presentation(
+            id=PRESENTATION_ID,
+            lecture_id=LECTURE_ID,
+            slides=[
+                TitleSlide(
+                    id="slide-aaaaaaaaaaaa",
+                    title="Foundations",
+                    citations=[
+                        SlideCitation(
+                            source_id=source.id,
+                            label=source.label,
+                            line_start=0,
+                            line_end=0,
+                        )
+                    ],
+                )
+            ],
+        ),
+    )
+    create_revision(
+        workspace,
+        RevisionCreateRequest(summary="Add grounded citation"),
+        expected=capture_canonical_files(
+            workspace,
+            {
+                "course.yaml",
+                "sources.yaml",
+                f"presentations/{PRESENTATION_ID}.yaml",
+            },
+        ),
+    )
+    record_app_authored_state(workspace)
+
+    with pytest.raises(ReleaseError, match="validation must pass"):
+        publish_release(
+            workspace=workspace,
+            release_data_root=tmp_path / "releases",
+            templates_data_root=tmp_path / "templates",
+            evidence_line_counts={},
+            request=PublishReleaseRequest(
+                slug="unresolvable",
+                name="Unresolvable",
+                selection=ReleaseSelection(
+                    lecture_ids=[LECTURE_ID], artifact_ids=[PRESENTATION_ID]
+                ),
+            ),
+        )
+
+
 def test_publish_release_never_overwrites_a_name_or_its_artifacts(tmp_path: Path) -> None:
     workspace = tmp_path / "course"
     release_data = tmp_path / "releases"
@@ -228,6 +292,7 @@ def test_publish_release_never_overwrites_a_name_or_its_artifacts(tmp_path: Path
         workspace=workspace,
         release_data_root=release_data,
         templates_data_root=tmp_path / "templates",
+        evidence_line_counts={},
         request=request,
     )
 
@@ -236,6 +301,7 @@ def test_publish_release_never_overwrites_a_name_or_its_artifacts(tmp_path: Path
             workspace=workspace,
             release_data_root=release_data,
             templates_data_root=tmp_path / "templates",
+            evidence_line_counts={},
             request=request,
         )
 
@@ -258,6 +324,7 @@ def test_publish_release_rejects_workspace_drift_and_storage_inside_workspace(
             workspace=workspace,
             release_data_root=tmp_path / "releases",
             templates_data_root=tmp_path / "templates",
+            evidence_line_counts={},
             request=request,
         )
 
@@ -267,6 +334,7 @@ def test_publish_release_rejects_workspace_drift_and_storage_inside_workspace(
             workspace=workspace,
             release_data_root=workspace / ".release-data",
             templates_data_root=tmp_path / "templates",
+            evidence_line_counts={},
             request=request,
         )
 
@@ -299,6 +367,7 @@ def test_publish_release_translates_a_stale_waiver_to_a_release_error(tmp_path: 
             workspace=workspace,
             release_data_root=tmp_path / "releases",
             templates_data_root=tmp_path / "templates",
+            evidence_line_counts={},
             request=PublishReleaseRequest(
                 slug="waived",
                 name="Waived",
@@ -316,6 +385,7 @@ def test_release_artifact_access_rejects_changed_bytes_and_symlinks(tmp_path: Pa
         workspace=workspace,
         release_data_root=release_data,
         templates_data_root=tmp_path / "templates",
+        evidence_line_counts={},
         request=PublishReleaseRequest(
             slug="fall-2026",
             name="Fall 2026",
@@ -365,6 +435,7 @@ def test_regeneration_uses_tagged_state_and_stored_custom_template_only(tmp_path
         workspace=workspace,
         release_data_root=release_data,
         templates_data_root=templates,
+        evidence_line_counts={},
         request=PublishReleaseRequest(
             slug="institutional",
             name="Institutional",
@@ -420,6 +491,7 @@ def test_forged_or_noncanonical_release_manifests_are_rejected(tmp_path: Path) -
         workspace=workspace,
         release_data_root=tmp_path / "releases",
         templates_data_root=tmp_path / "templates",
+        evidence_line_counts={},
         request=PublishReleaseRequest(
             slug="fall-2026",
             name="Fall 2026",
