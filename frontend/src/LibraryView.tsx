@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { responseError } from "./api";
 import type {
 	Candidate,
 	DiscoveryResult,
+	EvidenceTarget,
 	GroupedSearchResult,
 	ResourceState,
 	SearchResult,
@@ -14,6 +15,8 @@ type LibraryViewProps = {
 	sources: Source[];
 	onResourcesChange: (resources: ResourceState[]) => void;
 	onSourcesChange: (sources: Source[]) => void;
+	evidenceTarget: EvidenceTarget | null;
+	onEvidenceTargetClose: () => void;
 };
 
 function formatBytes(bytes: number): string {
@@ -42,6 +45,8 @@ export function LibraryView({
 	sources,
 	onResourcesChange,
 	onSourcesChange,
+	evidenceTarget,
+	onEvidenceTargetClose,
 }: LibraryViewProps) {
 	const [uploading, setUploading] = useState(false);
 	const [processing, setProcessing] = useState<Set<string>>(new Set());
@@ -59,6 +64,68 @@ export function LibraryView({
 	const [viewingSource, setViewingSource] = useState<string | null>(null);
 	const [sourceContent, setSourceContent] = useState("");
 	const [loadingContent, setLoadingContent] = useState(false);
+	const [supportingEvidenceTarget, setSupportingEvidenceTarget] =
+		useState<EvidenceTarget | null>(null);
+	const [supportingEvidenceContent, setSupportingEvidenceContent] =
+		useState("");
+	const [supportingEvidenceError, setSupportingEvidenceError] = useState<
+		string | null
+	>(null);
+	const [loadingSupportingEvidence, setLoadingSupportingEvidence] =
+		useState(false);
+	const supportingEvidenceHeadingRef = useRef<HTMLHeadingElement | null>(null);
+
+	useEffect(() => {
+		if (!evidenceTarget?.source_id) {
+			setSupportingEvidenceTarget(null);
+			setSupportingEvidenceContent("");
+			setSupportingEvidenceError(null);
+			setLoadingSupportingEvidence(false);
+			return;
+		}
+
+		const controller = new AbortController();
+		setSupportingEvidenceTarget(evidenceTarget);
+		setSupportingEvidenceContent("");
+		setSupportingEvidenceError(null);
+		setLoadingSupportingEvidence(true);
+		const params = new URLSearchParams({ max_chars: "8000" });
+		if (evidenceTarget.line_start !== null) {
+			params.set("line_start", String(evidenceTarget.line_start));
+		}
+		if (evidenceTarget.line_end !== null) {
+			params.set("line_end", String(evidenceTarget.line_end));
+		}
+
+		void fetch(
+			`/api/sources/${encodeURIComponent(evidenceTarget.source_id)}/content?${params.toString()}`,
+			{ signal: controller.signal },
+		)
+			.then(async (response) => {
+				if (!response.ok) throw new Error(await responseError(response));
+				setSupportingEvidenceContent(await response.text());
+			})
+			.catch((caught) => {
+				if (!(caught instanceof DOMException && caught.name === "AbortError")) {
+					setSupportingEvidenceError(
+						caught instanceof Error
+							? caught.message
+							: "Supporting Evidence could not be loaded.",
+					);
+				}
+			})
+			.finally(() => {
+				if (!controller.signal.aborted) setLoadingSupportingEvidence(false);
+			});
+
+		return () => controller.abort();
+	}, [evidenceTarget]);
+
+	useEffect(() => {
+		if (supportingEvidenceTarget) {
+			supportingEvidenceHeadingRef.current?.focus();
+		}
+	}, [supportingEvidenceTarget]);
 
 	const [discoveryQuery, setDiscoveryQuery] = useState("");
 	const [discovering, setDiscovering] = useState(false);
@@ -359,6 +426,18 @@ export function LibraryView({
 		}
 	}
 
+	function closeSupportingEvidence() {
+		setSupportingEvidenceTarget(null);
+		setSupportingEvidenceContent("");
+		setSupportingEvidenceError(null);
+		setLoadingSupportingEvidence(false);
+		onEvidenceTargetClose();
+	}
+
+	const supportingEvidenceSource = supportingEvidenceTarget
+		? sources.find((source) => source.id === supportingEvidenceTarget.source_id)
+		: null;
+
 	return (
 		<main className="page-main library-main" aria-labelledby="library-heading">
 			<header className="page-heading library-heading">
@@ -369,6 +448,68 @@ export function LibraryView({
 					research and grounding.
 				</p>
 			</header>
+
+			{supportingEvidenceTarget ? (
+				<section
+					className="supporting-evidence-panel"
+					aria-labelledby="supporting-evidence-heading"
+					aria-busy={loadingSupportingEvidence}
+				>
+					<div className="content-section-heading">
+						<div>
+							<p className="section-kicker">Pinned source passage</p>
+							<h2
+								id="supporting-evidence-heading"
+								ref={supportingEvidenceHeadingRef}
+								tabIndex={-1}
+							>
+								Supporting Evidence
+							</h2>
+							{supportingEvidenceSource ? (
+								<p className="supporting-evidence-source">
+									{supportingEvidenceSource.label}
+									{supportingEvidenceTarget.line_start !== null
+										? ` · Line ${supportingEvidenceTarget.line_start + 1}${
+												supportingEvidenceTarget.line_end !== null &&
+												supportingEvidenceTarget.line_end !==
+													supportingEvidenceTarget.line_start
+													? `–${supportingEvidenceTarget.line_end + 1}`
+													: ""
+											}`
+										: ""}
+								</p>
+							) : null}
+						</div>
+						<button
+							className="quiet-action"
+							type="button"
+							onClick={closeSupportingEvidence}
+						>
+							Close
+						</button>
+					</div>
+					<p
+						className="supporting-evidence-status"
+						role="status"
+						aria-live="polite"
+					>
+						{loadingSupportingEvidence
+							? "Loading the pinned source passage…"
+							: supportingEvidenceError
+								? "Supporting Evidence could not be loaded."
+								: "Pinned source passage loaded."}
+					</p>
+					{supportingEvidenceError ? (
+						<p className="library-error" role="alert">
+							{supportingEvidenceError}
+						</p>
+					) : loadingSupportingEvidence ? null : (
+						<pre className="source-content-body">
+							{supportingEvidenceContent}
+						</pre>
+					)}
+				</section>
+			) : null}
 
 			<section
 				className="content-section library-section"

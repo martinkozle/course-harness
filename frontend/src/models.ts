@@ -297,6 +297,15 @@ export type ReleaseFindingTarget = {
 	slide_id: string | null;
 	content_block: string | null;
 	citation_index: number | null;
+	source_id: string | null;
+	line_start: number | null;
+	line_end: number | null;
+};
+
+export type EvidenceTarget = {
+	source_id: string | null;
+	line_start: number | null;
+	line_end: number | null;
 };
 
 export type ReleaseValidationFinding = {

@@ -12,6 +12,7 @@ import { responseError } from "./api";
 import { CurrentStateView } from "./CurrentStateView";
 import { LibraryView } from "./LibraryView";
 import type {
+	EvidenceTarget,
 	ModelCatalog,
 	PresentationSummary,
 	ResourceState,
@@ -763,6 +764,9 @@ export function App() {
 	const [presentationVersion, setPresentationVersion] = useState(0);
 	const [templates, setTemplates] = useState<TemplateProfileSummary[]>([]);
 	const [activeView, setActiveView] = useState<WorkspaceView>("course");
+	const [evidenceTarget, setEvidenceTarget] = useState<EvidenceTarget | null>(
+		null,
+	);
 	const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 	const [chatApproval, setChatApproval] = useState<AgentInterrupt | null>(null);
 	const [chatContext, setChatContext] = useState<string | null>(null);
@@ -781,19 +785,29 @@ export function App() {
 	function openAgentWithContext(context: string, driftId?: string) {
 		setChatContext(context);
 		setReconciliationDriftId(driftId ?? null);
+		setEvidenceTarget(null);
 		if (activeView !== "author") scrollToTop();
 		setActiveView("author");
 	}
 
-	function navigateTo(view: WorkspaceView) {
+	function navigateTo(
+		view: WorkspaceView,
+		target: EvidenceTarget | null = null,
+	) {
 		scrollToTop();
+		setEvidenceTarget(view === "library" ? target : null);
 		setActiveView(view);
+	}
+
+	function openEvidence(target: EvidenceTarget) {
+		navigateTo("library", target);
 	}
 
 	const loadWorkspace = useCallback(
 		async (active: Workspace, signal?: AbortSignal) => {
 			scrollToTop();
 			setActiveView("course");
+			setEvidenceTarget(null);
 			setWorkspace(active);
 			setCourse(undefined);
 			const [
@@ -1048,6 +1062,7 @@ export function App() {
 			scrollToTop();
 			setWorkspace(null);
 			setCourse(null);
+			setEvidenceTarget(null);
 			setFiles([]);
 			setChatMessages([]);
 			setChatApproval(null);
@@ -1190,13 +1205,15 @@ export function App() {
 						sources={sources}
 						onResourcesChange={setResources}
 						onSourcesChange={setSources}
+						evidenceTarget={evidenceTarget}
+						onEvidenceTargetClose={() => setEvidenceTarget(null)}
 					/>
 				) : activeView === "releases" && course ? (
 					<ReleasesView
 						course={course}
 						presentations={presentations}
 						sources={sources}
-						onOpenEvidence={() => navigateTo("library")}
+						onOpenEvidence={openEvidence}
 						onOpenAgent={openAgentWithContext}
 					/>
 				) : activeView === "templates" ? (

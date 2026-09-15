@@ -12,6 +12,7 @@ import { responseError } from "./api";
 import type {
 	CourseRelease,
 	CurrentState,
+	EvidenceTarget,
 	PresentationSummary,
 	ReleaseValidation,
 	ReleaseValidationFinding,
@@ -23,7 +24,7 @@ type ReleasesViewProps = {
 	course: CoursePlan;
 	presentations: PresentationSummary[];
 	sources: Source[];
-	onOpenEvidence: () => void;
+	onOpenEvidence: (target: EvidenceTarget) => void;
 	onOpenAgent: (context: string) => void;
 };
 
@@ -59,6 +60,22 @@ function sourceContext(sources: Source[]): string {
 		.slice(0, 8)
 		.map((source) => `${source.label} (${source.id})`)
 		.join(", ")}.`;
+}
+
+function evidenceTargetFor(
+	finding: ReleaseValidationFinding,
+	sources: Source[],
+): EvidenceTarget {
+	const target = finding.target;
+	const hasAdmittedSource =
+		target.scope === "citation" &&
+		target.source_id !== null &&
+		sources.some((source) => source.id === target.source_id);
+	return {
+		source_id: hasAdmittedSource ? target.source_id : null,
+		line_start: hasAdmittedSource ? target.line_start : null,
+		line_end: hasAdmittedSource ? target.line_end : null,
+	};
 }
 
 export function ReleasesView({
@@ -735,57 +752,65 @@ function FindingList({
 }: {
 	findings: ReleaseValidationFinding[];
 	sources: Source[];
-	onOpenEvidence: () => void;
+	onOpenEvidence: (target: EvidenceTarget) => void;
 	onOpenAgent: (finding: ReleaseValidationFinding) => void;
 	waiverText?: Record<string, string>;
 	onWaiverChange?: (findingId: string, value: string) => void;
 }) {
 	return (
 		<ul className="release-findings">
-			{findings.map((finding) => (
-				<li
-					className={`release-finding is-${finding.severity}`}
-					key={finding.id}
-				>
-					<p className="release-finding-scope">{findingScope(finding)}</p>
-					<p>{finding.message}</p>
-					<div className="release-finding-actions">
-						<button
-							className="quiet-action"
-							type="button"
-							onClick={onOpenEvidence}
-						>
-							Open Evidence library
-						</button>
-						<button
-							className="quiet-action"
-							type="button"
-							onClick={() => onOpenAgent(finding)}
-						>
-							Hand to Course Agent
-						</button>
-					</div>
-					{finding.severity === "warning" && onWaiverChange ? (
-						<label className="release-waiver" htmlFor={`waiver-${finding.id}`}>
-							Publish with this warning only if you record why.
-							<textarea
-								id={`waiver-${finding.id}`}
-								value={waiverText?.[finding.id] ?? ""}
-								onChange={(event) =>
-									onWaiverChange(finding.id, event.target.value)
-								}
-								maxLength={1000}
-								aria-describedby={`waiver-${finding.id}-help`}
-							/>
-							<small id={`waiver-${finding.id}-help`}>
-								{sources.length > 0
-									? "Your justification is recorded with this immutable Release."
-									: "Add admitted Sources before relying on this warning decision."}
-							</small>
-						</label>
-					) : null}
-				</li>
-			))}
+			{findings.map((finding) => {
+				const evidenceTarget = evidenceTargetFor(finding, sources);
+				return (
+					<li
+						className={`release-finding is-${finding.severity}`}
+						key={finding.id}
+					>
+						<p className="release-finding-scope">{findingScope(finding)}</p>
+						<p>{finding.message}</p>
+						<div className="release-finding-actions">
+							<button
+								className="quiet-action"
+								type="button"
+								onClick={() => onOpenEvidence(evidenceTarget)}
+							>
+								{evidenceTarget.source_id
+									? "Open supporting Evidence"
+									: "Find supporting Evidence"}
+							</button>
+							<button
+								className="quiet-action"
+								type="button"
+								onClick={() => onOpenAgent(finding)}
+							>
+								Hand to Course Agent
+							</button>
+						</div>
+						{finding.severity === "warning" && onWaiverChange ? (
+							<label
+								className="release-waiver"
+								htmlFor={`waiver-${finding.id}`}
+							>
+								Publish with this warning only if you record why.
+								<textarea
+									id={`waiver-${finding.id}`}
+									value={waiverText?.[finding.id] ?? ""}
+									onChange={(event) =>
+										onWaiverChange(finding.id, event.target.value)
+									}
+									maxLength={1000}
+									aria-describedby={`waiver-${finding.id}-help`}
+								/>
+								<small id={`waiver-${finding.id}-help`}>
+									{sources.length > 0
+										? "Your justification is recorded with this immutable Release."
+										: "Add admitted Sources before relying on this warning decision."}
+								</small>
+							</label>
+						) : null}
+					</li>
+				);
+			})}
 		</ul>
 	);
 }
