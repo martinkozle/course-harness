@@ -17,6 +17,7 @@ from course_harness.course_plan import (
     initialize_workspace_history,
 )
 from course_harness.slide_preview import PreviewContext
+from course_harness.workspace_history import record_app_authored_state
 
 PP_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 POTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.template"
@@ -369,6 +370,7 @@ async def test_course_pin_uses_an_existing_profile_version(tmp_path: Path) -> No
     )
     initialize_workspace_history(workspace)
     create_course_plan_file(workspace, plan)
+    record_app_authored_state(workspace)
     transport = httpx2.ASGITransport(
         app=_app(workspace, tmp_path / "tpl-data", tmp_path / "tpl-cache")
     )

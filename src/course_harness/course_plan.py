@@ -7,6 +7,8 @@ from uuid import uuid4
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from course_harness.canonical_mutation import CanonicalFile, apply_canonical_mutation
+
 Goal = Annotated[str, Field(min_length=1, max_length=500)]
 Outcome = Annotated[str, Field(min_length=1, max_length=500)]
 
@@ -105,9 +107,7 @@ def initialize_workspace_history(workspace: Path) -> None:
 
 def _write_temporary_plan(workspace: Path, plan: CoursePlan) -> Path:
     temporary_path = workspace / f".course-{uuid4().hex}.yaml.tmp"
-    serialized = yaml.safe_dump(
-        plan.model_dump(mode="json"), allow_unicode=True, sort_keys=False, width=100
-    )
+    serialized = serialize_course_plan(plan).decode("utf-8")
     with temporary_path.open("x", encoding="utf-8") as stream:
         stream.write(serialized)
         stream.flush()
@@ -115,7 +115,23 @@ def _write_temporary_plan(workspace: Path, plan: CoursePlan) -> Path:
     return temporary_path
 
 
-def create_course_plan_file(workspace: Path, plan: CoursePlan) -> None:
+def serialize_course_plan(plan: CoursePlan) -> bytes:
+    """Return the exact canonical bytes written for a Course Plan."""
+    return yaml.safe_dump(
+        plan.model_dump(mode="json"), allow_unicode=True, sort_keys=False, width=100
+    ).encode("utf-8")
+
+
+def create_course_plan_file(
+    workspace: Path, plan: CoursePlan, *, expected: CanonicalFile | None = None
+) -> None:
+    if expected is not None:
+        apply_canonical_mutation(
+            workspace,
+            expected={"course.yaml": expected},
+            updates={"course.yaml": serialize_course_plan(plan)},
+        )
+        return
     temporary_path = _write_temporary_plan(workspace, plan)
     try:
         os.link(temporary_path, workspace / "course.yaml")
@@ -123,7 +139,16 @@ def create_course_plan_file(workspace: Path, plan: CoursePlan) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
-def write_course_plan(workspace: Path, plan: CoursePlan) -> None:
+def write_course_plan(
+    workspace: Path, plan: CoursePlan, *, expected: CanonicalFile | None = None
+) -> None:
+    if expected is not None:
+        apply_canonical_mutation(
+            workspace,
+            expected={"course.yaml": expected},
+            updates={"course.yaml": serialize_course_plan(plan)},
+        )
+        return
     course_path = workspace / "course.yaml"
     temporary_path = _write_temporary_plan(workspace, plan)
     try:

@@ -7,6 +7,12 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
+from course_harness.canonical_mutation import (
+    CanonicalFile,
+    apply_canonical_mutation,
+    capture_canonical_file,
+)
+
 
 class Source(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -47,12 +53,19 @@ def read_sources_index(workspace: Path) -> SourcesIndex | None:
         raise InvalidSourcesIndex(str(error)) from error
 
 
-def write_sources_index(workspace: Path, index: SourcesIndex) -> None:
+def write_sources_index(
+    workspace: Path, index: SourcesIndex, *, expected: CanonicalFile | None = None
+) -> None:
+    if expected is not None:
+        apply_canonical_mutation(
+            workspace,
+            expected={"sources.yaml": expected},
+            updates={"sources.yaml": serialize_sources_index(index)},
+        )
+        return
     sources_path = workspace / "sources.yaml"
     temporary_path = workspace / f".sources-{uuid.uuid4().hex}.yaml.tmp"
-    serialized = yaml.safe_dump(
-        index.model_dump(mode="json"), allow_unicode=True, sort_keys=False, width=100
-    )
+    serialized = serialize_sources_index(index).decode("utf-8")
     with temporary_path.open("x", encoding="utf-8") as stream:
         stream.write(serialized)
         stream.flush()
@@ -63,11 +76,20 @@ def write_sources_index(workspace: Path, index: SourcesIndex) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
+def serialize_sources_index(index: SourcesIndex) -> bytes:
+    """Return the exact canonical bytes written for a Sources index."""
+    return yaml.safe_dump(
+        index.model_dump(mode="json"), allow_unicode=True, sort_keys=False, width=100
+    ).encode("utf-8")
+
+
 def admit_source(
     workspace: Path,
     data_dir: Path,
     resource_id: str,
     label: str | None = None,
+    *,
+    expected: CanonicalFile | None = None,
 ) -> Source:
     from course_harness.resources import read_library_index  # noqa: PLC0415
 
@@ -81,6 +103,7 @@ def admit_source(
             f"Resource {resource_id} has not been processed. Process it in the Library first."
         )
 
+    expected = expected or capture_canonical_file(workspace, "sources.yaml")
     existing_index = read_sources_index(workspace) or SourcesIndex()
     if any(s.resource_id == resource_id for s in existing_index.sources):
         raise ValueError(f"Resource {resource_id} is already admitted as a Course Source.")
@@ -93,7 +116,7 @@ def admit_source(
         admitted_at=datetime.now(UTC).isoformat(),
     )
     existing_index.sources.append(source)
-    write_sources_index(workspace, existing_index)
+    write_sources_index(workspace, existing_index, expected=expected)
     return source
 
 
@@ -105,9 +128,12 @@ def adopt_source_version(
     workspace: Path,
     data_dir: Path,
     source_id: str,
+    *,
+    expected: CanonicalFile | None = None,
 ) -> Source:
     from course_harness.resources import read_library_index  # noqa: PLC0415
 
+    expected = expected or capture_canonical_file(workspace, "sources.yaml")
     existing_index = read_sources_index(workspace)
     if existing_index is None or not existing_index.sources:
         raise ValueError("No Sources exist in this Workspace.")
@@ -127,5 +153,5 @@ def adopt_source_version(
     existing_index.sources = [
         updated_source if s.id == source_id else s for s in existing_index.sources
     ]
-    write_sources_index(workspace, existing_index)
+    write_sources_index(workspace, existing_index, expected=expected)
     return updated_source

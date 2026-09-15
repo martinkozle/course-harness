@@ -255,3 +255,26 @@ export type PresentationPreview = {
 	render_key: string;
 	slides: SlidePreviewDescriptor[];
 };
+
+export type CurrentStateFile = {
+	path: string;
+	status: "added" | "modified" | "deleted";
+	line_count: number | null;
+	diff_lines: string[];
+	diff_truncated: boolean;
+};
+
+export type CurrentState = {
+	clean: boolean;
+	changes: CurrentStateFile[];
+	validation: { valid: boolean; findings: string[] };
+	drift: "unknown" | "clean" | "drift";
+	drift_id: string | null;
+	drift_changes: CurrentStateFile[];
+};
+
+export type CourseRevision = {
+	id: string;
+	summary: string;
+	created_at: string;
+};

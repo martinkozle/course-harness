@@ -1,9 +1,16 @@
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import {
+	type FormEvent,
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useState,
+} from "react";
 
 import { AgentPanel, type ChatMessage, type CoursePlan } from "./AgentPanel";
 import type { AgentInterrupt } from "./agentStream";
 import { responseError } from "./api";
 import { LibraryView } from "./LibraryView";
+import { CurrentStateView } from "./CurrentStateView";
 import type {
 	ModelCatalog,
 	PresentationSummary,
@@ -49,6 +56,7 @@ type CourseRequest = {
 type WorkspaceView =
 	| "course"
 	| "author"
+	| "current-state"
 	| "files"
 	| "models"
 	| "library"
@@ -239,6 +247,8 @@ function WorkspaceShell({
 										? "CP"
 										: section.id === "author"
 											? "AG"
+											: section.id === "current-state"
+												? "CS"
 											: section.id === "files"
 												? "FL"
 												: section.id === "library"
@@ -721,6 +731,7 @@ function FilesView({
 const workspaceViews: SectionLink[] = [
 	{ id: "course", label: "Course Plan" },
 	{ id: "author", label: "Authoring" },
+	{ id: "current-state", label: "Current State" },
 	{ id: "files", label: "Files" },
 	{ id: "library", label: "Library" },
 	{ id: "templates", label: "Templates" },
@@ -750,18 +761,21 @@ export function App() {
 	const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 	const [chatApproval, setChatApproval] = useState<AgentInterrupt | null>(null);
 	const [chatContext, setChatContext] = useState<string | null>(null);
+	const [reconciliationDriftId, setReconciliationDriftId] = useState<string | null>(
+		null,
+	);
 	const [agentRunning, setAgentRunning] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
-	useEffect(() => {
+	useLayoutEffect(() => {
 		void activeView;
-		const frame = window.requestAnimationFrame(scrollToTop);
-		return () => window.cancelAnimationFrame(frame);
+		scrollToTop();
 	}, [activeView]);
 
-	function openAgentWithContext(context: string) {
+	function openAgentWithContext(context: string, driftId?: string) {
 		setChatContext(context);
+		setReconciliationDriftId(driftId ?? null);
 		if (activeView !== "author") scrollToTop();
 		setActiveView("author");
 	}
@@ -1135,7 +1149,11 @@ export function App() {
 										}}
 										onPresentationsChange={refreshPresentations}
 										chatContext={chatContext}
+										reconciliationDriftId={reconciliationDriftId}
 										onChatContextCleared={() => setChatContext(null)}
+										onReconciliationDriftCleared={() =>
+											setReconciliationDriftId(null)
+										}
 										onConversationCleared={() => {
 											setChatMessages([]);
 											setChatApproval(null);
@@ -1149,6 +1167,16 @@ export function App() {
 							/>
 						</div>
 					</main>
+					) : activeView === "current-state" ? (
+						<CurrentStateView
+							workspaceName={workspace.name}
+							onReconcileWithAgent={(driftId) =>
+								openAgentWithContext(
+									"Workspace Drift needs Reconciliation. Review the Current State findings, explain the inconsistency, and propose a reviewed patch. Do not treat the Drift as repaired until the Course Author approves a valid change.",
+									driftId,
+								)
+							}
+						/>
 				) : activeView === "models" ? (
 					<ModelsView catalog={catalog} onCatalogChange={setCatalog} />
 				) : activeView === "library" ? (

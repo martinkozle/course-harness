@@ -4,7 +4,10 @@ from pathlib import Path
 import httpx2
 import pytest
 
+import course_harness.app as app_module
+from course_harness import canonical_mutation
 from course_harness.app import create_app
+from course_harness.course_plan import read_course_plan, write_course_plan
 
 
 @pytest.mark.anyio
@@ -296,6 +299,78 @@ async def test_renaming_a_lecture_preserves_its_identity(tmp_path: Path) -> None
     async with httpx2.AsyncClient(transport=reopened_transport, base_url="http://test") as client:
         reopened = await client.get("/api/course")
     assert reopened.json() == renamed.json()
+
+
+@pytest.mark.anyio
+async def test_course_endpoint_preserves_a_same_path_external_edit_during_save(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    transport = httpx2.ASGITransport(app=create_app(workspace))
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/api/course",
+            json={
+                "title": "Data Ethics",
+                "audience": "Data practitioners",
+                "lectures": [{"title": "Fairness"}],
+            },
+        )
+        lecture_id = created.json()["lectures"][0]["id"]
+
+        def external_edit(path: Path, _expected: object) -> None:
+            monkeypatch.setattr(canonical_mutation, "after_precondition_check", None)
+            plan = read_course_plan(path)
+            assert plan is not None
+            write_course_plan(path, plan.model_copy(update={"title": "External edit"}))
+
+        monkeypatch.setattr(canonical_mutation, "after_precondition_check", external_edit)
+        response = await client.patch(
+            f"/api/course/lectures/{lecture_id}", json={"title": "Application edit"}
+        )
+
+    assert response.status_code == 409
+    plan = read_course_plan(workspace)
+    assert plan is not None
+    assert plan.title == "External edit"
+
+
+@pytest.mark.anyio
+async def test_course_endpoint_does_not_adopt_an_edit_between_capture_and_drift_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    transport = httpx2.ASGITransport(app=create_app(workspace))
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/api/course",
+            json={
+                "title": "Original",
+                "audience": "Researchers",
+                "lectures": [{"title": "Foundations"}],
+            },
+        )
+        lecture_id = created.json()["lectures"][0]["id"]
+        original_read_current_state = app_module.read_current_state
+
+        def edit_before_guard(path: Path) -> object:
+            monkeypatch.setattr(app_module, "read_current_state", original_read_current_state)
+            plan = read_course_plan(path)
+            assert plan is not None
+            write_course_plan(path, plan.model_copy(update={"title": "External edit"}))
+            return original_read_current_state(path)
+
+        monkeypatch.setattr(app_module, "read_current_state", edit_before_guard)
+        response = await client.patch(
+            f"/api/course/lectures/{lecture_id}", json={"title": "Application edit"}
+        )
+
+    assert response.status_code == 409
+    plan = read_course_plan(workspace)
+    assert plan is not None
+    assert plan.title == "External edit"
 
 
 @pytest.mark.anyio

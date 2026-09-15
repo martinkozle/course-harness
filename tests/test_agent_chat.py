@@ -16,13 +16,17 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
+from starlette.responses import StreamingResponse
 
+from course_harness import canonical_mutation
+from course_harness import workspace_history as history
 from course_harness.app import create_app
 from course_harness.course_agent import (
     CoursePlanLectureCommand,
     ReplaceCoursePlanCommand,
     apply_course_plan_command,
 )
+from course_harness.course_plan import read_course_plan, write_course_plan
 from course_harness.providers import (
     ProviderAccountRequest,
     ProviderCapabilities,
@@ -97,6 +101,38 @@ def test_course_plan_revisions_cannot_silently_replace_lecture_identity(tmp_path
     assert updated.template_profile_version == original.template_profile_version
 
 
+def test_agent_course_command_preserves_a_same_path_external_edit_during_save(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    original = apply_course_plan_command(workspace, _plan_command())
+    expected = canonical_mutation.capture_canonical_file(workspace, "course.yaml")
+
+    def external_edit(path: Path, _expected: object) -> None:
+        monkeypatch.setattr(canonical_mutation, "after_precondition_check", None)
+        write_course_plan(
+            path,
+            original.model_copy(update={"title": "External edit"}),
+        )
+
+    monkeypatch.setattr(canonical_mutation, "after_precondition_check", external_edit)
+    with pytest.raises(canonical_mutation.CanonicalMutationConflict):
+        apply_course_plan_command(
+            workspace,
+            _plan_command(
+                lectures=[
+                    CoursePlanLectureCommand(id=original.lectures[0].id, title="Application edit")
+                ]
+            ),
+            expected=expected,
+        )
+
+    current = read_course_plan(workspace)
+    assert current is not None
+    assert current.title == "External edit"
+
+
 async def _post_stream(app: Any, path: str, payload: object) -> tuple[int, str]:
     body = json.dumps(payload).encode()
     request_sent = False
@@ -140,6 +176,24 @@ async def _post_stream(app: Any, path: str, payload: object) -> tuple[int, str]:
         send,
     )
     return response_status, b"".join(response_parts).decode()
+
+
+def _stream_events(body: str) -> list[dict[str, Any]]:
+    return [
+        json.loads(line.removeprefix("data: "))
+        for line in body.splitlines()
+        if line.startswith("data: ")
+    ]
+
+
+def _make_cross_file_drift(workspace: Path) -> str:
+    """Point a valid Course Plan at a missing Source without breaking either YAML file."""
+    original = (workspace / "course.yaml").read_text(encoding="utf-8")
+    plan = read_course_plan(workspace)
+    assert plan is not None
+    lecture = plan.lectures[0].model_copy(update={"source_focus": ["source-missing"]})
+    write_course_plan(workspace, plan.model_copy(update={"lectures": [lecture]}))
+    return original
 
 
 @pytest.mark.anyio
@@ -592,6 +646,7 @@ async def test_chat_streams_a_validated_course_plan_and_survives_reopening(
         await client.put("/api/provider", json=_provider_request())
         proposal_status, proposal_body = await _post_stream(app, "/api/agent", run_input)
         before_approval = await client.get("/api/course")
+        history_before_approval = (workspace / ".git").exists()
         pending_chat = await client.get("/api/chat")
         proposal_events = [
             json.loads(line.removeprefix("data: "))
@@ -618,6 +673,7 @@ async def test_chat_streams_a_validated_course_plan_and_survives_reopening(
 
     assert proposal_status == 200
     assert before_approval.status_code == 404
+    assert history_before_approval is False
     assert pending_chat.json()["approval"]["id"] == "int-course-plan-1"
     assert "TOOL_CALL_START" in [event["type"] for event in proposal_events]
     assert stream_status == 200
@@ -644,6 +700,7 @@ async def test_chat_streams_a_validated_course_plan_and_survives_reopening(
     assert "title: Causal Inference in Practice" in (workspace / "course.yaml").read_text(
         encoding="utf-8"
     )
+    assert not list((workspace / ".git" / "refs" / "course-harness" / "recovery").glob("*"))
     assert chat_response.json() == {
         "approval": None,
         "messages": [
@@ -728,6 +785,391 @@ async def test_active_agent_run_locks_competing_workspace_mutations(tmp_path: Pa
     assert "already running" in competing.json()["detail"]
     assert stream_status == 200
     assert not (workspace / "course.yaml").exists()
+
+
+@pytest.mark.anyio
+async def test_agent_setup_failure_releases_the_workspace_lock(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    app = create_app(
+        workspace,
+        provider_store_path=tmp_path / "provider",
+        agent_model=FunctionModel(
+            lambda _messages, _info: ModelResponse(parts=[TextPart(content="unused")])
+        ),
+        provider_validator=_verified_capabilities,
+    )
+    transport = httpx2.ASGITransport(app=app, raise_app_exceptions=False)
+    run_input = {
+        "threadId": "course-agent",
+        "runId": "invalid-mode-run",
+        "state": {},
+        "messages": [{"id": "user-1", "role": "user", "content": "Plan a Course."}],
+        "tools": [],
+        "context": [],
+        "forwardedProps": {"mode": "not-a-mode"},
+    }
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        failed = await client.post("/api/agent", json=run_input)
+        next_mutation = await client.post(
+            "/api/course",
+            json={
+                "title": "Lock released",
+                "audience": "Authors",
+                "lectures": [{"title": "One"}],
+            },
+        )
+
+    assert failed.status_code == 500
+    assert next_mutation.status_code == 201
+
+
+@pytest.mark.anyio
+async def test_autonomous_agent_can_create_a_semantic_revision_without_deadlock(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    calls = 0
+
+    async def revising_model(
+        _messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            yield {
+                0: DeltaToolCall(
+                    name="replace_course_plan",
+                    json_args=json.dumps(
+                        {
+                            "command": {
+                                "title": "Revision Course",
+                                "audience": "Authors",
+                                "lectures": [{"title": "One"}],
+                            }
+                        }
+                    ),
+                    tool_call_id="course-plan-1",
+                )
+            }
+        elif calls == 2:
+            yield {
+                0: DeltaToolCall(
+                    name="create_course_revision",
+                    json_args=json.dumps({"summary": "Create the initial Course Plan"}),
+                    tool_call_id="revision-1",
+                )
+            }
+        else:
+            yield "The Course Plan and Revision are ready."
+
+    app = create_app(
+        workspace,
+        provider_store_path=tmp_path / "provider",
+        agent_model=FunctionModel(stream_function=revising_model),
+        provider_validator=_verified_capabilities,
+    )
+    transport = httpx2.ASGITransport(app=app)
+    run_input = {
+        "threadId": "course-agent",
+        "runId": "revision-run",
+        "state": {},
+        "messages": [{"id": "user-1", "role": "user", "content": "Create the Course."}],
+        "tools": [],
+        "context": [],
+        "forwardedProps": {"mode": "autonomous"},
+    }
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        stream_status, _ = await _post_stream(app, "/api/agent", run_input)
+        revisions = await client.get("/api/workspace/revisions")
+
+    assert stream_status == 200
+    assert [revision["summary"] for revision in revisions.json()] == [
+        "Create the initial Course Plan"
+    ]
+
+
+@pytest.mark.anyio
+async def test_guided_agent_approval_creates_a_semantic_revision(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+
+    async def revising_model(
+        messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        tool_has_returned = any(
+            isinstance(message, ModelRequest)
+            and any(isinstance(part, ToolReturnPart) for part in message.parts)
+            for message in messages
+        )
+        if tool_has_returned:
+            yield "The Course Revision is ready."
+            return
+        yield {
+            0: DeltaToolCall(
+                name="create_course_revision",
+                json_args=json.dumps({"summary": "Capture the initial Course Plan"}),
+                tool_call_id="semantic-revision-1",
+            )
+        }
+
+    app = create_app(
+        workspace,
+        provider_store_path=tmp_path / "provider",
+        agent_model=FunctionModel(stream_function=revising_model),
+        provider_validator=_verified_capabilities,
+    )
+    run_input = {
+        "threadId": "course-agent",
+        "runId": "guided-revision-proposal",
+        "state": {},
+        "messages": [{"id": "user-1", "role": "user", "content": "Save this milestone."}],
+        "tools": [],
+        "context": [],
+        "forwardedProps": {"mode": "guided"},
+    }
+
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        created_course = await client.post(
+            "/api/course",
+            json={
+                "title": "Guided Revision Course",
+                "audience": "Course Authors",
+                "lectures": [{"title": "One"}],
+            },
+        )
+        proposal_status, proposal_body = await _post_stream(app, "/api/agent", run_input)
+        proposal_events = [
+            json.loads(line.removeprefix("data: "))
+            for line in proposal_body.splitlines()
+            if line.startswith("data: ")
+        ]
+        interrupt = proposal_events[-1]["outcome"]["interrupts"][0]
+        revisions_before_approval = await client.get("/api/workspace/revisions")
+        approval_status, _ = await _post_stream(
+            app,
+            "/api/agent",
+            {
+                **run_input,
+                "runId": "guided-revision-approval",
+                "messages": [],
+                "resume": [
+                    {
+                        "interruptId": interrupt["id"],
+                        "status": "resolved",
+                        "payload": {"approved": True},
+                    }
+                ],
+            },
+        )
+        revisions = await client.get("/api/workspace/revisions")
+
+    assert created_course.status_code == 201
+    assert proposal_status == 200
+    assert interrupt["id"] == "int-semantic-revision-1"
+    assert revisions_before_approval.json() == []
+    assert approval_status == 200
+    assert [revision["summary"] for revision in revisions.json()] == [
+        "Capture the initial Course Plan"
+    ]
+
+
+def _reconciliation_model(repaired_course: str) -> FunctionModel:
+    async def propose_repair(
+        messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        tool_has_returned = any(
+            isinstance(message, ModelRequest)
+            and any(isinstance(part, ToolReturnPart) for part in message.parts)
+            for message in messages
+        )
+        if tool_has_returned:
+            yield "The reviewed reconciliation is complete."
+            return
+        yield {
+            0: DeltaToolCall(
+                name="apply_reconciliation_patch",
+                json_args=json.dumps(
+                    {
+                        "summary": "Repair the missing Source reference",
+                        "entries": [{"path": "course.yaml", "content": repaired_course}],
+                    }
+                ),
+                tool_call_id="reconciliation-1",
+            )
+        }
+
+    return FunctionModel(stream_function=propose_repair)
+
+
+async def _create_reconciliation_app(
+    tmp_path: Path,
+) -> tuple[Path, Any, str, dict[str, object]]:
+    workspace = tmp_path / "reconciliation-course"
+    workspace.mkdir()
+    bootstrap = create_app(
+        workspace,
+        provider_store_path=tmp_path / "provider",
+        provider_validator=_verified_capabilities,
+    )
+    transport = httpx2.ASGITransport(app=bootstrap)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/api/course",
+            json={
+                "title": "Reconciliation Course",
+                "audience": "Course Authors",
+                "lectures": [{"title": "Cross-file references"}],
+            },
+        )
+    assert created.status_code == 201
+    repaired_course = _make_cross_file_drift(workspace)
+    context = history.capture_reconciliation_context(workspace)
+    assert context.findings
+    run_input: dict[str, object] = {
+        "threadId": "course-agent",
+        "runId": "reconciliation-proposal",
+        "state": {},
+        "messages": [
+            {
+                "id": "user-1",
+                "role": "user",
+                "content": "Reconcile the inconsistent Workspace Drift.",
+            }
+        ],
+        "tools": [],
+        "context": [],
+        "forwardedProps": {
+            "mode": "autonomous",
+            "reconciliationDriftId": context.drift_id,
+        },
+    }
+    app = create_app(
+        workspace,
+        provider_store_path=tmp_path / "provider",
+        agent_model=_reconciliation_model(repaired_course),
+        provider_validator=_verified_capabilities,
+    )
+    return workspace, app, context.drift_id, run_input
+
+
+@pytest.mark.anyio
+async def test_reconciliation_proposal_can_be_declined_without_changing_invalid_drift(
+    tmp_path: Path,
+) -> None:
+    workspace, app, _drift_id, run_input = await _create_reconciliation_app(tmp_path)
+    before = (workspace / "course.yaml").read_bytes()
+    transport = httpx2.ASGITransport(app=app)
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        proposal_status, proposal_body = await _post_stream(app, "/api/agent", run_input)
+        interrupt = _stream_events(proposal_body)[-1]["outcome"]["interrupts"][0]
+        decline_status, _ = await _post_stream(
+            app,
+            "/api/agent",
+            {
+                **run_input,
+                "runId": "reconciliation-decline",
+                "messages": [],
+                "resume": [
+                    {
+                        "interruptId": interrupt["id"],
+                        "status": "resolved",
+                        "payload": {"approved": False},
+                    }
+                ],
+            },
+        )
+        revisions = await client.get("/api/workspace/revisions")
+
+    assert proposal_status == 200
+    assert decline_status == 200
+    assert (workspace / "course.yaml").read_bytes() == before
+    assert not history.read_current_state(workspace).validation.valid
+    assert revisions.json() == []
+
+
+@pytest.mark.anyio
+async def test_reconciliation_approval_repairs_cross_file_drift_and_records_revision(
+    tmp_path: Path,
+) -> None:
+    workspace, app, _drift_id, run_input = await _create_reconciliation_app(tmp_path)
+    transport = httpx2.ASGITransport(app=app)
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        proposal_status, proposal_body = await _post_stream(app, "/api/agent", run_input)
+        interrupt = _stream_events(proposal_body)[-1]["outcome"]["interrupts"][0]
+        approval_status, _ = await _post_stream(
+            app,
+            "/api/agent",
+            {
+                **run_input,
+                "runId": "reconciliation-approval",
+                "messages": [],
+                "resume": [
+                    {
+                        "interruptId": interrupt["id"],
+                        "status": "resolved",
+                        "payload": {"approved": True},
+                    }
+                ],
+            },
+        )
+        revisions = await client.get("/api/workspace/revisions")
+
+    state = history.read_current_state(workspace)
+    assert proposal_status == 200
+    assert approval_status == 200
+    assert state.validation.valid
+    assert state.drift == "clean"
+    assert [revision["summary"] for revision in revisions.json()] == [
+        "Repair the missing Source reference"
+    ]
+
+
+@pytest.mark.anyio
+async def test_reconciliation_resume_rejects_a_stale_drift_id(tmp_path: Path) -> None:
+    workspace, app, _drift_id, run_input = await _create_reconciliation_app(tmp_path)
+    transport = httpx2.ASGITransport(app=app)
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        proposal_status, proposal_body = await _post_stream(app, "/api/agent", run_input)
+        interrupt = _stream_events(proposal_body)[-1]["outcome"]["interrupts"][0]
+        plan = read_course_plan(workspace)
+        assert plan is not None
+        write_course_plan(workspace, plan.model_copy(update={"title": "Changed after proposal"}))
+        stale_status, stale_body = await _post_stream(
+            app,
+            "/api/agent",
+            {
+                **run_input,
+                "runId": "reconciliation-stale-resume",
+                "messages": [],
+                "resume": [
+                    {
+                        "interruptId": interrupt["id"],
+                        "status": "resolved",
+                        "payload": {"approved": True},
+                    }
+                ],
+            },
+        )
+        revisions = await client.get("/api/workspace/revisions")
+
+    assert proposal_status == 200
+    assert stale_status == 409
+    assert "Workspace Drift changed" in stale_body
+    assert revisions.json() == []
 
 
 @pytest.mark.anyio
@@ -937,13 +1379,12 @@ async def test_cancelling_an_active_agent_run_preserves_partial_state(
     workspace = tmp_path / "cancel-course"
     workspace.mkdir()
     server_started = asyncio.Event()
-    finish = asyncio.Event()
 
     async def long_running_model(
         _messages: list[ModelMessage], _info: AgentInfo
     ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
         server_started.set()
-        await finish.wait()
+        await asyncio.Event().wait()
         yield "The Course Agent thought about your request but made no changes."
 
     app = create_app(
@@ -968,13 +1409,98 @@ async def test_cancelling_an_active_agent_run_preserves_partial_state(
         running = asyncio.create_task(_post_stream(app, "/api/agent", run_input))
         await server_started.wait()
         cancel_response = await client.post("/api/agent/cancel")
-        finish.set()
-        stream_status, _ = await running
+        stream_status, _ = await asyncio.wait_for(running, timeout=2)
         course_response = await client.get("/api/course")
+        next_mutation = await client.post(
+            "/api/course",
+            json={
+                "title": "After cancellation",
+                "audience": "Authors",
+                "lectures": [{"title": "One"}],
+            },
+        )
 
     assert cancel_response.status_code == 204
-    assert not (workspace / "course.yaml").exists()
     assert course_response.status_code == 404
+    assert next_mutation.status_code == 201
+
+
+@pytest.mark.anyio
+async def test_uncancellable_stream_keeps_run_boundary_and_workspace_locked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "uncancellable-course"
+    workspace.mkdir()
+    stream_started = asyncio.Event()
+    cancellation_suppressed = asyncio.Event()
+    release_stream = asyncio.Event()
+
+    class UnclosableIterator:
+        def __aiter__(self) -> UnclosableIterator:
+            return self
+
+        async def __anext__(self) -> bytes:
+            stream_started.set()
+            while not release_stream.is_set():
+                try:
+                    await release_stream.wait()
+                except asyncio.CancelledError:
+                    cancellation_suppressed.set()
+            return b"released"
+
+    async def dispatch_request(*_args: object, **_kwargs: object) -> StreamingResponse:
+        return StreamingResponse(UnclosableIterator(), media_type="text/event-stream")
+
+    monkeypatch.setattr(
+        "course_harness.app.AGUIAdapter.dispatch_request",
+        dispatch_request,
+    )
+    app = create_app(
+        workspace,
+        provider_store_path=tmp_path / "provider",
+        agent_model=FunctionModel(
+            lambda _messages, _info: ModelResponse(parts=[TextPart(content="unused")])
+        ),
+        provider_validator=_verified_capabilities,
+    )
+    transport = httpx2.ASGITransport(app=app)
+    run_input = {
+        "threadId": "course-agent",
+        "runId": "uncancellable-run",
+        "state": {},
+        "messages": [{"id": "user-uncancellable", "role": "user", "content": "Wait."}],
+        "tools": [],
+        "context": [],
+        "forwardedProps": {},
+    }
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        created = await client.post(
+            "/api/course",
+            json={
+                "title": "Existing Course",
+                "audience": "Authors",
+                "lectures": [{"title": "One"}],
+            },
+        )
+        assert created.status_code == 201
+        running = asyncio.create_task(_post_stream(app, "/api/agent", run_input))
+        await stream_started.wait()
+        cancel_response = await client.post("/api/agent/cancel")
+        stream_status, _ = await asyncio.wait_for(running, timeout=2)
+        assert cancellation_suppressed.is_set()
+        competing = await client.patch(
+            f"/api/course/lectures/{created.json()['lectures'][0]['id']}",
+            json={"title": "Blocked while the stream is unconfirmed"},
+        )
+        release_stream.set()
+        await asyncio.sleep(0)
+
+    assert cancel_response.status_code == 204
+    assert stream_status == 200
+    assert competing.status_code == 409
+    assert (workspace / ".git" / history.RUN_BOUNDARY_FILE).is_file()
 
 
 @pytest.mark.anyio
@@ -1000,6 +1526,7 @@ async def test_agent_can_archive_and_restore_slides(tmp_path: Path) -> None:
         create_course_plan,
         create_course_plan_file,
         initialize_workspace_history,
+        write_course_plan,
     )
     from course_harness.presentation import (
         BulletsSlide,
@@ -1007,6 +1534,7 @@ async def test_agent_can_archive_and_restore_slides(tmp_path: Path) -> None:
         TitleSlide,
         write_presentation,
     )
+    from course_harness.workspace_history import record_app_authored_state
 
     plan = create_course_plan(
         CoursePlanInput(
@@ -1024,6 +1552,15 @@ async def test_agent_can_archive_and_restore_slides(tmp_path: Path) -> None:
         slides=[slide_a, slide_b],
     )
     write_presentation(workspace, pres)
+    plan = plan.model_copy(
+        update={
+            "lectures": [
+                lecture.model_copy(update={"presentation_id": pres.id}) for lecture in plan.lectures
+            ]
+        }
+    )
+    write_course_plan(workspace, plan)
+    record_app_authored_state(workspace)
 
     async def archive_model(
         _messages: list[ModelMessage], _info: AgentInfo
@@ -1096,12 +1633,14 @@ async def test_agent_can_delete_presentation_and_requires_approval_in_guided(
         create_course_plan,
         create_course_plan_file,
         initialize_workspace_history,
+        write_course_plan,
     )
     from course_harness.presentation import (
         Presentation,
         TitleSlide,
         write_presentation,
     )
+    from course_harness.workspace_history import record_app_authored_state
 
     plan = create_course_plan(
         CoursePlanInput(
@@ -1117,6 +1656,15 @@ async def test_agent_can_delete_presentation_and_requires_approval_in_guided(
         slides=[TitleSlide(id="slide-aaa111222333", title="Intro")],
     )
     write_presentation(workspace, pres)
+    plan = plan.model_copy(
+        update={
+            "lectures": [
+                lecture.model_copy(update={"presentation_id": pres.id}) for lecture in plan.lectures
+            ]
+        }
+    )
+    write_course_plan(workspace, plan)
+    record_app_authored_state(workspace)
 
     async def delete_model(
         _messages: list[ModelMessage], _info: AgentInfo
@@ -1222,6 +1770,7 @@ async def test_presentation_approval_preview_contains_slide_outline(
         create_course_plan_file,
         initialize_workspace_history,
     )
+    from course_harness.workspace_history import record_app_authored_state
 
     plan = create_course_plan(
         CoursePlanInput(
@@ -1230,6 +1779,7 @@ async def test_presentation_approval_preview_contains_slide_outline(
     )
     initialize_workspace_history(workspace)
     create_course_plan_file(workspace, plan)
+    record_app_authored_state(workspace)
 
     async def pres_model(
         _messages: list[ModelMessage], _info: AgentInfo
@@ -1309,6 +1859,7 @@ async def test_presentation_state_snapshots_stream_on_canvas_updates(
         create_course_plan_file,
         initialize_workspace_history,
     )
+    from course_harness.workspace_history import record_app_authored_state
 
     plan = create_course_plan(
         CoursePlanInput(
@@ -1317,6 +1868,7 @@ async def test_presentation_state_snapshots_stream_on_canvas_updates(
     )
     initialize_workspace_history(workspace)
     create_course_plan_file(workspace, plan)
+    record_app_authored_state(workspace)
     lecture_id = plan.lectures[0].id
 
     call_count = 0

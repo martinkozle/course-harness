@@ -5,11 +5,14 @@ import pytest
 
 from course_harness.app import create_app
 from course_harness.course_plan import (
+    CoursePlan,
     CoursePlanInput,
     LectureInput,
     create_course_plan,
-    create_course_plan_file,
     initialize_workspace_history,
+)
+from course_harness.course_plan import (
+    create_course_plan_file as _create_course_plan_file,
 )
 from course_harness.presentation import (
     BulletsSlide,
@@ -17,6 +20,13 @@ from course_harness.presentation import (
     TitleSlide,
     read_presentation_for_lecture,
 )
+from course_harness.workspace_history import record_app_authored_state
+
+
+def create_course_plan_file(workspace: Path, plan: CoursePlan) -> None:
+    """Create the direct-test fixture as trusted pre-existing application state."""
+    _create_course_plan_file(workspace, plan)
+    record_app_authored_state(workspace)
 
 
 @pytest.mark.anyio

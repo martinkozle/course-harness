@@ -45,6 +45,11 @@ type PresentationProposal = {
 	}[];
 };
 
+type ReconciliationProposal = {
+	summary: string;
+	entries: { path: string; content: string | null }[];
+};
+
 type Activity = { id: string; title: string; detail: string };
 
 type AgentMode = "guided" | "autonomous";
@@ -60,7 +65,9 @@ type AgentPanelProps = {
 	onRunningChange: (running: boolean) => void;
 	onPresentationsChange?: () => Promise<void>;
 	chatContext?: string | null;
+	reconciliationDriftId?: string | null;
 	onChatContextCleared?: () => void;
+	onReconciliationDriftCleared?: () => void;
 	onConversationCleared: () => void;
 	onTranscriptChange: (
 		messages: ChatMessage[],
@@ -94,11 +101,33 @@ function messageParts(content: string): {
 }
 
 function approvalProposal(interrupt: AgentInterrupt): {
-	tool: "course_plan" | "presentation" | "presentation_delete";
+	tool:
+		| "course_plan"
+		| "presentation"
+		| "presentation_delete"
+		| "reconciliation";
 	preview: Record<string, unknown> | null;
 } | null {
 	const message = interrupt.message;
 	if (!message) return null;
+	if (message.includes("apply_reconciliation_patch(")) {
+		const reconciliationMatch =
+			/apply_reconciliation_patch\((\{.*\})\)\?$/s.exec(message);
+		if (reconciliationMatch) {
+			try {
+				return {
+					tool: "reconciliation",
+					preview: JSON.parse(reconciliationMatch[1]) as Record<
+						string,
+						unknown
+					>,
+				};
+			} catch {
+				// Fall through to the restrained unavailable preview.
+			}
+		}
+		return { tool: "reconciliation", preview: null };
+	}
 
 	if (message.includes("delete_presentation(")) {
 		const deleteMatch =
@@ -146,6 +175,21 @@ function approvalProposal(interrupt: AgentInterrupt): {
 	}
 }
 
+function isReconciliationProposal(
+	value: Record<string, unknown> | null,
+): value is ReconciliationProposal {
+	if (value === null || typeof value.summary !== "string") return false;
+	if (!Array.isArray(value.entries) || value.entries.length === 0) return false;
+	return value.entries.every(
+		(entry) =>
+			typeof entry === "object" &&
+			entry !== null &&
+			typeof (entry as Record<string, unknown>).path === "string" &&
+			((entry as Record<string, unknown>).content === null ||
+				typeof (entry as Record<string, unknown>).content === "string"),
+	);
+}
+
 function ApprovalCard({
 	approval,
 	onResolve,
@@ -156,8 +200,9 @@ function ApprovalCard({
 	const parsed = approvalProposal(approval);
 	const isPresentation = parsed?.tool === "presentation";
 	const isPresentationDelete = parsed?.tool === "presentation_delete";
+	const isReconciliation = parsed?.tool === "reconciliation";
 	const courseProposal =
-		!isPresentation && !isPresentationDelete
+		!isPresentation && !isPresentationDelete && !isReconciliation
 			? (parsed?.preview as CoursePlanProposal | null)
 			: null;
 	const presentationProposal = isPresentation
@@ -166,20 +211,65 @@ function ApprovalCard({
 	const deleteLectureId = isPresentationDelete
 		? (parsed?.preview as { lecture_id?: string })?.lecture_id
 		: null;
+	const reconciliationPreview = isReconciliation
+		? (parsed?.preview ?? null)
+		: null;
+	const reconciliationProposal: ReconciliationProposal | null =
+		isReconciliationProposal(reconciliationPreview)
+			? reconciliationPreview
+			: null;
 
 	let kicker = "Course Plan proposal";
 	if (isPresentation) kicker = "Presentation proposal";
 	else if (isPresentationDelete) kicker = "Presentation proposal";
+	else if (isReconciliation) kicker = "Workspace Reconciliation";
 
 	let heading = "Apply this change?";
 	if (isPresentation) heading = "Apply this presentation change?";
 	else if (isPresentationDelete) heading = "Delete this Presentation?";
+	else if (isReconciliation) heading = "Apply this Workspace Reconciliation?";
 
 	return (
 		<section className="approval-card" aria-labelledby="approval-heading">
 			<p className="section-kicker">{kicker}</p>
 			<h3 id="approval-heading">{heading}</h3>
-			{isPresentationDelete ? (
+			{isReconciliation ? (
+				reconciliationProposal ? (
+					<div className="proposal-sheet reconciliation-proposal">
+						<div>
+							<strong>{reconciliationProposal.summary}</strong>
+							<span>
+								{reconciliationProposal.entries.length} canonical path
+								{reconciliationProposal.entries.length === 1 ? "" : "s"}
+							</span>
+						</div>
+						<ul aria-label="Reconciliation patch">
+							{reconciliationProposal.entries.map((entry) => (
+								<li key={entry.path}>
+									<details>
+										<summary>
+											<span>
+												{entry.content === null ? "Remove" : "Replace"}
+											</span>
+											<code>{entry.path}</code>
+										</summary>
+										{entry.content === null ? (
+											<p>This canonical file will be removed.</p>
+										) : (
+											<pre>{entry.content}</pre>
+										)}
+									</details>
+								</li>
+							))}
+						</ul>
+					</div>
+				) : (
+					<p>
+						The agent proposed a Workspace Reconciliation, but its bounded patch
+						preview could not be read.
+					</p>
+				)
+			) : isPresentationDelete ? (
 				<p>
 					{deleteLectureId
 						? `The agent wants to delete the Presentation for lecture ${deleteLectureId}.`
@@ -234,7 +324,12 @@ function ApprovalCard({
 					The agent proposed a Course Plan, but its preview could not be read.
 				</p>
 			)}
-			{!isPresentation && !isPresentationDelete ? (
+			{isReconciliation ? (
+				<p className="approval-scope">
+					Approval applies this exact canonical-file patch, verifies the
+					resulting Course state, and creates the named Course Revision.
+				</p>
+			) : !isPresentation && !isPresentationDelete ? (
 				<p className="approval-scope">
 					This saves the Course title, intent, and Lecture spine. It does not
 					create Lecture content yet.
@@ -246,20 +341,25 @@ function ApprovalCard({
 					className="secondary-action"
 					onClick={() => onResolve(false)}
 				>
-					{isPresentation || isPresentationDelete
-						? "Skip"
-						: "Keep current plan"}
+					{isReconciliation
+						? "Keep Workspace Drift"
+						: isPresentation || isPresentationDelete
+							? "Skip"
+							: "Keep current plan"}
 				</button>
 				<button
 					type="button"
 					className="primary-action"
+					disabled={isReconciliation && !reconciliationProposal}
 					onClick={() => onResolve(true)}
 				>
-					{isPresentationDelete
-						? "Delete"
-						: isPresentation
-							? "Apply"
-							: "Save Course Plan"}
+					{isReconciliation
+						? "Apply Reconciliation"
+						: isPresentationDelete
+							? "Delete"
+							: isPresentation
+								? "Apply"
+								: "Save Course Plan"}
 				</button>
 			</div>
 		</section>
@@ -277,7 +377,9 @@ export function AgentPanel({
 	onRunningChange,
 	onPresentationsChange,
 	chatContext,
+	reconciliationDriftId,
 	onChatContextCleared,
+	onReconciliationDriftCleared,
 	onConversationCleared,
 	onTranscriptChange,
 }: AgentPanelProps) {
@@ -350,7 +452,10 @@ export function AgentPanel({
 					messages: messagesForRun,
 					tools: [],
 					context: [],
-					forwardedProps: { mode: modeForRun },
+					forwardedProps: {
+						mode: reconciliationDriftId ? "guided" : modeForRun,
+						...(reconciliationDriftId ? { reconciliationDriftId } : {}),
+					},
 					...(resume ? { resume } : {}),
 				},
 				{
@@ -393,6 +498,9 @@ export function AgentPanel({
 				setMessages(transcript.messages);
 				setApproval(transcript.approval);
 				onTranscriptChange(transcript.messages, transcript.approval);
+				if (reconciliationDriftId && transcript.approval === null) {
+					onReconciliationDriftCleared?.();
+				}
 			}
 		} catch (caught) {
 			if (caught instanceof DOMException && caught.name === "AbortError") {
@@ -452,7 +560,11 @@ export function AgentPanel({
 		setPrompt("");
 		setApproval(null);
 		if (onChatContextCleared) onChatContextCleared();
-		void run([userMessage]);
+		void run(
+			[userMessage],
+			undefined,
+			reconciliationDriftId ? "guided" : "autonomous",
+		);
 	}
 
 	function resolveApproval(approved: boolean) {
@@ -650,7 +762,10 @@ export function AgentPanel({
 						<button
 							type="button"
 							className="quiet-action compact-action"
-							onClick={() => onChatContextCleared?.()}
+							onClick={() => {
+								onChatContextCleared?.();
+								onReconciliationDriftCleared?.();
+							}}
 						>
 							Remove
 						</button>

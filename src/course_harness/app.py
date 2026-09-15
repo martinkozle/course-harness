@@ -2,8 +2,8 @@ import asyncio
 import json
 import logging
 import subprocess
-from collections.abc import Callable
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Literal, cast
 
@@ -16,6 +16,7 @@ from pydantic_ai.ui.ag_ui import AGUIAdapter
 from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import Response as StarletteResponse
+from starlette.responses import StreamingResponse
 from starlette.staticfiles import StaticFiles
 
 from course_harness import library
@@ -23,6 +24,13 @@ from course_harness import resources as res
 from course_harness import search as search_module
 from course_harness import sources as sources_module
 from course_harness import template_profiles as tpl
+from course_harness.canonical_mutation import (
+    MAX_CANONICAL_FILES,
+    CanonicalMutationConflict,
+    apply_canonical_mutation,
+    capture_canonical_file,
+    capture_canonical_files,
+)
 from course_harness.chat_history import (
     ChatTranscript,
     clear_chat_history,
@@ -37,6 +45,7 @@ from course_harness.course_agent import (
     build_provider_model,
     create_autonomous_course_agent,
     create_course_agent,
+    create_reconciliation_agent,
 )
 from course_harness.course_plan import (
     CoursePlan,
@@ -46,6 +55,7 @@ from course_harness.course_plan import (
     create_course_plan_file,
     initialize_workspace_history,
     read_course_plan,
+    serialize_course_plan,
     write_course_plan,
 )
 from course_harness.export import ExportError, export_presentation, validate_export_mapping
@@ -55,10 +65,10 @@ from course_harness.presentation import (
     SlideCitation,
     SlideOrderRequest,
     SlidePatchRequest,
-    delete_presentation_file,
     list_presentations,
     read_presentation_for_lecture,
     reorder_slides,
+    serialize_presentation,
     slide_by_id,
     write_presentation,
 )
@@ -107,6 +117,34 @@ from course_harness.template_inspect import (
     map_semantic_layouts,
     suggest_mappings_with_llm,
 )
+from course_harness.workspace_history import (
+    CourseRevision,
+    CurrentState,
+    DriftAcceptRequest,
+    ReconciliationApplyRequest,
+    RevisionCreateRequest,
+    SelectiveRevertRequest,
+    WorkspaceDriftChangedError,
+    WorkspaceHistoryError,
+    WorkspaceHistoryNotInitializedError,
+    abandon_run_boundary,
+    accept_workspace_drift,
+    apply_reconciliation,
+    begin_run_boundary,
+    capture_reconciliation_context,
+    checkpoint_run_mutation,
+    create_revision,
+    finish_run_boundary,
+    list_revisions,
+    mark_run_mutation,
+    read_current_state,
+    record_app_authored_entries,
+    record_app_authored_paths,
+    record_app_authored_state,
+    record_restored_revision,
+    restore_revision,
+    revert_current_path,
+)
 from course_harness.workspaces import (
     WorkspaceSelectionError,
     default_recent_store_path,
@@ -115,6 +153,8 @@ from course_harness.workspaces import (
     remember_workspace,
     validate_workspace_path,
 )
+
+STREAM_TERMINATION_CONFIRMATION_SECONDS = 0.5
 
 
 class HealthResponse(BaseModel):
@@ -271,6 +311,17 @@ def create_app(
             media_type="application/json",
         )
 
+    @app.exception_handler(CanonicalMutationConflict)
+    async def _canonical_mutation_conflict(
+        _request: Request,
+        exc: CanonicalMutationConflict,
+    ) -> StarletteResponse:
+        return StarletteResponse(
+            content=json.dumps({"detail": str(exc)}).encode("utf-8"),
+            status_code=409,
+            media_type="application/json",
+        )
+
     recent_path = recent_store_path or default_recent_store_path()
     provider_path = provider_store_path or default_provider_store_path()
     data_dir = library_data_path or library.library_data_dir()
@@ -280,16 +331,103 @@ def create_app(
     chat_path = chat_store_path or recent_path.parent / "chat"
     course_agent = create_course_agent()
     autonomous_agent = create_autonomous_course_agent()
+    reconciliation_agent = create_reconciliation_agent()
     mutation_locks: dict[Path, asyncio.Lock] = {}
     cancel_events: dict[Path, asyncio.Event] = {}
+    recovered_workspaces: set[Path] = set()
+
+    def has_canonical_files(active: Path) -> bool:
+        """Return whether an uninitialized Workspace already contains Course state."""
+        for name in ("course.yaml", "sources.yaml"):
+            path = active / name
+            if path.exists() or path.is_symlink():
+                return True
+        presentations = active / "presentations"
+        if presentations.is_symlink():
+            return True
+        if not presentations.is_dir():
+            return False
+        try:
+            return any(path.suffix == ".yaml" for path in presentations.iterdir())
+        except OSError:
+            return True
 
     def require_workspace() -> Path:
         if workspace is None:
             raise HTTPException(status_code=409, detail="No Course Workspace is active")
+        resolved = workspace.resolve()
+        if resolved not in recovered_workspaces:
+            try:
+                # Reading Current State completes only durable crash recovery.  It must not
+                # establish provenance for an existing, unreviewed repository.
+                read_current_state(workspace)
+            except WorkspaceHistoryNotInitializedError:
+                pass
+            except WorkspaceHistoryError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            recovered_workspaces.add(resolved)
         return workspace
 
-    def require_course_plan() -> tuple[Path, CoursePlan]:
-        active = require_workspace()
+    def require_canonical_authoring(active: Path, *, allow_uninitialized: bool = False) -> bool:
+        """Refuse to overwrite unresolved Workspace Drift.
+
+        The boolean tells the caller that a successful mutation may refresh provenance.
+        An empty, uninitialized Workspace is safe to establish as app-authored state.
+        """
+        try:
+            state = read_current_state(active)
+        except WorkspaceHistoryNotInitializedError as error:
+            if allow_uninitialized and not has_canonical_files(active):
+                return True
+            if allow_uninitialized:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Workspace history is not initialized for existing Course state; "
+                        "initialize or review it before making Course changes."
+                    ),
+                ) from error
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except WorkspaceHistoryError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+        if state.drift == "drift":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Workspace Drift must be accepted or reverted before making Course changes."
+                ),
+            )
+        if state.drift == "unknown":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Workspace provenance is not established for this Course state; "
+                    "review or accept Workspace Drift before making Course changes."
+                ),
+            )
+        return True
+
+    def record_canonical_mutation(
+        active: Path,
+        permitted: bool,
+        expected_entries: dict[str, bytes | None] | None = None,
+    ) -> None:
+        if not permitted:
+            return
+        try:
+            if expected_entries is None:
+                record_app_authored_state(active)
+            else:
+                record_app_authored_entries(active, expected_entries)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except WorkspaceHistoryNotInitializedError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except WorkspaceHistoryError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    def read_required_course_plan(active: Path) -> CoursePlan:
         try:
             plan = read_course_plan(active)
         except InvalidCoursePlan as error:
@@ -298,7 +436,11 @@ def create_app(
             ) from error
         if plan is None:
             raise HTTPException(status_code=404, detail="This Workspace does not contain a Course")
-        return active, plan
+        return plan
+
+    def require_course_plan() -> tuple[Path, CoursePlan]:
+        active = require_workspace()
+        return active, read_required_course_plan(active)
 
     def mutation_lock(active: Path) -> asyncio.Lock:
         return mutation_locks.setdefault(active.resolve(), asyncio.Lock())
@@ -363,6 +505,7 @@ def create_app(
                 detail="Wait for the active Course Agent run before closing this Workspace.",
             )
         cancel_events.pop(active.resolve(), None)
+        recovered_workspaces.discard(active.resolve())
         workspace = None
         return Response(status_code=204)
 
@@ -396,6 +539,95 @@ def create_app(
                 if len(entries) == 200:
                     return entries
         return entries
+
+    @app.get("/api/workspace/current-state", response_model=CurrentState)
+    async def workspace_current_state() -> CurrentState:
+        active = require_workspace()
+        try:
+            return read_current_state(active)
+        except WorkspaceHistoryNotInitializedError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except WorkspaceHistoryError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.post(
+        "/api/workspace/drift/accept",
+        response_model=CourseRevision,
+        status_code=201,
+    )
+    async def accept_workspace_current_state(request: DriftAcceptRequest) -> CourseRevision:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            try:
+                return accept_workspace_drift(active, request)
+            except WorkspaceDriftChangedError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except CanonicalMutationConflict as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            except WorkspaceHistoryNotInitializedError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except WorkspaceHistoryError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.get("/api/workspace/revisions", response_model=list[CourseRevision])
+    async def workspace_revisions() -> list[CourseRevision]:
+        active = require_workspace()
+        try:
+            return list_revisions(active)
+        except WorkspaceHistoryNotInitializedError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except WorkspaceHistoryError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.post("/api/workspace/revisions", response_model=CourseRevision, status_code=201)
+    async def create_workspace_revision(request: RevisionCreateRequest) -> CourseRevision:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            require_canonical_authoring(active)
+            try:
+                revision = create_revision(active, request)
+                return revision
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            except WorkspaceHistoryNotInitializedError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except WorkspaceHistoryError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.post("/api/workspace/current-state/revert", response_model=CurrentState)
+    async def revert_workspace_current_state(request: SelectiveRevertRequest) -> CurrentState:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            try:
+                before = read_current_state(active)
+                state = revert_current_path(active, request)
+                if before.drift != "unknown":
+                    record_app_authored_paths(active, {request.path})
+                    state = read_current_state(active)
+                return state
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            except WorkspaceHistoryNotInitializedError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except WorkspaceHistoryError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.post("/api/workspace/revisions/{revision_id}/restore", response_model=CurrentState)
+    async def restore_workspace_revision(revision_id: str) -> CurrentState:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            try:
+                restore_revision(active, revision_id)
+                record_restored_revision(active, revision_id)
+                return read_current_state(active)
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            except WorkspaceHistoryNotInitializedError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except WorkspaceHistoryError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.post("/api/launcher/open-folder", response_model=WorkspaceResponse)
     async def open_workspace() -> WorkspaceResponse | Response:
@@ -565,67 +797,219 @@ def create_app(
         await lock.acquire()
         cancel = cancel_event(active)
         cancel.clear()
+        released = False
+        run_snapshot: str | None = None
+        run_provenance_permitted = False
+        run_boundary_closed = False
+        reconciliation_context = None
+        is_reconciliation = False
+        deps: CourseAgentDeps | None = None
+        initial_presentation_paths: set[str] = set()
 
-        selected_model = resolve_selected_model(provider_path)
-        if selected_model is None:
-            configuration = read_provider_configuration(provider_path)
-            api_key = read_provider_api_key(provider_path)
-        else:
-            configuration, api_key = selected_model
-        if configuration is None or api_key is None:
-            lock.release()
-            raise HTTPException(
-                status_code=409,
-                detail="Configure a model provider before starting the Course Agent.",
+        def release_run_lock() -> None:
+            nonlocal released
+            if not released:
+                released = True
+                lock.release()
+
+        def ensure_run_boundary() -> None:
+            nonlocal run_snapshot, run_provenance_permitted
+            if run_snapshot is not None:
+                return
+            if not is_reconciliation:
+                run_provenance_permitted = require_canonical_authoring(
+                    active, allow_uninitialized=True
+                )
+            try:
+                run_snapshot = begin_run_boundary(active)
+            except WorkspaceHistoryNotInitializedError:
+                initialize_workspace_history(active)
+                run_snapshot = begin_run_boundary(active)
+
+        def protect_agent_mutation() -> None:
+            ensure_run_boundary()
+            if run_snapshot is None:
+                raise RuntimeError("Course Agent run boundary was unavailable")
+            mark_run_mutation(active, run_snapshot)
+
+        def checkpoint_agent_mutation() -> None:
+            nonlocal run_snapshot
+            if run_snapshot is None:
+                raise RuntimeError("Course Agent run boundary was unavailable")
+            run_snapshot = checkpoint_run_mutation(active, run_snapshot)
+
+        def close_run_boundary() -> None:
+            nonlocal run_boundary_closed
+            if run_snapshot is None or run_boundary_closed:
+                return
+            try:
+                finish_run_boundary(active, run_snapshot)
+                run_boundary_closed = True
+                if not is_reconciliation:
+                    if deps is None:
+                        raise RuntimeError("Course Agent state was unavailable at run completion")
+                    expected_entries: dict[str, bytes | None] = {}
+                    if deps.course_state.course is not None:
+                        expected_entries["course.yaml"] = serialize_course_plan(
+                            deps.course_state.course
+                        )
+                    if deps.course_state.sources or (active / "sources.yaml").exists():
+                        expected_entries["sources.yaml"] = sources_module.serialize_sources_index(
+                            sources_module.SourcesIndex(sources=deps.course_state.sources)
+                        )
+                    current_presentations = {
+                        f"presentations/{presentation.id}.yaml": serialize_presentation(
+                            presentation
+                        )
+                        for presentation in deps.course_state.presentations
+                    }
+                    expected_entries.update(current_presentations)
+                    for path in initial_presentation_paths - current_presentations.keys():
+                        expected_entries[path] = None
+                    if expected_entries:
+                        record_canonical_mutation(
+                            active, run_provenance_permitted, expected_entries
+                        )
+            except BaseException:
+                if not run_boundary_closed:
+                    abandon_run_boundary(active, run_snapshot)
+                raise
+
+        try:
+            body = await request.body()
+            props: dict[str, object] = {}
+            try:
+                body_json = json.loads(body) if body else {}
+                if isinstance(body_json, dict):
+                    forwarded = body_json.get("forwardedProps", {})
+                    if isinstance(forwarded, dict):
+                        props = cast(dict[str, object], forwarded)
+            except json.JSONDecodeError:
+                pass
+
+            requested_drift_id = props.get("reconciliationDriftId")
+            if requested_drift_id is not None:
+                if not isinstance(requested_drift_id, str):
+                    raise HTTPException(status_code=422, detail="Workspace Drift ID is invalid")
+                try:
+                    reconciliation_context = capture_reconciliation_context(active)
+                except ValueError as error:
+                    raise HTTPException(status_code=409, detail=str(error)) from error
+                except WorkspaceHistoryError as error:
+                    raise HTTPException(status_code=409, detail=str(error)) from error
+                if reconciliation_context.drift_id != requested_drift_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Workspace Drift changed; refresh Current State before reconciling.",
+                    )
+                is_reconciliation = True
+
+            selected_model = resolve_selected_model(provider_path)
+            if selected_model is None:
+                configuration = read_provider_configuration(provider_path)
+                api_key = read_provider_api_key(provider_path)
+            else:
+                configuration, api_key = selected_model
+            if configuration is None or api_key is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Configure a model provider before starting the Course Agent.",
+                )
+            try:
+                require_planning_capabilities(configuration.capabilities)
+            except ProviderCapabilityError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+
+            canonical_preconditions = None
+            if is_reconciliation:
+                plan = None
+                sources_index = None
+            else:
+                initial_paths = {"course.yaml", "sources.yaml"}
+                presentations_directory = active / "presentations"
+                if presentations_directory.is_dir() and not presentations_directory.is_symlink():
+                    for candidate in presentations_directory.glob("*.yaml"):
+                        if candidate.is_symlink() or not candidate.is_file():
+                            continue
+                        initial_paths.add(f"presentations/{candidate.name}")
+                        if len(initial_paths) > MAX_CANONICAL_FILES:
+                            raise CanonicalMutationConflict(
+                                "Too many canonical Course files to inspect"
+                            )
+                canonical_preconditions = capture_canonical_files(active, initial_paths)
+                try:
+                    plan = read_course_plan(active)
+                except InvalidCoursePlan as error:
+                    raise HTTPException(
+                        status_code=422, detail=f"course.yaml is invalid: {error}"
+                    ) from error
+                sources_index = sources_module.read_sources_index(active)
+            mode = (
+                AgentMode.GUIDED
+                if is_reconciliation
+                else AgentMode(props.get("mode", AgentMode.AUTONOMOUS))
             )
-        try:
-            require_planning_capabilities(configuration.capabilities)
-        except ProviderCapabilityError as error:
-            lock.release()
-            raise HTTPException(status_code=422, detail=str(error)) from error
 
-        try:
-            plan = read_course_plan(active)
-        except InvalidCoursePlan as error:
-            lock.release()
-            raise HTTPException(
-                status_code=422, detail=f"course.yaml is invalid: {error}"
-            ) from error
+            def apply_reconciliation_patch(
+                reconciliation: ReconciliationApplyRequest,
+            ) -> str:
+                return apply_reconciliation(active, reconciliation).id
 
-        sources_index = sources_module.read_sources_index(active)
+            loaded_presentations = list_presentations(active) if not is_reconciliation else []
+            initial_presentation_paths = {
+                f"presentations/{presentation.id}.yaml" for presentation in loaded_presentations
+            }
+            deps = CourseAgentDeps(
+                course_state=CourseAgentState(
+                    course=plan,
+                    sources=sources_index.sources if sources_index else [],
+                    presentations=loaded_presentations,
+                ),
+                workspace=active,
+                data_dir=data_dir,
+                cache_dir=cache_dir,
+                before_mutation=None if is_reconciliation else protect_agent_mutation,
+                after_mutation=None if is_reconciliation else checkpoint_agent_mutation,
+                create_revision=(
+                    None
+                    if is_reconciliation
+                    else lambda summary: (
+                        create_revision(
+                            active,
+                            RevisionCreateRequest(summary=summary),
+                            expected=canonical_preconditions,
+                        ).id
+                    )
+                ),
+                reconciliation_context=reconciliation_context,
+                apply_reconciliation=(apply_reconciliation_patch if is_reconciliation else None),
+                canonical_preconditions=canonical_preconditions,
+            )
+            history = read_chat_history(chat_path, active)
 
-        import json as _json_mod
+            async def persist_if_not_cancelled(result: object) -> None:
+                if not cancel.is_set():
+                    completed = cast(AgentRunResult[str], result)
+                    save_chat_history(chat_path, active, completed.all_messages())
 
-        body = await request.body()
-        props: dict[str, object] = {}
-        try:
-            body_json = _json_mod.loads(body) if body else {}
-            if isinstance(body_json, dict):
-                props = cast(dict[str, object], body_json.get("forwardedProps", {}))
-        except _json_mod.JSONDecodeError:
-            pass
-        mode = AgentMode(props.get("mode", AgentMode.AUTONOMOUS))
-
-        deps = CourseAgentDeps(
-            course_state=CourseAgentState(
-                course=plan,
-                sources=sources_index.sources if sources_index else [],
-                presentations=list_presentations(active),
-            ),
-            workspace=active,
-            data_dir=data_dir,
-            cache_dir=cache_dir,
-        )
-        history = read_chat_history(chat_path, active)
-
-        async def persist_if_not_cancelled(result: object) -> None:
-            if not cancel.is_set():
-                completed = cast(AgentRunResult[str], result)
-                save_chat_history(chat_path, active, completed.all_messages())
-
-        try:
             model = agent_model or build_provider_model(configuration, api_key)
-            active_agent = autonomous_agent if mode == AgentMode.AUTONOMOUS else course_agent
+            active_agent = (
+                reconciliation_agent
+                if is_reconciliation
+                else autonomous_agent
+                if mode == AgentMode.AUTONOMOUS
+                else course_agent
+            )
+            if plan is not None or is_reconciliation:
+                try:
+                    ensure_run_boundary()
+                except ValueError as error:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Current State cannot be protected before this run: {error}",
+                    ) from error
+                except WorkspaceHistoryError as error:
+                    raise HTTPException(status_code=409, detail=str(error)) from error
             response = await AGUIAdapter.dispatch_request(
                 request,
                 agent=active_agent,
@@ -637,28 +1021,154 @@ def create_app(
                 on_complete=persist_if_not_cancelled,
                 allowed_file_url_schemes=frozenset(),
             )
-        except Exception:
-            lock.release()
+        except BaseException:
+            try:
+                close_run_boundary()
+            finally:
+                release_run_lock()
             raise
 
-        async def release_lock() -> None:
-            lock.release()
+        try:
+            previous_background = response.background
+        except BaseException:
+            try:
+                close_run_boundary()
+            finally:
+                release_run_lock()
+            raise
+        finalized = False
 
-        response.background = BackgroundTask(release_lock)
+        async def finalize_response(termination_confirmed: bool = True) -> None:
+            nonlocal finalized
+            if finalized:
+                return
+            finalized = True
+            if not termination_confirmed:
+                return
+            try:
+                try:
+                    close_run_boundary()
+                finally:
+                    if previous_background is not None:
+                        await previous_background()
+            finally:
+                release_run_lock()
+
+        try:
+            if isinstance(response, StreamingResponse):
+                body_iterator = response.body_iterator
+
+                async def guarded_body_iterator():
+                    iterator = None
+                    next_chunk: asyncio.Future[object] | None = None
+                    cancellation: asyncio.Task[bool] | None = None
+                    iterator_closed = False
+                    termination_confirmed = True
+
+                    async def cancel_and_wait(task: asyncio.Future[object]) -> bool:
+                        def consume_late_result(completed: asyncio.Future[object]) -> None:
+                            with suppress(BaseException):
+                                completed.result()
+
+                        task.cancel()
+                        try:
+                            done, _pending = await asyncio.wait(
+                                {task},
+                                timeout=STREAM_TERMINATION_CONFIRMATION_SECONDS,
+                            )
+                        except BaseException:
+                            task.add_done_callback(consume_late_result)
+                            return False
+                        if task not in done:
+                            task.add_done_callback(consume_late_result)
+                            return False
+                        with suppress(BaseException):
+                            task.result()
+                        return True
+
+                    async def close_underlying() -> bool:
+                        nonlocal iterator_closed
+                        if iterator_closed:
+                            return True
+                        if iterator is None:
+                            return False
+                        close_iterator = getattr(iterator, "aclose", None)
+                        if close_iterator is None:
+                            return False
+                        try:
+                            close = cast(Callable[[], Awaitable[None]], close_iterator)
+                            await close()
+                        except BaseException:
+                            return False
+                        iterator_closed = True
+                        return True
+
+                    try:
+                        iterator = body_iterator.__aiter__()
+                        while True:
+                            next_chunk = asyncio.ensure_future(anext(iterator))
+                            cancellation = asyncio.create_task(cancel.wait())
+                            try:
+                                done, _pending = await asyncio.wait(
+                                    {next_chunk, cancellation},
+                                    return_when=asyncio.FIRST_COMPLETED,
+                                )
+                            except BaseException:
+                                if not await cancel_and_wait(next_chunk):
+                                    termination_confirmed = False
+                                raise
+                            if cancellation in done:
+                                if not await cancel_and_wait(next_chunk):
+                                    termination_confirmed = False
+                                break
+                            cancellation.cancel()
+                            with suppress(asyncio.CancelledError):
+                                await cancellation
+                            try:
+                                yield next_chunk.result()
+                            except StopAsyncIteration:
+                                break
+                            finally:
+                                next_chunk = None
+                    finally:
+                        if cancellation is not None and not cancellation.done():
+                            cancellation.cancel()
+                            with suppress(BaseException):
+                                await cancellation
+                        if (
+                            next_chunk is not None
+                            and not next_chunk.done()
+                            and not await cancel_and_wait(next_chunk)
+                        ):
+                            termination_confirmed = False
+                        if not await close_underlying():
+                            termination_confirmed = False
+                        await finalize_response(termination_confirmed)
+
+                response.body_iterator = guarded_body_iterator()
+            response.background = BackgroundTask(finalize_response)
+        except BaseException:
+            try:
+                close_run_boundary()
+            finally:
+                release_run_lock()
+            raise
         return response
 
     @app.post("/api/course", response_model=CoursePlan, status_code=201)
     async def create_course(course_input: CoursePlanInput) -> CoursePlan:
         active = require_workspace()
         async with exclusive_mutation(active):
-            if (active / "course.yaml").exists():
+            expected_course = capture_canonical_file(active, "course.yaml")
+            provenance_permitted = require_canonical_authoring(active, allow_uninitialized=True)
+            if expected_course.content is not None:
                 raise HTTPException(
                     status_code=409, detail="This Workspace already contains a Course"
                 )
             plan = create_course_plan(course_input)
             try:
                 initialize_workspace_history(active)
-                create_course_plan_file(active, plan)
+                create_course_plan_file(active, plan, expected=expected_course)
             except FileExistsError as error:
                 raise HTTPException(
                     status_code=409, detail="This Workspace already contains a Course"
@@ -667,12 +1177,18 @@ def create_app(
                 raise HTTPException(
                     status_code=500, detail="Course history could not be initialized"
                 ) from error
+            record_canonical_mutation(
+                active, provenance_permitted, {"course.yaml": serialize_course_plan(plan)}
+            )
             return plan
 
     @app.patch("/api/course/lectures/{lecture_id}", response_model=CoursePlan)
     async def rename_lecture(lecture_id: str, rename: LectureRename) -> CoursePlan:
-        active, plan = require_course_plan()
+        active = require_workspace()
         async with exclusive_mutation(active):
+            expected_course = capture_canonical_file(active, "course.yaml")
+            plan = read_required_course_plan(active)
+            provenance_permitted = require_canonical_authoring(active)
             if not rename.title.strip():
                 raise HTTPException(status_code=422, detail="Lecture title cannot be empty")
             if all(lecture.id != lecture_id for lecture in plan.lectures):
@@ -687,13 +1203,19 @@ def create_app(
                     ]
                 }
             )
-            write_course_plan(active, updated)
+            write_course_plan(active, updated, expected=expected_course)
+            record_canonical_mutation(
+                active, provenance_permitted, {"course.yaml": serialize_course_plan(updated)}
+            )
             return updated
 
     @app.put("/api/course/lectures/order", response_model=CoursePlan)
     async def reorder_lectures(order: LectureOrder) -> CoursePlan:
-        active, plan = require_course_plan()
+        active = require_workspace()
         async with exclusive_mutation(active):
+            expected_course = capture_canonical_file(active, "course.yaml")
+            plan = read_required_course_plan(active)
+            provenance_permitted = require_canonical_authoring(active)
             current_ids = [lecture.id for lecture in plan.lectures]
             if len(order.lecture_ids) != len(current_ids) or set(order.lecture_ids) != set(
                 current_ids
@@ -706,15 +1228,20 @@ def create_app(
             updated = plan.model_copy(
                 update={"lectures": [lectures_by_id[identity] for identity in order.lecture_ids]}
             )
-            write_course_plan(active, updated)
+            write_course_plan(active, updated, expected=expected_course)
+            record_canonical_mutation(
+                active, provenance_permitted, {"course.yaml": serialize_course_plan(updated)}
+            )
             return updated
 
     @app.patch("/api/course/profile", response_model=CoursePlan)
     async def api_pin_template_profile(pin: TemplateProfilePin) -> CoursePlan:
         template_profile_id = pin.template_profile_id
         template_profile_version = pin.template_profile_version
-        active, plan = require_course_plan()
+        active = require_workspace()
         async with exclusive_mutation(active):
+            expected_course = capture_canonical_file(active, "course.yaml")
+            plan = read_required_course_plan(active)
             if template_profile_id is not None:
                 try:
                     resolved = tpl.resolve_profile(
@@ -730,13 +1257,17 @@ def create_app(
                     status_code=422,
                     detail="A Template Profile version requires a Template Profile ID",
                 )
+            provenance_permitted = require_canonical_authoring(active)
             updated = plan.model_copy(
                 update={
                     "template_profile_id": template_profile_id,
                     "template_profile_version": template_profile_version,
                 }
             )
-            write_course_plan(active, updated)
+            write_course_plan(active, updated, expected=expected_course)
+            record_canonical_mutation(
+                active, provenance_permitted, {"course.yaml": serialize_course_plan(updated)}
+            )
             return updated
 
     class PresentationSummary(BaseModel):
@@ -842,11 +1373,12 @@ def create_app(
         from course_harness.presentation import (
             SLIDE_CLASSES_BY_LAYOUT,
             fill_slide_layout_fields,
-            write_presentation,
         )
 
-        active, plan = require_course_plan()
+        active = require_workspace()
         async with exclusive_mutation(active):
+            expected_course = capture_canonical_file(active, "course.yaml")
+            plan = read_required_course_plan(active)
             if all(lec.id != lecture_id for lec in plan.lectures):
                 raise HTTPException(status_code=404, detail="Lecture was not found")
 
@@ -883,8 +1415,6 @@ def create_app(
                 lecture_id=lecture_id,
                 slides=slides,
             )
-            write_presentation(active, presentation)
-
             updated_lectures = [
                 lec.model_copy(update={"presentation_id": presentation_id})
                 if lec.id == lecture_id
@@ -892,36 +1422,97 @@ def create_app(
                 for lec in plan.lectures
             ]
             updated_plan = plan.model_copy(update={"lectures": updated_lectures})
-            write_course_plan(active, updated_plan)
+            presentation_path = f"presentations/{presentation.id}.yaml"
+            expected_presentation = capture_canonical_file(active, presentation_path)
+            provenance_permitted = require_canonical_authoring(active)
+            apply_canonical_mutation(
+                active,
+                expected={
+                    "course.yaml": expected_course,
+                    presentation_path: expected_presentation,
+                },
+                updates={
+                    "course.yaml": serialize_course_plan(updated_plan),
+                    presentation_path: serialize_presentation(presentation),
+                },
+            )
+            record_canonical_mutation(
+                active,
+                provenance_permitted,
+                {
+                    "course.yaml": serialize_course_plan(updated_plan),
+                    f"presentations/{presentation.id}.yaml": serialize_presentation(presentation),
+                },
+            )
 
             return presentation
 
     @app.delete("/api/presentations/{lecture_id}", status_code=204)
     async def api_delete_presentation(lecture_id: str) -> Response:
-        active, plan = require_course_plan()
+        active = require_workspace()
         async with exclusive_mutation(active):
+            expected_course = capture_canonical_file(active, "course.yaml")
+            plan = read_required_course_plan(active)
+            planned_lecture = next((lec for lec in plan.lectures if lec.id == lecture_id), None)
+            expected_presentation = (
+                capture_canonical_file(
+                    active, f"presentations/{planned_lecture.presentation_id}.yaml"
+                )
+                if planned_lecture is not None and planned_lecture.presentation_id is not None
+                else None
+            )
             pres = read_presentation_for_lecture(active, lecture_id)
             if pres is None:
                 raise HTTPException(
                     status_code=404,
                     detail="No Presentation exists for this lecture",
                 )
-            delete_presentation_file(active, pres.id)
-
+            provenance_permitted = require_canonical_authoring(active)
             updated_lectures = [
                 lec.model_copy(update={"presentation_id": None}) if lec.id == lecture_id else lec
                 for lec in plan.lectures
             ]
             updated_plan = plan.model_copy(update={"lectures": updated_lectures})
-            write_course_plan(active, updated_plan)
+            presentation_path = f"presentations/{pres.id}.yaml"
+            apply_canonical_mutation(
+                active,
+                expected={
+                    "course.yaml": expected_course,
+                    presentation_path: expected_presentation
+                    or capture_canonical_file(active, presentation_path),
+                },
+                updates={
+                    "course.yaml": serialize_course_plan(updated_plan),
+                    presentation_path: None,
+                },
+            )
+            record_canonical_mutation(
+                active,
+                provenance_permitted,
+                {
+                    "course.yaml": serialize_course_plan(updated_plan),
+                    f"presentations/{pres.id}.yaml": None,
+                },
+            )
             return Response(status_code=204)
 
     @app.patch("/api/presentations/{lecture_id}/slides/{slide_id}", response_model=Presentation)
     async def api_patch_slide(
         lecture_id: str, slide_id: str, request: SlidePatchRequest
     ) -> Presentation:
-        active, plan = require_course_plan()
+        active = require_workspace()
         async with exclusive_mutation(active):
+            current_plan = read_required_course_plan(active)
+            current_lecture = next(
+                (lecture for lecture in current_plan.lectures if lecture.id == lecture_id), None
+            )
+            expected_presentation = (
+                capture_canonical_file(
+                    active, f"presentations/{current_lecture.presentation_id}.yaml"
+                )
+                if current_lecture is not None and current_lecture.presentation_id is not None
+                else None
+            )
             pres = read_presentation_for_lecture(active, lecture_id)
             if pres is None:
                 raise HTTPException(
@@ -987,13 +1578,35 @@ def create_app(
             else:
                 reordered = [s if s.id != slide_id else updated_slide for s in pres.slides]
             updated = pres.model_copy(update={"slides": reordered})
-            write_presentation(active, updated)
+            presentation_path = f"presentations/{updated.id}.yaml"
+            provenance_permitted = require_canonical_authoring(active)
+            write_presentation(
+                active,
+                updated,
+                expected=expected_presentation or capture_canonical_file(active, presentation_path),
+            )
+            record_canonical_mutation(
+                active,
+                provenance_permitted,
+                {f"presentations/{updated.id}.yaml": serialize_presentation(updated)},
+            )
             return updated
 
     @app.put("/api/presentations/{lecture_id}/slides/order", response_model=Presentation)
     async def api_reorder_slides(lecture_id: str, request: SlideOrderRequest) -> Presentation:
-        active, plan = require_course_plan()
+        active = require_workspace()
         async with exclusive_mutation(active):
+            current_plan = read_required_course_plan(active)
+            current_lecture = next(
+                (lecture for lecture in current_plan.lectures if lecture.id == lecture_id), None
+            )
+            expected_presentation = (
+                capture_canonical_file(
+                    active, f"presentations/{current_lecture.presentation_id}.yaml"
+                )
+                if current_lecture is not None and current_lecture.presentation_id is not None
+                else None
+            )
             pres = read_presentation_for_lecture(active, lecture_id)
             if pres is None:
                 raise HTTPException(
@@ -1004,7 +1617,18 @@ def create_app(
                 updated = reorder_slides(pres, request.slide_ids)
             except ValueError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
-            write_presentation(active, updated)
+            presentation_path = f"presentations/{updated.id}.yaml"
+            provenance_permitted = require_canonical_authoring(active)
+            write_presentation(
+                active,
+                updated,
+                expected=expected_presentation or capture_canonical_file(active, presentation_path),
+            )
+            record_canonical_mutation(
+                active,
+                provenance_permitted,
+                {f"presentations/{updated.id}.yaml": serialize_presentation(updated)},
+            )
             return updated
 
     @app.get("/api/presentations/{lecture_id}/export")
@@ -1069,13 +1693,37 @@ def create_app(
     ) -> sources_module.Source:
         active = require_workspace()
         async with exclusive_mutation(active):
+            expected_sources = capture_canonical_file(active, "sources.yaml")
+            before_index = (
+                sources_module.read_sources_index(active) or sources_module.SourcesIndex()
+            )
+            provenance_permitted = require_canonical_authoring(active, allow_uninitialized=True)
+            if not (active / ".git").exists():
+                try:
+                    initialize_workspace_history(active)
+                except subprocess.CalledProcessError as error:
+                    raise HTTPException(
+                        status_code=500, detail="Course history could not be initialized"
+                    ) from error
             try:
-                return sources_module.admit_source(
+                source = sources_module.admit_source(
                     active,
                     data_dir,
                     request.resource_id,
                     label=request.label,
+                    expected=expected_sources,
                 )
+                expected_index = before_index.model_copy(
+                    update={"sources": [*before_index.sources, source]}
+                )
+                record_canonical_mutation(
+                    active,
+                    provenance_permitted,
+                    {"sources.yaml": sources_module.serialize_sources_index(expected_index)},
+                )
+                return source
+            except CanonicalMutationConflict as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
             except ValueError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -1094,14 +1742,21 @@ def create_app(
     async def remove_source(source_id: str) -> Response:
         active = require_workspace()
         async with exclusive_mutation(active):
+            expected_sources = capture_canonical_file(active, "sources.yaml")
             index = sources_module.read_sources_index(active)
             if index is None:
                 raise HTTPException(status_code=404, detail="Source was not found")
             remaining = [s for s in index.sources if s.id != source_id]
             if len(remaining) == len(index.sources):
                 raise HTTPException(status_code=404, detail="Source was not found")
+            provenance_permitted = require_canonical_authoring(active)
             updated = sources_module.SourcesIndex(version=index.version, sources=remaining)
-            sources_module.write_sources_index(active, updated)
+            sources_module.write_sources_index(active, updated, expected=expected_sources)
+            record_canonical_mutation(
+                active,
+                provenance_permitted,
+                {"sources.yaml": sources_module.serialize_sources_index(updated)},
+            )
             return Response(status_code=204)
 
     @app.post(
@@ -1345,7 +2000,30 @@ def create_app(
         active = require_workspace()
         async with exclusive_mutation(active):
             try:
-                return sources_module.adopt_source_version(active, data_dir, source_id)
+                expected_sources = capture_canonical_file(active, "sources.yaml")
+                before_index = sources_module.read_sources_index(active)
+                provenance_permitted = require_canonical_authoring(active)
+                source = sources_module.adopt_source_version(
+                    active, data_dir, source_id, expected=expected_sources
+                )
+                if before_index is None:
+                    raise ValueError("No Sources exist in this Workspace.")
+                expected_index = before_index.model_copy(
+                    update={
+                        "sources": [
+                            source if item.id == source_id else item
+                            for item in before_index.sources
+                        ]
+                    }
+                )
+                record_canonical_mutation(
+                    active,
+                    provenance_permitted,
+                    {"sources.yaml": sources_module.serialize_sources_index(expected_index)},
+                )
+                return source
+            except CanonicalMutationConflict as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
             except ValueError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
 

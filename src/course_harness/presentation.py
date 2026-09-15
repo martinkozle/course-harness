@@ -6,6 +6,8 @@ from uuid import uuid4
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from course_harness.canonical_mutation import CanonicalFile, apply_canonical_mutation
+
 
 class SlideCitation(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -244,9 +246,7 @@ def _write_temporary_presentation(workspace: Path, presentation: Presentation) -
     directory = presentations_dir(workspace)
     directory.mkdir(parents=True, exist_ok=True)
     temporary_path = directory / f".{presentation.id}-{uuid4().hex}.yaml.tmp"
-    serialized = yaml.safe_dump(
-        presentation.model_dump(mode="json"), allow_unicode=True, sort_keys=False, width=100
-    )
+    serialized = serialize_presentation(presentation).decode("utf-8")
     with temporary_path.open("x", encoding="utf-8") as stream:
         stream.write(serialized)
         stream.flush()
@@ -254,7 +254,23 @@ def _write_temporary_presentation(workspace: Path, presentation: Presentation) -
     return temporary_path
 
 
-def write_presentation(workspace: Path, presentation: Presentation) -> None:
+def serialize_presentation(presentation: Presentation) -> bytes:
+    """Return the exact canonical bytes written for a Presentation."""
+    return yaml.safe_dump(
+        presentation.model_dump(mode="json"), allow_unicode=True, sort_keys=False, width=100
+    ).encode("utf-8")
+
+
+def write_presentation(
+    workspace: Path, presentation: Presentation, *, expected: CanonicalFile | None = None
+) -> None:
+    if expected is not None:
+        apply_canonical_mutation(
+            workspace,
+            expected={f"presentations/{presentation.id}.yaml": expected},
+            updates={f"presentations/{presentation.id}.yaml": serialize_presentation(presentation)},
+        )
+        return
     target = presentations_dir(workspace) / f"{presentation.id}.yaml"
     temporary_path = _write_temporary_presentation(workspace, presentation)
     try:
@@ -263,8 +279,19 @@ def write_presentation(workspace: Path, presentation: Presentation) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
-def delete_presentation_file(workspace: Path, presentation_id: str) -> bool:
+def delete_presentation_file(
+    workspace: Path, presentation_id: str, *, expected: CanonicalFile | None = None
+) -> bool:
     path = presentations_dir(workspace) / f"{presentation_id}.yaml"
+    if expected is not None:
+        if expected.content is None:
+            return False
+        apply_canonical_mutation(
+            workspace,
+            expected={f"presentations/{presentation_id}.yaml": expected},
+            updates={f"presentations/{presentation_id}.yaml": None},
+        )
+        return True
     if not path.exists():
         return False
     path.unlink()

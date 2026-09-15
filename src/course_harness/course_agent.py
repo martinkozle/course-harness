@@ -1,5 +1,6 @@
 import enum
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,6 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent, RunContext, ToolReturn
 from pydantic_ai.models import Model
 
+from course_harness.canonical_mutation import (
+    CanonicalFile,
+    apply_canonical_mutation,
+    capture_canonical_file,
+)
 from course_harness.course_plan import (
     CoursePlan,
     CoursePlanInput,
@@ -17,6 +23,7 @@ from course_harness.course_plan import (
     create_course_plan_file,
     initialize_workspace_history,
     read_course_plan,
+    serialize_course_plan,
     write_course_plan,
 )
 from course_harness.presentation import (
@@ -24,14 +31,19 @@ from course_harness.presentation import (
     Presentation,
     Slide,
     SlideCitation,
-    delete_presentation_file,
     fill_slide_layout_fields,
     list_presentations,
     read_presentation_for_lecture,
+    serialize_presentation,
     slide_by_id,
     write_presentation,
 )
-from course_harness.sources import Source, SourcesIndex
+from course_harness.sources import Source, SourcesIndex, serialize_sources_index
+from course_harness.workspace_history import (
+    ReconciliationApplyRequest,
+    ReconciliationContext,
+    ReconciliationFile,
+)
 
 
 class AgentMode(enum.StrEnum):
@@ -103,9 +115,38 @@ class CourseAgentDeps:
     workspace: Path
     data_dir: Path
     cache_dir: Path
+    before_mutation: Callable[[], None] | None = None
+    after_mutation: Callable[[], None] | None = None
+    create_revision: Callable[[str], str] | None = None
+    reconciliation_context: ReconciliationContext | None = None
+    apply_reconciliation: Callable[[ReconciliationApplyRequest], str] | None = None
+    # Captured when a run begins.  Agent state is a snapshot, so a canonical
+    # mutation may only replace the exact file it was based on.
+    canonical_preconditions: dict[str, CanonicalFile] | None = None
 
 
-def apply_course_plan_command(workspace: Path, command: ReplaceCoursePlanCommand) -> CoursePlan:
+def _agent_precondition(deps: CourseAgentDeps, path: str) -> CanonicalFile:
+    if deps.canonical_preconditions is not None and path in deps.canonical_preconditions:
+        return deps.canonical_preconditions[path]
+    return capture_canonical_file(deps.workspace, path)
+
+
+def _record_agent_output(deps: CourseAgentDeps, path: str, content: bytes | None) -> None:
+    if deps.canonical_preconditions is not None:
+        deps.canonical_preconditions[path] = (
+            CanonicalFile(content=content, mode=0o644)
+            if content is not None
+            else CanonicalFile.missing()
+        )
+
+
+def apply_course_plan_command(
+    workspace: Path,
+    command: ReplaceCoursePlanCommand,
+    *,
+    expected: CanonicalFile | None = None,
+) -> CoursePlan:
+    expected = expected or capture_canonical_file(workspace, "course.yaml")
     existing = read_course_plan(workspace)
     draft = create_course_plan(
         CoursePlanInput(
@@ -126,7 +167,7 @@ def apply_course_plan_command(workspace: Path, command: ReplaceCoursePlanCommand
     if existing is None:
         try:
             initialize_workspace_history(workspace)
-            create_course_plan_file(workspace, draft)
+            create_course_plan_file(workspace, draft, expected=expected)
         except subprocess.CalledProcessError:
             raise RuntimeError("Course history could not be initialized") from None
         return draft
@@ -172,7 +213,7 @@ def apply_course_plan_command(workspace: Path, command: ReplaceCoursePlanCommand
         template_profile_id=existing.template_profile_id,
         template_profile_version=existing.template_profile_version,
     )
-    write_course_plan(workspace, updated)
+    write_course_plan(workspace, updated, expected=expected)
     return updated
 
 
@@ -180,6 +221,8 @@ def apply_presentation_command(
     workspace: Path,
     command: ReplacePresentationCommand,
     course_plan: CoursePlan,
+    *,
+    expected: dict[str, CanonicalFile] | None = None,
 ) -> Presentation:
     from uuid import uuid4  # noqa: PLC0415
 
@@ -242,9 +285,17 @@ def apply_presentation_command(
                 new_slides.append(existing_slide)
 
     presentation.slides = new_slides
-    write_presentation(workspace, presentation)
+
+    presentation_path = f"presentations/{presentation.id}.yaml"
+    preconditions = expected or {}
+    presentation_expected = preconditions.get(presentation_path) or capture_canonical_file(
+        workspace, presentation_path
+    )
 
     if lecture.presentation_id != presentation.id:
+        course_expected = preconditions.get("course.yaml") or capture_canonical_file(
+            workspace, "course.yaml"
+        )
         updated_lectures = [
             lec.model_copy(update={"presentation_id": presentation.id})
             if lec.id == lecture.id
@@ -252,7 +303,19 @@ def apply_presentation_command(
             for lec in course_plan.lectures
         ]
         updated_plan = course_plan.model_copy(update={"lectures": updated_lectures})
-        write_course_plan(workspace, updated_plan)
+        apply_canonical_mutation(
+            workspace,
+            expected={
+                presentation_path: presentation_expected,
+                "course.yaml": course_expected,
+            },
+            updates={
+                presentation_path: serialize_presentation(presentation),
+                "course.yaml": serialize_course_plan(updated_plan),
+            },
+        )
+    else:
+        write_presentation(workspace, presentation, expected=presentation_expected)
 
     return presentation
 
@@ -262,6 +325,14 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
 
     def json_str(data: object) -> str:
         return _json_mod_inner.dumps(data, indent=2)
+
+    def protect_mutation(ctx: RunContext[CourseAgentDeps]) -> None:
+        if ctx.deps.before_mutation is not None:
+            ctx.deps.before_mutation()
+
+    def confirm_mutation(ctx: RunContext[CourseAgentDeps]) -> None:
+        if ctx.deps.after_mutation is not None:
+            ctx.deps.after_mutation()
 
     mutation_guidance = (
         "Propose every authoritative change with replace_course_plan; the Course Author must "
@@ -281,7 +352,9 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             "ambiguous or would discard substantial existing authored work. "
             "Preserve existing Lecture IDs supplied in shared state when revising a Lecture. "
             "Never set replace_all_lectures unless the Course Author explicitly asks to replace "
-            "the entire Lecture spine. Explain the result clearly and concisely.\n\n"
+            "the entire Lecture spine. Create a Course Revision only at a meaningful milestone, "
+            "with a concise summary of the Course evolution; do not create one after every tool "
+            "call. Explain the result clearly and concisely.\n\n"
             "You have access to admitted Course Sources. Use list_sources to see what is "
             "available, search_sources to find relevant content, and read_source_content to "
             "examine specific material. Reference Sources by their source_id when citing "
@@ -338,8 +411,19 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         ctx: RunContext[CourseAgentDeps], command: ReplaceCoursePlanCommand
     ) -> ToolReturn:
         """Replace the Course Plan through one validated application command."""
-        plan = apply_course_plan_command(ctx.deps.workspace, command)
-        ctx.deps.course_state = CourseAgentState(course=plan, sources=ctx.deps.course_state.sources)
+        protect_mutation(ctx)
+        plan = apply_course_plan_command(
+            ctx.deps.workspace,
+            command,
+            expected=_agent_precondition(ctx.deps, "course.yaml"),
+        )
+        confirm_mutation(ctx)
+        _record_agent_output(ctx.deps, "course.yaml", serialize_course_plan(plan))
+        ctx.deps.course_state = CourseAgentState(
+            course=plan,
+            sources=ctx.deps.course_state.sources,
+            presentations=ctx.deps.course_state.presentations,
+        )
         return ToolReturn(
             return_value="The validated Course Plan was saved.",
             metadata=[
@@ -358,6 +442,17 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
                 ),
             ],
         )
+
+    @agent.tool(requires_approval=requires_approval)
+    async def create_course_revision(ctx: RunContext[CourseAgentDeps], summary: str) -> ToolReturn:
+        """Create one meaningful Course Revision with a concise summary."""
+        if ctx.deps.create_revision is None:
+            return ToolReturn(return_value="Course Revision service is unavailable.")
+        try:
+            revision_id = ctx.deps.create_revision(summary)
+        except (RuntimeError, ValueError) as error:
+            return ToolReturn(return_value=str(error))
+        return ToolReturn(return_value=f"Created Course Revision {revision_id}.")
 
     @agent.tool
     async def list_sources(ctx: RunContext[CourseAgentDeps]) -> ToolReturn:
@@ -496,18 +591,27 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         from course_harness.sources import admit_source  # noqa: PLC0415
 
         try:
+            protect_mutation(ctx)
             source = admit_source(
                 ctx.deps.workspace,
                 ctx.deps.data_dir,
                 resource_id,
                 label=label,
+                expected=_agent_precondition(ctx.deps, "sources.yaml"),
             )
+            confirm_mutation(ctx)
         except ValueError as error:
             return ToolReturn(return_value=f"Could not admit source: {error}")
 
         ctx.deps.course_state = CourseAgentState(
             course=ctx.deps.course_state.course,
             sources=[*ctx.deps.course_state.sources, source],
+            presentations=ctx.deps.course_state.presentations,
+        )
+        _record_agent_output(
+            ctx.deps,
+            "sources.yaml",
+            serialize_sources_index(SourcesIndex(sources=ctx.deps.course_state.sources)),
         )
         return ToolReturn(
             return_value=f"Source '{source.label}' admitted as {source.id}.",
@@ -636,7 +740,15 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
                     for s in pres.slides
                 ]
                 updated = pres.model_copy(update={"slides": updated_slides})
-                write_presentation(ctx.deps.workspace, updated)
+                protect_mutation(ctx)
+                presentation_path = f"presentations/{updated.id}.yaml"
+                write_presentation(
+                    ctx.deps.workspace,
+                    updated,
+                    expected=_agent_precondition(ctx.deps, presentation_path),
+                )
+                confirm_mutation(ctx)
+                _record_agent_output(ctx.deps, presentation_path, serialize_presentation(updated))
                 ctx.deps.course_state = CourseAgentState(
                     course=ctx.deps.course_state.course,
                     sources=ctx.deps.course_state.sources,
@@ -679,7 +791,15 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             updated = reorder(pres, slide_ids)
         except ValueError as error:
             return ToolReturn(return_value=str(error))
-        write_presentation(ctx.deps.workspace, updated)
+        protect_mutation(ctx)
+        presentation_path = f"presentations/{updated.id}.yaml"
+        write_presentation(
+            ctx.deps.workspace,
+            updated,
+            expected=_agent_precondition(ctx.deps, presentation_path),
+        )
+        confirm_mutation(ctx)
+        _record_agent_output(ctx.deps, presentation_path, serialize_presentation(updated))
         ctx.deps.course_state = CourseAgentState(
             course=ctx.deps.course_state.course,
             sources=ctx.deps.course_state.sources,
@@ -717,9 +837,14 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         if ctx.deps.course_state.course is None:
             return ToolReturn(return_value="Cannot create a Presentation without a Course Plan.")
         try:
+            protect_mutation(ctx)
             pres = apply_presentation_command(
-                ctx.deps.workspace, command, ctx.deps.course_state.course
+                ctx.deps.workspace,
+                command,
+                ctx.deps.course_state.course,
+                expected=ctx.deps.canonical_preconditions,
             )
+            confirm_mutation(ctx)
         except ValueError as error:
             return ToolReturn(return_value=str(error))
 
@@ -729,6 +854,11 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             sources=ctx.deps.course_state.sources,
             presentations=list_presentations(ctx.deps.workspace),
         )
+        _record_agent_output(
+            ctx.deps, f"presentations/{pres.id}.yaml", serialize_presentation(pres)
+        )
+        if updated_plan is not None:
+            _record_agent_output(ctx.deps, "course.yaml", serialize_course_plan(updated_plan))
         return ToolReturn(
             return_value=(
                 f"Presentation for lecture {command.lecture_id} saved with "
@@ -761,7 +891,7 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         if ctx.deps.course_state.course is None:
             return ToolReturn(return_value="Cannot delete: no active Course Plan.")
 
-        delete_presentation_file(ctx.deps.workspace, pres.id)
+        protect_mutation(ctx)
         updated_lectures = [
             lec.model_copy(update={"presentation_id": None}) if lec.id == lecture_id else lec
             for lec in ctx.deps.course_state.course.lectures
@@ -769,7 +899,21 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         updated_plan = ctx.deps.course_state.course.model_copy(
             update={"lectures": updated_lectures}
         )
-        write_course_plan(ctx.deps.workspace, updated_plan)
+        presentation_path = f"presentations/{pres.id}.yaml"
+        apply_canonical_mutation(
+            ctx.deps.workspace,
+            expected={
+                presentation_path: _agent_precondition(ctx.deps, presentation_path),
+                "course.yaml": _agent_precondition(ctx.deps, "course.yaml"),
+            },
+            updates={
+                presentation_path: None,
+                "course.yaml": serialize_course_plan(updated_plan),
+            },
+        )
+        confirm_mutation(ctx)
+        _record_agent_output(ctx.deps, presentation_path, None)
+        _record_agent_output(ctx.deps, "course.yaml", serialize_course_plan(updated_plan))
         ctx.deps.course_state = CourseAgentState(
             course=updated_plan,
             sources=ctx.deps.course_state.sources,
@@ -803,6 +947,69 @@ def create_course_agent() -> Agent[CourseAgentDeps, str]:
 
 def create_autonomous_course_agent() -> Agent[CourseAgentDeps, str]:
     return _build_course_agent(requires_approval=False)
+
+
+def create_reconciliation_agent() -> Agent[CourseAgentDeps, str]:
+    """Build the isolated, approval-gated agent for repairing Workspace Drift."""
+    agent = Agent(
+        deps_type=CourseAgentDeps,
+        name="workspace-reconciliation-agent",
+        instructions=(
+            "You reconcile inconsistent canonical Course Workspace state. You receive a "
+            "bounded server-supplied snapshot of canonical files and its structural findings. "
+            "Propose one minimal repair using apply_reconciliation_patch. It is always reviewed "
+            "by the Course Author before it is applied. Only include canonical paths from the "
+            "supplied current snapshot or its missing-path list. Trusted baseline files may be "
+            "restored when supplied; use content null only to remove a supplied current file. "
+            "Give the repair a concise, meaningful Course Revision summary. Do not use any "
+            "other authoring operation or claim that the Workspace is repaired before approval."
+        ),
+    )
+
+    @agent.instructions
+    async def reconciliation_context(ctx: RunContext[CourseAgentDeps]) -> str:
+        context = ctx.deps.reconciliation_context
+        if context is None:
+            return "No Workspace Drift context is available."
+        files = [{"path": entry.path, "content": entry.content} for entry in context.files]
+        baseline_files = [
+            {"path": entry.path, "content": entry.content} for entry in context.baseline_files
+        ]
+        findings = "\n".join(f"- {finding}" for finding in context.findings)
+        return (
+            "Reconcile exactly this Workspace Drift identity: "
+            f"{context.drift_id}\n"
+            f"Structural findings:\n{findings}\n"
+            "Canonical file snapshot:\n"
+            f"{files!r}\n"
+            f"Missing canonical paths: {context.missing_paths!r}\n"
+            f"Trusted baseline content for recoverable missing paths: {baseline_files!r}"
+        )
+
+    @agent.tool(requires_approval=True)
+    async def apply_reconciliation_patch(
+        ctx: RunContext[CourseAgentDeps],
+        summary: str,
+        entries: list[ReconciliationFile],
+    ) -> ToolReturn:
+        """Propose a bounded canonical-file patch that resolves the supplied Workspace Drift."""
+        context = ctx.deps.reconciliation_context
+        apply = ctx.deps.apply_reconciliation
+        if context is None or apply is None:
+            return ToolReturn(return_value="Workspace reconciliation is unavailable.")
+        try:
+            revision_id = apply(
+                ReconciliationApplyRequest(
+                    drift_id=context.drift_id,
+                    summary=summary,
+                    entries=entries,
+                )
+            )
+        except (RuntimeError, ValueError) as error:
+            return ToolReturn(return_value=str(error))
+        return ToolReturn(return_value=f"Applied reconciled Course Revision {revision_id}.")
+
+    return agent
 
 
 def build_provider_model(configuration: object, api_key: str) -> Model:
