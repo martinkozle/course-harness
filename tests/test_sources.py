@@ -244,8 +244,8 @@ async def test_read_source_content_coordinates(tmp_path: Path) -> None:
             params={"line_start": 0, "line_end": 3},
         )
     assert content_resp.status_code == 200
-    lines = content_resp.text.strip().split("\n")
-    assert len(lines) <= 3
+    lines = content_resp.text.split("\n")
+    assert len(lines) == 4
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,7 @@
 import os
+import stat
 import uuid
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -13,13 +15,15 @@ from course_harness.canonical_mutation import (
     capture_canonical_file,
 )
 
+MAX_EXTRACTED_EVIDENCE_BYTES = 8_000_000
+
 
 class Source(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(pattern=r"^source-[0-9a-f]{12}$")
     resource_id: str = Field(pattern=r"^resource-[0-9a-f]{12}$")
-    source_version_id: str = Field(min_length=64, max_length=64)
+    source_version_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     label: str = Field(min_length=1, max_length=200)
     admitted_at: str
 
@@ -40,6 +44,74 @@ class SourceAdmissionRequest(BaseModel):
 
 class InvalidSourcesIndex(ValueError):
     """Canonical Sources state exists but does not satisfy the schema."""
+
+
+def read_pinned_evidence_line_counts(cache_dir: Path, sources: Iterable[Source]) -> dict[str, int]:
+    """Return line counts for safely readable extracted Evidence by Source Version.
+
+    A missing, changed, oversized, non-regular, or non-UTF-8 derived file is
+    deliberately absent from the result.  Release validation treats that as
+    unresolvable Evidence for Citations that name coordinates.
+    """
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        derived_fd = os.open(cache_dir / "derived", flags)
+    except OSError:
+        return {}
+    try:
+        line_counts: dict[str, int] = {}
+        for source_version_id in {source.source_version_id for source in sources}:
+            content = _read_extracted_evidence(derived_fd, source_version_id)
+            if content is not None:
+                line_counts[source_version_id] = len(content.split("\n"))
+        return line_counts
+    finally:
+        os.close(derived_fd)
+
+
+def _read_extracted_evidence(derived_fd: int, source_version_id: str) -> str | None:
+    """Read a bounded regular extracted file through no-follow directory FDs."""
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        version_fd = os.open(source_version_id, directory_flags, dir_fd=derived_fd)
+    except OSError:
+        return None
+    try:
+        try:
+            extracted_fd = os.open("extracted.md", file_flags, dir_fd=version_fd)
+        except OSError:
+            return None
+        try:
+            before = os.fstat(extracted_fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_EXTRACTED_EVIDENCE_BYTES:
+                return None
+            remaining = before.st_size
+            chunks: list[bytes] = []
+            while remaining:
+                chunk = os.read(extracted_fd, min(65_536, remaining))
+                if not chunk:
+                    return None
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            if os.read(extracted_fd, 1):
+                return None
+            after = os.fstat(extracted_fd)
+            if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+            ):
+                return None
+            try:
+                return b"".join(chunks).decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+        finally:
+            os.close(extracted_fd)
+    finally:
+        os.close(version_fd)
 
 
 def read_sources_index(workspace: Path) -> SourcesIndex | None:

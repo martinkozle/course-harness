@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import time
 import zipfile
+from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -142,6 +143,7 @@ def publish_release(
     release_data_root: Path,
     templates_data_root: Path,
     request: PublishReleaseRequest,
+    evidence_line_counts: Mapping[str, int] | None = None,
 ) -> CourseRelease:
     """Validate, export, persist, and atomically name one immutable Release."""
     if len(request.selection.lecture_ids) > 1_000 or len(request.selection.artifact_ids) > 1_000:
@@ -179,6 +181,7 @@ def publish_release(
             sources=sources,
             selection=request.selection,
             waivers=request.waivers,
+            evidence_line_counts=evidence_line_counts,
         )
     except InvalidWaiver as error:
         raise ReleaseValidationError(str(error)) from error

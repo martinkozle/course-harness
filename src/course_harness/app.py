@@ -658,13 +658,16 @@ def create_app(
                 )
             plan = read_required_course_plan(active)
             try:
+                sources = sources_module.read_sources_index(active) or sources_module.SourcesIndex()
                 result = validate_release(
                     plan=plan,
                     presentations=list_presentations(active),
-                    sources=sources_module.read_sources_index(active)
-                    or sources_module.SourcesIndex(),
+                    sources=sources,
                     selection=request.selection,
                     waivers=request.waivers,
+                    evidence_line_counts=sources_module.read_pinned_evidence_line_counts(
+                        cache_dir, sources.sources
+                    ),
                 )
             except sources_module.InvalidSourcesIndex as error:
                 raise HTTPException(status_code=422, detail="sources.yaml is invalid") from error
@@ -688,12 +691,28 @@ def create_app(
         active = require_workspace()
         async with exclusive_mutation(active):
             try:
+                state = read_current_state(active)
+                # Preserve the Current State precondition (and its stable 409)
+                # before consulting the disposable derived cache.
+                if not state.clean or not state.validation.valid or state.drift != "clean":
+                    return publish_release(
+                        workspace=active,
+                        release_data_root=release_data,
+                        templates_data_root=templates_data,
+                        request=request,
+                    )
+                sources = sources_module.read_sources_index(active) or sources_module.SourcesIndex()
                 return publish_release(
                     workspace=active,
                     release_data_root=release_data,
                     templates_data_root=templates_data,
                     request=request,
+                    evidence_line_counts=sources_module.read_pinned_evidence_line_counts(
+                        cache_dir, sources.sources
+                    ),
                 )
+            except sources_module.InvalidSourcesIndex as error:
+                raise HTTPException(status_code=422, detail="sources.yaml is invalid") from error
             except ReleaseConflict as error:
                 raise HTTPException(status_code=409, detail=str(error)) from error
             except WorkspaceHistoryNotInitializedError as error:
@@ -2022,10 +2041,10 @@ def create_app(
         if line_start is not None or line_end is not None:
             lines = content.split("\n")
             start = max(0, line_start or 0)
-            end = min(len(lines), line_end or len(lines))
-            if start >= len(lines) or end <= start:
+            end = min(len(lines) - 1, line_end if line_end is not None else len(lines) - 1)
+            if start >= len(lines) or end < start:
                 raise HTTPException(status_code=422, detail="Invalid coordinate range")
-            content = "\n".join(lines[start:end])
+            content = "\n".join(lines[start : end + 1])
 
         if len(content) > max_chars:
             content = content[:max_chars]

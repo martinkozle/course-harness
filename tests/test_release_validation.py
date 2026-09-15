@@ -49,6 +49,9 @@ def test_missing_selected_lecture_is_a_blocking_structural_finding() -> None:
                 "slide_id": None,
                 "content_block": None,
                 "citation_index": None,
+                "source_id": None,
+                "line_start": None,
+                "line_end": None,
             },
             "waived": False,
         }
@@ -355,3 +358,130 @@ def test_selected_presentation_must_match_the_course_plan_and_citation_coordinat
         "selection.presentation-not-attached",
         "citation.invalid-coordinates",
     ]
+
+
+def test_evidence_catalog_enforces_inclusive_citation_coordinates_and_targets_evidence() -> None:
+    source = Source(
+        id="source-aaaaaaaaaaaa",
+        resource_id="resource-aaaaaaaaaaaa",
+        source_version_id="a" * 64,
+        label="Foundations",
+        admitted_at="2026-09-14T00:00:00+00:00",
+    )
+    lecture = Lecture(
+        id="lecture-aaaaaaaaaaaa",
+        title="Foundations",
+        presentation_id="presentation-aaaaaaaaaaaa",
+    )
+    plan = CoursePlan(
+        id="course-aaaaaaaaaaaa",
+        title="Causal inference",
+        audience="Graduate students",
+        lectures=[lecture],
+    )
+    selection = ReleaseSelection(
+        lecture_ids=[lecture.id], artifact_ids=["presentation-aaaaaaaaaaaa"]
+    )
+
+    valid = validate_release(
+        plan=plan,
+        presentations=[
+            Presentation(
+                id="presentation-aaaaaaaaaaaa",
+                lecture_id=lecture.id,
+                slides=[
+                    BulletsSlide(
+                        id="slide-aaaaaaaaaaaa",
+                        bullets=["Consistency"],
+                        citations=[
+                            SlideCitation(
+                                source_id=source.id,
+                                label="Foundations",
+                                line_start=2,
+                                line_end=2,
+                            )
+                        ],
+                    )
+                ],
+            )
+        ],
+        sources=SourcesIndex(sources=[source]),
+        selection=selection,
+        evidence_line_counts={source.source_version_id: 3},
+    )
+
+    assert valid.can_publish is True
+
+    invalid = validate_release(
+        plan=plan,
+        presentations=[
+            Presentation(
+                id="presentation-aaaaaaaaaaaa",
+                lecture_id=lecture.id,
+                slides=[
+                    BulletsSlide(
+                        id="slide-aaaaaaaaaaaa",
+                        bullets=["Consistency"],
+                        citations=[
+                            SlideCitation(
+                                source_id=source.id,
+                                label="Foundations",
+                                line_start=3,
+                            )
+                        ],
+                    )
+                ],
+            )
+        ],
+        sources=SourcesIndex(sources=[source]),
+        selection=selection,
+        evidence_line_counts={source.source_version_id: 3},
+    )
+
+    assert invalid.can_publish is False
+    assert invalid.findings[0].code == "citation.unresolvable-evidence"
+    assert invalid.findings[0].target.source_id == source.id
+    assert invalid.findings[0].target.line_start == 3
+    assert invalid.findings[0].target.line_end is None
+
+
+def test_evidence_catalog_requires_extracted_evidence_for_coordinate_citations() -> None:
+    source = Source(
+        id="source-aaaaaaaaaaaa",
+        resource_id="resource-aaaaaaaaaaaa",
+        source_version_id="a" * 64,
+        label="Foundations",
+        admitted_at="2026-09-14T00:00:00+00:00",
+    )
+    lecture = Lecture(
+        id="lecture-aaaaaaaaaaaa",
+        title="Foundations",
+        presentation_id="presentation-aaaaaaaaaaaa",
+    )
+    plan = CoursePlan(
+        id="course-aaaaaaaaaaaa",
+        title="Causal inference",
+        audience="Graduate students",
+        lectures=[lecture],
+    )
+    presentation = Presentation(
+        id="presentation-aaaaaaaaaaaa",
+        lecture_id=lecture.id,
+        slides=[
+            BulletsSlide(
+                id="slide-aaaaaaaaaaaa",
+                bullets=["Consistency"],
+                citations=[SlideCitation(source_id=source.id, label="Foundations", line_start=0)],
+            )
+        ],
+    )
+
+    result = validate_release(
+        plan=plan,
+        presentations=[presentation],
+        sources=SourcesIndex(sources=[source]),
+        selection=ReleaseSelection(lecture_ids=[lecture.id], artifact_ids=[presentation.id]),
+        evidence_line_counts={},
+    )
+
+    assert [finding.code for finding in result.findings] == ["citation.unresolvable-evidence"]

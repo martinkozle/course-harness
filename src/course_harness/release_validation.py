@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -40,6 +41,9 @@ class FindingTarget(BaseModel):
     slide_id: str | None = None
     content_block: str | None = None
     citation_index: int | None = Field(default=None, ge=0)
+    source_id: str | None = None
+    line_start: int | None = None
+    line_end: int | None = None
 
 
 class ValidationFinding(BaseModel):
@@ -83,6 +87,7 @@ def validate_release(
     sources: SourcesIndex,
     selection: ReleaseSelection,
     waivers: list[Waiver] | None = None,
+    evidence_line_counts: Mapping[str, int] | None = None,
 ) -> ReleaseValidationResult:
     """Validate a proposed partial Release without mutating Course state."""
 
@@ -90,6 +95,7 @@ def validate_release(
     lectures_by_id = {lecture.id: lecture for lecture in plan.lectures}
     presentations_by_id = {presentation.id: presentation for presentation in presentations}
     source_ids = {source.id for source in sources.sources}
+    sources_by_id = {source.id: source for source in sources.sources}
 
     for lecture_id in selection.lecture_ids:
         if lecture_id not in lectures_by_id:
@@ -176,6 +182,15 @@ def validate_release(
                         "Evidence coordinates."
                     )
                     identity_suffix = ""
+                elif _citation_cannot_be_resolved(
+                    citation, sources_by_id[citation.source_id], evidence_line_counts
+                ):
+                    code = "citation.unresolvable-evidence"
+                    message = (
+                        f"Citation {citation_index + 1} on Slide {slide.id} does not resolve "
+                        "against the admitted Source Version's extracted Evidence."
+                    )
+                    identity_suffix = ""
                 else:
                     continue
                 findings.append(
@@ -192,6 +207,9 @@ def validate_release(
                             artifact_id=presentation.id,
                             slide_id=slide.id,
                             citation_index=citation_index,
+                            source_id=citation.source_id,
+                            line_start=citation.line_start,
+                            line_end=citation.line_end,
                         ),
                     )
                 )
@@ -283,4 +301,28 @@ def _citation_coordinates_are_invalid(citation: object) -> bool:
         return True
     if line_end is not None and line_end < 0:
         return True
+    if line_end is not None and line_start is None:
+        return True
     return line_start is not None and line_end is not None and line_end < line_start
+
+
+def _citation_cannot_be_resolved(
+    citation: object, source: object, evidence_line_counts: Mapping[str, int] | None
+) -> bool:
+    """Check inclusive Evidence coordinates when an exact extracted catalog is available."""
+    if evidence_line_counts is None:
+        return False
+    line_start = getattr(citation, "line_start", None)
+    line_end = getattr(citation, "line_end", None)
+    if line_start is None and line_end is None:
+        return False
+    line_count = evidence_line_counts.get(getattr(source, "source_version_id", ""))
+    if not isinstance(line_count, int) or isinstance(line_count, bool) or line_count < 0:
+        return True
+    # Coordinates are zero-based and inclusive, matching the Citation display
+    # and search result convention.  A single-line citation has equal bounds.
+    return (
+        line_start is None
+        or line_start >= line_count
+        or (line_end is not None and line_end >= line_count)
+    )

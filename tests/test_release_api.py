@@ -4,6 +4,7 @@ import httpx2
 import pytest
 
 from course_harness.app import create_app
+from course_harness.canonical_mutation import capture_canonical_files
 from course_harness.course_plan import (
     CoursePlan,
     Lecture,
@@ -11,7 +12,8 @@ from course_harness.course_plan import (
     read_course_plan,
     write_course_plan,
 )
-from course_harness.presentation import Presentation, TitleSlide, write_presentation
+from course_harness.presentation import Presentation, SlideCitation, TitleSlide, write_presentation
+from course_harness.sources import Source, SourcesIndex, write_sources_index
 from course_harness.workspace_history import (
     RevisionCreateRequest,
     create_revision,
@@ -65,6 +67,59 @@ def _clean_course(workspace: Path) -> None:
         ),
     )
     create_revision(workspace, RevisionCreateRequest(summary="Initial Course"))
+    record_app_authored_state(workspace)
+
+
+def _add_coordinate_citation(
+    workspace: Path, *, source_version_id: str, line_start: int, line_end: int | None = None
+) -> None:
+    write_sources_index(
+        workspace,
+        SourcesIndex(
+            sources=[
+                Source(
+                    id="source-aaaaaaaaaaaa",
+                    resource_id="resource-aaaaaaaaaaaa",
+                    source_version_id=source_version_id,
+                    label="Foundations",
+                    admitted_at="2026-09-15T00:00:00+00:00",
+                )
+            ]
+        ),
+    )
+    write_presentation(
+        workspace,
+        Presentation(
+            id=PRESENTATION_ID,
+            lecture_id=LECTURE_ID,
+            slides=[
+                TitleSlide(
+                    id="slide-aaaaaaaaaaaa",
+                    title="Foundations",
+                    citations=[
+                        SlideCitation(
+                            source_id="source-aaaaaaaaaaaa",
+                            label="Foundations",
+                            line_start=line_start,
+                            line_end=line_end,
+                        )
+                    ],
+                )
+            ],
+        ),
+    )
+    create_revision(
+        workspace,
+        RevisionCreateRequest(summary="Add source-grounded citation"),
+        expected=capture_canonical_files(
+            workspace,
+            {
+                "course.yaml",
+                "sources.yaml",
+                f"presentations/{PRESENTATION_ID}.yaml",
+            },
+        ),
+    )
     record_app_authored_state(workspace)
 
 
@@ -215,3 +270,68 @@ async def test_release_validation_rejects_invalid_canonical_state_but_allows_val
     assert "Current State must be structurally valid" in invalid_sources.json()["detail"]
     assert invalid_sources_publish.status_code == 409
     assert oversized.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_release_http_enforces_inclusive_pinned_evidence_coordinates(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    cache_dir = tmp_path / "cache"
+    source_version_id = "a" * 64
+    _clean_course(workspace)
+    _add_coordinate_citation(
+        workspace, source_version_id=source_version_id, line_start=1, line_end=1
+    )
+    extracted = cache_dir / "derived" / source_version_id / "extracted.md"
+    extracted.parent.mkdir(parents=True)
+    extracted.write_text("first\nlast", encoding="utf-8")
+    transport = httpx2.ASGITransport(
+        app=create_app(
+            workspace,
+            library_cache_path=cache_dir,
+            release_data_path=tmp_path / "release-data",
+            templates_data_path=tmp_path / "templates",
+        )
+    )
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        validation = await client.post("/api/releases/validate", json=_validation_request())
+        published = await client.post("/api/releases", json=_release_request())
+
+    assert validation.status_code == 200
+    assert validation.json()["can_publish"] is True
+    assert published.status_code == 201
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("has_extracted_evidence", [True, False])
+async def test_release_http_blocks_out_of_range_or_missing_pinned_evidence(
+    tmp_path: Path, has_extracted_evidence: bool
+) -> None:
+    workspace = tmp_path / "course"
+    cache_dir = tmp_path / "cache"
+    source_version_id = "a" * 64
+    _clean_course(workspace)
+    _add_coordinate_citation(workspace, source_version_id=source_version_id, line_start=2)
+    if has_extracted_evidence:
+        extracted = cache_dir / "derived" / source_version_id / "extracted.md"
+        extracted.parent.mkdir(parents=True)
+        extracted.write_text("first\nlast", encoding="utf-8")
+    transport = httpx2.ASGITransport(
+        app=create_app(
+            workspace,
+            library_cache_path=cache_dir,
+            release_data_path=tmp_path / "release-data",
+            templates_data_path=tmp_path / "templates",
+        )
+    )
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        validation = await client.post("/api/releases/validate", json=_validation_request())
+        published = await client.post("/api/releases", json=_release_request())
+
+    assert validation.status_code == 200
+    assert validation.json()["can_publish"] is False
+    finding = validation.json()["findings"][0]
+    assert finding["code"] == "citation.unresolvable-evidence"
+    assert finding["target"]["source_id"] == "source-aaaaaaaaaaaa"
+    assert published.status_code == 422
