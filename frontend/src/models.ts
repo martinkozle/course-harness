@@ -278,3 +278,87 @@ export type CourseRevision = {
 	summary: string;
 	created_at: string;
 };
+
+export type ReleaseSelection = {
+	lecture_ids: string[];
+	artifact_ids: string[];
+};
+
+export type ReleaseFindingTarget = {
+	scope:
+		| "release"
+		| "lecture"
+		| "artifact"
+		| "slide"
+		| "content_block"
+		| "citation";
+	lecture_id: string | null;
+	artifact_id: string | null;
+	slide_id: string | null;
+	content_block: string | null;
+	citation_index: number | null;
+};
+
+export type ReleaseValidationFinding = {
+	id: string;
+	code: string;
+	severity: "error" | "warning";
+	message: string;
+	target: ReleaseFindingTarget;
+	waived: boolean;
+};
+
+export type ReleaseWaiver = {
+	finding_id: string;
+	justification: string;
+};
+
+export type ReleaseValidation = {
+	selection: ReleaseSelection;
+	findings: ReleaseValidationFinding[];
+	waivers: ReleaseWaiver[];
+	structurally_valid: boolean;
+	can_publish: boolean;
+};
+
+export type ReleaseArtifact = {
+	id: string;
+	lecture_id: string;
+	media_type: string;
+	storage_path: string;
+	size: number;
+	sha256: string;
+};
+
+export type ReleaseSourcePin = {
+	id: string;
+	resource_id: string;
+	source_version_id: string;
+	label: string;
+};
+
+export type ReleaseTemplatePin = {
+	id: string;
+	version: number;
+	profile_sha256: string;
+	template_sha256: string | null;
+	template_storage_path: "inputs/template.pptx" | null;
+	definition: TemplateProfile;
+};
+
+export type CourseRelease = {
+	schema_version: 1;
+	slug: string;
+	name: string;
+	tag: string;
+	course_id: string;
+	revision_id: string;
+	commit_oid: string;
+	published_at: string;
+	included_lecture_ids: string[];
+	planned_unpublished_lecture_ids: string[];
+	sources: ReleaseSourcePin[];
+	template_profile: ReleaseTemplatePin;
+	validation: ReleaseValidation;
+	artifacts: ReleaseArtifact[];
+};

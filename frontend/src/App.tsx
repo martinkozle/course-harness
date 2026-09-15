@@ -9,8 +9,8 @@ import {
 import { AgentPanel, type ChatMessage, type CoursePlan } from "./AgentPanel";
 import type { AgentInterrupt } from "./agentStream";
 import { responseError } from "./api";
-import { LibraryView } from "./LibraryView";
 import { CurrentStateView } from "./CurrentStateView";
+import { LibraryView } from "./LibraryView";
 import type {
 	ModelCatalog,
 	PresentationSummary,
@@ -20,6 +20,7 @@ import type {
 } from "./models";
 import { PresentationView } from "./PresentationView";
 import { ModelsView } from "./ProviderSetup";
+import { ReleasesView } from "./ReleasesView";
 import { ResizableSplit } from "./ResizableSplit";
 import { TemplatesView } from "./TemplatesView";
 
@@ -60,6 +61,7 @@ type WorkspaceView =
 	| "files"
 	| "models"
 	| "library"
+	| "releases"
 	| "templates";
 
 type SectionLink = {
@@ -249,11 +251,13 @@ function WorkspaceShell({
 											? "AG"
 											: section.id === "current-state"
 												? "CS"
-											: section.id === "files"
-												? "FL"
-												: section.id === "library"
-													? "LB"
-													: "MD"}
+												: section.id === "files"
+													? "FL"
+													: section.id === "library"
+														? "LB"
+														: section.id === "releases"
+															? "RL"
+															: "MD"}
 								</span>
 								{section.label}
 							</button>
@@ -734,6 +738,7 @@ const workspaceViews: SectionLink[] = [
 	{ id: "current-state", label: "Current State" },
 	{ id: "files", label: "Files" },
 	{ id: "library", label: "Library" },
+	{ id: "releases", label: "Releases" },
 	{ id: "templates", label: "Templates" },
 	{ id: "models", label: "Models" },
 ];
@@ -761,9 +766,9 @@ export function App() {
 	const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 	const [chatApproval, setChatApproval] = useState<AgentInterrupt | null>(null);
 	const [chatContext, setChatContext] = useState<string | null>(null);
-	const [reconciliationDriftId, setReconciliationDriftId] = useState<string | null>(
-		null,
-	);
+	const [reconciliationDriftId, setReconciliationDriftId] = useState<
+		string | null
+	>(null);
 	const [agentRunning, setAgentRunning] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -1167,16 +1172,16 @@ export function App() {
 							/>
 						</div>
 					</main>
-					) : activeView === "current-state" ? (
-						<CurrentStateView
-							workspaceName={workspace.name}
-							onReconcileWithAgent={(driftId) =>
-								openAgentWithContext(
-									"Workspace Drift needs Reconciliation. Review the Current State findings, explain the inconsistency, and propose a reviewed patch. Do not treat the Drift as repaired until the Course Author approves a valid change.",
-									driftId,
-								)
-							}
-						/>
+				) : activeView === "current-state" ? (
+					<CurrentStateView
+						workspaceName={workspace.name}
+						onReconcileWithAgent={(driftId) =>
+							openAgentWithContext(
+								"Workspace Drift needs Reconciliation. Review the Current State findings, explain the inconsistency, and propose a reviewed patch. Do not treat the Drift as repaired until the Course Author approves a valid change.",
+								driftId,
+							)
+						}
+					/>
 				) : activeView === "models" ? (
 					<ModelsView catalog={catalog} onCatalogChange={setCatalog} />
 				) : activeView === "library" ? (
@@ -1185,6 +1190,14 @@ export function App() {
 						sources={sources}
 						onResourcesChange={setResources}
 						onSourcesChange={setSources}
+					/>
+				) : activeView === "releases" && course ? (
+					<ReleasesView
+						course={course}
+						presentations={presentations}
+						sources={sources}
+						onOpenEvidence={() => navigateTo("library")}
+						onOpenAgent={openAgentWithContext}
 					/>
 				) : activeView === "templates" ? (
 					<TemplatesView
