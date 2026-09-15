@@ -22,9 +22,9 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from course_harness.course_plan import CoursePlan, read_course_plan
+from course_harness.course_plan import CoursePlan, InvalidCoursePlan, read_course_plan
 from course_harness.export import ExportError, export_presentation
-from course_harness.presentation import Presentation, read_presentation
+from course_harness.presentation import InvalidPresentation, Presentation, read_presentation
 from course_harness.release_validation import (
     InvalidWaiver,
     ReleaseSelection,
@@ -32,7 +32,12 @@ from course_harness.release_validation import (
     Waiver,
     validate_release,
 )
-from course_harness.sources import Source, SourcesIndex, read_sources_index
+from course_harness.sources import (
+    InvalidSourcesIndex,
+    Source,
+    SourcesIndex,
+    read_sources_index,
+)
 from course_harness.template_profiles import (
     BUILTIN_DEFAULT_ID,
     TemplateProfile,
@@ -58,6 +63,10 @@ class ReleaseError(RuntimeError):
 
 class ReleaseConflict(ReleaseError):
     """The immutable Release name or storage identity already exists."""
+
+
+class ReleaseValidationError(ReleaseError):
+    """A Course Author can correct the Release request or canonical Course state."""
 
 
 class PublishReleaseRequest(BaseModel):
@@ -143,13 +152,24 @@ def publish_release(
             "Publication requires valid, provenance-clean Current State at a clean Course Revision"
         )
     revision = _head_oid(workspace)
-    plan = read_course_plan(workspace)
+    try:
+        plan = read_course_plan(workspace)
+    except InvalidCoursePlan as error:
+        raise ReleaseValidationError("Course Plan is invalid") from error
     if plan is None:
-        raise ReleaseError("A Course Plan is required for publication")
-    sources = read_sources_index(workspace) or SourcesIndex()
+        raise ReleaseValidationError("A Course Plan is required for publication")
+    try:
+        sources = read_sources_index(workspace) or SourcesIndex()
+    except InvalidSourcesIndex as error:
+        raise ReleaseValidationError("Sources index is invalid") from error
     presentations = []
     for artifact_id in request.selection.artifact_ids:
-        presentation = read_presentation(workspace, artifact_id)
+        try:
+            presentation = read_presentation(workspace, artifact_id)
+        except InvalidPresentation as error:
+            raise ReleaseValidationError(
+                f"Selected Presentation {artifact_id} is invalid"
+            ) from error
         if presentation is not None:
             presentations.append(presentation)
     try:
@@ -161,9 +181,11 @@ def publish_release(
             waivers=request.waivers,
         )
     except InvalidWaiver as error:
-        raise ReleaseError(str(error)) from error
+        raise ReleaseValidationError(str(error)) from error
     if not validation.can_publish:
-        raise ReleaseError("Release validation must pass or have explicit warning Waivers")
+        raise ReleaseValidationError(
+            "Release validation must pass or have explicit warning Waivers"
+        )
 
     try:
         profile = resolve_profile(

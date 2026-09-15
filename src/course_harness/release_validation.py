@@ -19,8 +19,8 @@ class ReleaseSelection(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    lecture_ids: list[LectureId] = Field(min_length=1)
-    artifact_ids: list[ArtifactId] = Field(default_factory=list)
+    lecture_ids: list[LectureId] = Field(min_length=1, max_length=1_000)
+    artifact_ids: list[ArtifactId] = Field(default_factory=list, max_length=1_000)
 
     @model_validator(mode="after")
     def selected_identities_are_unique(self) -> ReleaseSelection:

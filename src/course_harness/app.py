@@ -104,6 +104,25 @@ from course_harness.providers import (
     validate_provider_account,
     validate_provider_capabilities,
 )
+from course_harness.release_service import (
+    CourseRelease,
+    PublishReleaseRequest,
+    ReleaseConflict,
+    ReleaseError,
+    ReleaseValidationError,
+    list_releases,
+    publish_release,
+    read_release,
+    read_release_artifact,
+    regenerate_release_artifact,
+)
+from course_harness.release_validation import (
+    InvalidWaiver,
+    ReleaseSelection,
+    ReleaseValidationResult,
+    Waiver,
+    validate_release,
+)
 from course_harness.slide_preview import (
     PresentationPreview,
     PreviewContext,
@@ -224,6 +243,15 @@ class PresentationRequest(BaseModel):
     slides: list[SlideRequest] = Field(min_length=1)
 
 
+class ReleaseValidationRequest(BaseModel):
+    """The selected Course material to check before publishing a Release."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    selection: ReleaseSelection
+    waivers: list[Waiver] = Field(default_factory=list, max_length=1_000)
+
+
 def create_app(
     workspace: Path | None = None,
     *,
@@ -235,6 +263,7 @@ def create_app(
     library_cache_path: Path | None = None,
     templates_data_path: Path | None = None,
     templates_cache_path: Path | None = None,
+    release_data_path: Path | None = None,
     agent_model: Model | None = None,
     provider_validator: ProviderCapabilityValidator = validate_provider_capabilities,
     provider_account_validator: ProviderAccountValidator = validate_provider_account,
@@ -328,6 +357,7 @@ def create_app(
     cache_dir = library_cache_path or library.library_cache_dir()
     templates_data = templates_data_path or tpl.templates_data_dir()
     templates_cache = templates_cache_path or tpl.templates_cache_dir()
+    release_data = release_data_path or templates_data.parent / "releases"
     chat_path = chat_store_path or recent_path.parent / "chat"
     course_agent = create_course_agent()
     autonomous_agent = create_autonomous_course_agent()
@@ -366,6 +396,17 @@ def create_app(
             except WorkspaceHistoryError as error:
                 raise HTTPException(status_code=409, detail=str(error)) from error
             recovered_workspaces.add(resolved)
+        return workspace
+
+    def require_bound_workspace() -> Path:
+        """Return the selected Workspace without inspecting mutable Current State.
+
+        Immutable Releases are read from their tagged Course Revisions, so their
+        inspection remains available when the working Course has later drifted or
+        become malformed.
+        """
+        if workspace is None:
+            raise HTTPException(status_code=409, detail="No Course Workspace is active")
         return workspace
 
     def require_canonical_authoring(active: Path, *, allow_uninitialized: bool = False) -> bool:
@@ -580,6 +621,160 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(error)) from error
         except WorkspaceHistoryError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+    def release_error_status(error: ReleaseError) -> int:
+        """Use a stable HTTP classification without exposing storage details."""
+        message = str(error)
+        if message in {"Course Release was not found", "Release Artifact was not found"}:
+            return 404
+        if isinstance(error, ReleaseValidationError):
+            return 422
+        # A plain ReleaseError means an immutable tag, Git operation, or durable
+        # artifact could not be trusted.  Do not present that as a request error.
+        return 409
+
+    def release_http_error(error: ReleaseError) -> HTTPException:
+        return HTTPException(status_code=release_error_status(error), detail=str(error))
+
+    @app.post("/api/releases/validate", response_model=ReleaseValidationResult)
+    async def validate_course_release(request: ReleaseValidationRequest) -> ReleaseValidationResult:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            try:
+                before = read_current_state(active)
+            except WorkspaceHistoryNotInitializedError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except WorkspaceHistoryError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            if not before.validation.valid:
+                findings = "; ".join(before.validation.findings[:3])
+                suffix = f": {findings}" if findings else ""
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Current State must be structurally valid before Release validation"
+                        f"{suffix}"
+                    ),
+                )
+            plan = read_required_course_plan(active)
+            try:
+                result = validate_release(
+                    plan=plan,
+                    presentations=list_presentations(active),
+                    sources=sources_module.read_sources_index(active)
+                    or sources_module.SourcesIndex(),
+                    selection=request.selection,
+                    waivers=request.waivers,
+                )
+            except sources_module.InvalidSourcesIndex as error:
+                raise HTTPException(status_code=422, detail="sources.yaml is invalid") from error
+            except InvalidWaiver as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            try:
+                after = read_current_state(active)
+            except WorkspaceHistoryNotInitializedError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except WorkspaceHistoryError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            if after != before:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Current State changed while Release validation was being prepared",
+                )
+            return result
+
+    @app.post("/api/releases", response_model=CourseRelease, status_code=201)
+    async def publish_course_release(request: PublishReleaseRequest) -> CourseRelease:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            try:
+                return publish_release(
+                    workspace=active,
+                    release_data_root=release_data,
+                    templates_data_root=templates_data,
+                    request=request,
+                )
+            except ReleaseConflict as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except WorkspaceHistoryNotInitializedError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except WorkspaceHistoryError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except ReleaseError as error:
+                raise release_http_error(error) from error
+
+    @app.get("/api/releases", response_model=list[CourseRelease])
+    async def list_course_releases() -> list[CourseRelease]:
+        active = require_bound_workspace()
+        try:
+            return list_releases(active)
+        except WorkspaceHistoryNotInitializedError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except WorkspaceHistoryError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ReleaseError as error:
+            raise release_http_error(error) from error
+
+    @app.get("/api/releases/{slug}", response_model=CourseRelease)
+    async def get_course_release(slug: str) -> CourseRelease:
+        active = require_bound_workspace()
+        try:
+            release = read_release(active, slug)
+        except WorkspaceHistoryNotInitializedError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except WorkspaceHistoryError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ReleaseError as error:
+            raise release_http_error(error) from error
+        if release is None:
+            raise HTTPException(status_code=404, detail="Course Release was not found")
+        return release
+
+    def release_artifact_response(content: bytes, artifact_id: str) -> Response:
+        return Response(
+            content=content,
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            headers={
+                "Content-Disposition": f'attachment; filename="{artifact_id}.pptx"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.get("/api/releases/{slug}/artifacts/{artifact_id}")
+    async def get_course_release_artifact(slug: str, artifact_id: str) -> Response:
+        active = require_bound_workspace()
+        try:
+            content = read_release_artifact(
+                workspace=active,
+                release_data_root=release_data,
+                slug=slug,
+                artifact_id=artifact_id,
+            )
+        except WorkspaceHistoryNotInitializedError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except WorkspaceHistoryError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ReleaseError as error:
+            raise release_http_error(error) from error
+        return release_artifact_response(content, artifact_id)
+
+    @app.post("/api/releases/{slug}/artifacts/{artifact_id}/regenerate")
+    async def regenerate_course_release_artifact(slug: str, artifact_id: str) -> Response:
+        active = require_bound_workspace()
+        try:
+            content = regenerate_release_artifact(
+                workspace=active,
+                release_data_root=release_data,
+                slug=slug,
+                artifact_id=artifact_id,
+            )
+        except WorkspaceHistoryNotInitializedError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except WorkspaceHistoryError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ReleaseError as error:
+            raise release_http_error(error) from error
+        return release_artifact_response(content, artifact_id)
 
     @app.post("/api/workspace/revisions", response_model=CourseRevision, status_code=201)
     async def create_workspace_revision(request: RevisionCreateRequest) -> CourseRevision:
