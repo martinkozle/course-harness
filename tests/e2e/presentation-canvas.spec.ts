@@ -27,13 +27,25 @@ test("Course Author views Presentation canvas and slide outline", async ({
 		await page.getByRole("button", { name: "Save Model Preset" }).click();
 	}
 
+	await page.route("**/api/agent", async (route) => {
+		const response = await route.fetch();
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		await route.fulfill({ response });
+	});
 	await page.getByRole("button", { name: "Authoring", exact: true }).click();
-	await page
-		.getByLabel("Message the Course Agent")
-		.fill(
-			"Create a practical causal inference Course for applied researchers.",
-		);
-	await page.getByRole("button", { name: "Send message" }).click();
+	const composer = page.getByLabel("Message the Course Agent");
+	await composer.fill(
+		"Create a practical causal inference Course for applied researchers.",
+	);
+	await composer.press("Shift+Enter");
+	await expect(composer).toHaveValue(/\n$/);
+	await composer.fill(
+		"Create a practical causal inference Course for applied researchers.",
+	);
+	await composer.press("Enter");
+	await expect(page.locator("#agent-run-status")).toHaveText(
+		"Course Agent is working.",
+	);
 
 	await expect(
 		page.getByText("I created a two-Lecture Course Plan."),
@@ -155,7 +167,10 @@ test("Course Author views Presentation canvas and slide outline", async ({
 	await page.getByRole("button", { name: "Course Plan" }).click();
 	await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
 	expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
-	await page.getByRole("button", { name: "Authoring" }).click();
+	const authoringNav = page.getByRole("button", { name: "Authoring" });
+	await authoringNav.focus();
+	await authoringNav.press("Enter");
+	await expect(authoringNav).toHaveAttribute("aria-current", "page");
 	await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
 	await expect(
 		page.getByRole("heading", { name: "Build the Lecture" }),
@@ -186,11 +201,28 @@ test("Course Author views Presentation canvas and slide outline", async ({
 	).toBeVisible();
 	expect(renderRequests).toBe(1);
 	await expect(page.locator(".preview-freshness")).toHaveCount(0);
+	const firstSlide = page.locator(".slide-card").first();
+	await firstSlide.focus();
+	await firstSlide.press("Enter");
+	const slideDetail = page.getByRole("dialog", {
+		name: "Introduction to causal inference",
+	});
+	await expect(slideDetail).toBeVisible();
+	await expect(
+		slideDetail.getByRole("heading", {
+			name: "Introduction to causal inference",
+		}),
+	).toBeFocused();
+	await page.keyboard.press("Escape");
+	await expect(slideDetail).not.toBeVisible();
+	await expect(page.locator(".slide-card").first()).toBeFocused();
+
 	await page.locator(".slide-card").first().click();
 	await expect(
 		page.getByRole("button", { name: "Introduction to causal inference" }),
 	).toBeVisible();
 	await page.getByRole("button", { name: "Close slide detail" }).click();
+	await expect(page.locator(".slide-card").first()).toBeFocused();
 	await expect(page.locator(".authoring-body")).toHaveCSS("display", "block");
 	await expect(page.locator(".context-text")).toContainText(
 		"From association to intervention",
@@ -278,7 +310,13 @@ test("Course Author views Presentation canvas and slide outline", async ({
 	await expect(
 		page.getByRole("button", { name: "Presentation", exact: true }),
 	).toBeVisible();
-	await page.getByRole("button", { name: "Course Agent", exact: true }).click();
+	const agentPaneTab = page.getByRole("button", {
+		name: "Course Agent",
+		exact: true,
+	});
+	await agentPaneTab.focus();
+	await agentPaneTab.press("Enter");
+	await expect(agentPaneTab).toHaveAttribute("aria-pressed", "true");
 
 	// The agent remains in the same view and retains the active Lecture context.
 	await expect(page.locator(".chat-context-indicator")).toBeVisible();

@@ -1,5 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
+import {
+	type RefObject,
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 
 import type { CoursePlan } from "./AgentPanel";
 import { responseError } from "./api";
@@ -173,6 +180,7 @@ function SlideDetail({
 	onClose,
 	onChatContext,
 	onArchiveChange,
+	headingRef,
 	busy,
 	preview,
 	previewFreshness,
@@ -183,6 +191,7 @@ function SlideDetail({
 	onClose: () => void;
 	onChatContext: (instruction: string) => void;
 	onArchiveChange: () => void;
+	headingRef: RefObject<HTMLHeadingElement | null>;
 	busy: boolean;
 	preview: SlidePreviewDescriptor | null;
 	previewFreshness: "checking" | "rendering" | "ready";
@@ -297,8 +306,28 @@ function SlideDetail({
 		setEditing(true);
 	}
 
+	useEffect(() => {
+		function closeOnEscape(event: KeyboardEvent) {
+			if (event.key !== "Escape") return;
+			event.preventDefault();
+			onClose();
+		}
+
+		window.addEventListener("keydown", closeOnEscape);
+		return () => window.removeEventListener("keydown", closeOnEscape);
+	}, [onClose]);
+
+	const headingId = `slide-detail-heading-${slide.id}`;
 	return (
-		<section className="slide-detail" aria-label={`Slide ${slide.id} detail`}>
+		<section
+			className="slide-detail"
+			role="dialog"
+			aria-modal="false"
+			aria-labelledby={editing ? undefined : headingId}
+			aria-label={
+				editing ? `Edit ${slide.title || "Untitled slide"}` : undefined
+			}
+		>
 			<SlideVisualPreview
 				slide={slide}
 				preview={preview}
@@ -319,7 +348,9 @@ function SlideDetail({
 						/>
 					</div>
 				) : (
-					<h3>{slide.title || "Untitled slide"}</h3>
+					<h3 id={headingId} ref={headingRef} tabIndex={-1}>
+						{slide.title || "Untitled slide"}
+					</h3>
 				)}
 				<div className="slide-detail-actions">
 					{editing ? (
@@ -649,6 +680,25 @@ export function PresentationView({
 	);
 	const prevVersion = useRef(presentationVersion);
 	const presentationRequest = useRef(0);
+	const slideTriggerIdRef = useRef<string | null>(null);
+	const slideDetailHeadingRef = useRef<HTMLHeadingElement | null>(null);
+
+	useLayoutEffect(() => {
+		if (selectedSlideId) {
+			slideDetailHeadingRef.current?.focus();
+		}
+	}, [selectedSlideId]);
+
+	useEffect(() => {
+		if (selectedSlideId || !slideTriggerIdRef.current) return;
+		const frame = window.requestAnimationFrame(() => {
+			const trigger = Array.from(
+				document.querySelectorAll<HTMLButtonElement>("button.slide-card"),
+			).find((button) => button.dataset.slideId === slideTriggerIdRef.current);
+			trigger?.focus();
+		});
+		return () => window.cancelAnimationFrame(frame);
+	}, [selectedSlideId]);
 
 	const loadPresentation = useCallback(async (lectureId: string) => {
 		const requestId = ++presentationRequest.current;
@@ -1091,6 +1141,7 @@ export function PresentationView({
 									<SlideDetail
 										slide={selectedSlide}
 										lectureId={selectedLectureId}
+										headingRef={slideDetailHeadingRef}
 										onClose={() => setSelectedSlideId(null)}
 										onChatContext={onChatContext}
 										onArchiveChange={() => {
@@ -1161,7 +1212,9 @@ export function PresentationView({
 													<button
 														type="button"
 														className="slide-card"
+														data-slide-id={slide.id}
 														onClick={() => {
+															slideTriggerIdRef.current = slide.id;
 															setSelectedSlideId(slide.id);
 															onChatContext(
 																`I'm reviewing Slide ${idx + 1}, "${slidePreview(slide)}", in "${course.lectures.find((lecture) => lecture.id === selectedLectureId)?.title ?? "this Lecture"}"`,
@@ -1228,7 +1281,11 @@ export function PresentationView({
 														<button
 															type="button"
 															className="slide-card"
-															onClick={() => setSelectedSlideId(slide.id)}
+															data-slide-id={slide.id}
+															onClick={() => {
+																slideTriggerIdRef.current = slide.id;
+																setSelectedSlideId(slide.id);
+															}}
 														>
 															<span className="slide-number" aria-hidden="true">
 																—

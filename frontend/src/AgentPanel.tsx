@@ -390,6 +390,7 @@ export function AgentPanel({
 		initialApproval,
 	);
 	const [running, setRunning] = useState(false);
+	const [runStatus, setRunStatus] = useState("Course Agent needs a model.");
 	const [error, setError] = useState<string | null>(null);
 	const [confirmingClear, setConfirmingClear] = useState(false);
 	const abortRef = useRef<AbortController | null>(null);
@@ -405,6 +406,13 @@ export function AgentPanel({
 	useEffect(() => setMessages(initialMessages), [initialMessages]);
 	useEffect(() => setApproval(initialApproval), [initialApproval]);
 	useEffect(() => onRunningChange(running), [onRunningChange, running]);
+	useEffect(() => {
+		if (!running) {
+			setRunStatus(
+				selected ? "Course Agent is ready." : "Course Agent needs a model.",
+			);
+		}
+	}, [running, selected]);
 	useEffect(() => {
 		if (lastMessageContent !== undefined || activities.length > 0 || approval) {
 			chatEndRef.current?.scrollIntoView({ behavior: "auto" });
@@ -439,6 +447,7 @@ export function AgentPanel({
 	) {
 		setActivities([]);
 		setError(null);
+		setRunStatus("Course Agent is working.");
 		setRunning(true);
 		let assistantId: string | null = null;
 		const controller = new AbortController();
@@ -461,6 +470,7 @@ export function AgentPanel({
 				{
 					onTextStart: (identity) => {
 						assistantId = identity;
+						setRunStatus("Course Agent is streaming a response.");
 					},
 					onText: (delta) => {
 						if (assistantId) {
@@ -488,7 +498,10 @@ export function AgentPanel({
 				},
 				controller.signal,
 			);
-			if (result.cancelled) return;
+			if (result.cancelled) {
+				setRunStatus("Course Agent stopped.");
+				return;
+			}
 			const transcriptResponse = await fetch("/api/chat");
 			if (transcriptResponse.ok) {
 				const transcript = (await transcriptResponse.json()) as {
@@ -502,10 +515,13 @@ export function AgentPanel({
 					onReconciliationDriftCleared?.();
 				}
 			}
+			setRunStatus("Course Agent finished.");
 		} catch (caught) {
 			if (caught instanceof DOMException && caught.name === "AbortError") {
+				setRunStatus("Course Agent stopped.");
 				return;
 			}
+			setRunStatus("Course Agent encountered an error.");
 			setError(
 				caught instanceof Error
 					? caught.message
@@ -601,8 +617,14 @@ export function AgentPanel({
 							</>
 						)}
 					</div>
-					<span className={`agent-status${running ? " is-running" : ""}`}>
-						{running ? "Working" : selected ? "Ready" : "Needs model"}
+					<span
+						className={`agent-status${running ? " is-running" : ""}`}
+						id="agent-run-status"
+						role="status"
+						aria-live="polite"
+						aria-atomic="true"
+					>
+						{runStatus}
 					</span>
 				</div>
 
@@ -728,7 +750,7 @@ export function AgentPanel({
 				<div ref={chatEndRef} />
 			</section>
 
-			<div className="agent-activity" aria-live="polite" aria-atomic="true">
+			<div className="agent-activity" aria-live="polite">
 				{activities.map((activity) => (
 					<p key={activity.id}>
 						<strong>{activity.title}</strong>
