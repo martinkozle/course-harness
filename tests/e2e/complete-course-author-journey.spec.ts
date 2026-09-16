@@ -87,6 +87,9 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	await clearSmokeModelCatalog(page);
 	await page.getByRole("button", { name: "Models", exact: true }).click();
 	await expect(page.getByRole("heading", { name: "Models" })).toBeVisible();
+	await expect(
+		page.getByText(/Saving sends this key to https:\/\/openrouter\.ai\/api\/v1/),
+	).toBeVisible();
 	await page.getByLabel("API key").fill("deterministic-test-key");
 	await page.getByRole("button", { name: "Save Provider Account" }).click();
 	await expect(page.getByLabel("Preset name")).toBeVisible();

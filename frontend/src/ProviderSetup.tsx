@@ -28,6 +28,12 @@ export function ModelsView({
 	);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const verificationDestination =
+		kind === "openrouter"
+			? "https://openrouter.ai/api/v1"
+			: kind === "anthropic"
+				? "https://api.anthropic.com"
+				: baseUrl.trim() || "the configured API base URL";
 	const presetCountByProvider = new Map<string, number>();
 	for (const preset of catalog.model_presets) {
 		presetCountByProvider.set(
@@ -259,11 +265,17 @@ export function ModelsView({
 													required
 													autoComplete="off"
 													aria-invalid={error ? true : undefined}
-													aria-describedby={error ? "models-error" : undefined}
+													aria-describedby={`replacement-disclosure-${account.id}${error ? " models-error" : ""}`}
 												/>
 											</div>
-											<p className="form-help">
-												Existing Model Presets will keep using this account.
+											<p
+												className="form-help"
+												id={`replacement-disclosure-${account.id}`}
+												role="note"
+											>
+												Saving sends this new key to {account.base_url} to verify it
+												before storage. Existing Model Presets will keep using this
+												account.
 											</p>
 											<button
 												className="primary-action compact-action"
@@ -354,10 +366,16 @@ export function ModelsView({
 								onChange={(event) => setApiKey(event.target.value)}
 								required
 								autoComplete="off"
+								aria-describedby="provider-network-disclosure"
 							/>
 						</div>
-						<p className="form-help">
-							The key stays outside every Course Workspace.
+						<p
+							className="form-help"
+							id="provider-network-disclosure"
+							role="note"
+						>
+							Saving sends this key to {verificationDestination} to verify access
+							before storing it outside every Course Workspace.
 						</p>
 						<button
 							className="primary-action compact-action"

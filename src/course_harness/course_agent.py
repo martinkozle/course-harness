@@ -481,7 +481,7 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
 
         index = SourcesIndex(sources=ctx.deps.course_state.sources)
         return ToolReturn(
-            return_value=(f"Current Course Sources:\n{index.model_dump_json(indent=2)}"),
+            return_value=_untrusted_source_data("source_catalog", index.model_dump_json(indent=2)),
             metadata=[
                 ActivitySnapshotEvent(
                     type=EventType.ACTIVITY_SNAPSHOT,

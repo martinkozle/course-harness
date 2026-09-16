@@ -30,6 +30,9 @@ test("major Course Author journey surfaces meet automated and keyboard accessibi
 
 	await page.getByRole("button", { name: "Models", exact: true }).click();
 	await expect(page.getByRole("heading", { name: "Models" })).toBeVisible();
+	await expect(
+		page.getByText(/Saving sends this key to https:\/\/openrouter\.ai\/api\/v1/),
+	).toBeVisible();
 	await expectNoAccessibilityViolations(page, "Provider and model setup");
 
 	await page.getByLabel("API key").fill("deterministic-test-key");
