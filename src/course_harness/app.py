@@ -174,6 +174,21 @@ from course_harness.workspaces import (
 )
 
 STREAM_TERMINATION_CONFIRMATION_SECONDS = 0.5
+MAX_UPLOAD_FILENAME_LENGTH = 255
+
+
+def _validated_upload_filename(value: object, *, fallback: str) -> str:
+    if not isinstance(value, str) or not value:
+        return fallback
+    if (
+        len(value) > MAX_UPLOAD_FILENAME_LENGTH
+        or value in {".", ".."}
+        or "/" in value
+        or "\\" in value
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        raise HTTPException(status_code=422, detail="The upload filename is not safe.")
+    return value
 
 
 class HealthResponse(BaseModel):
@@ -2143,9 +2158,9 @@ def create_app(
         if isinstance(uploaded_file, str):
             raise HTTPException(status_code=422, detail="A file attachment is required.")
 
-        filename = getattr(uploaded_file, "filename", "upload")
-        if not isinstance(filename, str) or not filename:
-            filename = "uploaded-file"
+        filename = _validated_upload_filename(
+            getattr(uploaded_file, "filename", None), fallback="uploaded-file"
+        )
         content = await uploaded_file.read()
         if not isinstance(content, bytes):
             raise HTTPException(status_code=422, detail="File content must be binary.")
@@ -2315,7 +2330,9 @@ def create_app(
         if isinstance(uploaded_file, str):
             raise HTTPException(status_code=422, detail="A file attachment is required.")
 
-        filename = getattr(uploaded_file, "filename", "uploaded.pptx")
+        filename = _validated_upload_filename(
+            getattr(uploaded_file, "filename", None), fallback="uploaded.pptx"
+        )
         content = await uploaded_file.read()
         if not isinstance(content, bytes):
             raise HTTPException(status_code=422, detail="File content must be binary.")

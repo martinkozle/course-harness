@@ -10,6 +10,8 @@ from uuid import uuid4
 import httpx2
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
+from course_harness.product_connectors import product_connector_client
+
 ProviderKind = Literal["openrouter", "openai-compatible", "anthropic"]
 
 
@@ -255,7 +257,7 @@ async def validate_provider_account(
     if http_client is not None:
         await _validate_provider_account(request, http_client)
         return
-    async with httpx2.AsyncClient(timeout=15) as client:
+    async with product_connector_client(timeout=15) as client:
         await _validate_provider_account(request, client)
 
 
@@ -300,7 +302,7 @@ async def validate_provider_capabilities(
     """Verify model metadata through the configured provider adapter."""
     if http_client is not None:
         return await _validate_provider_capabilities(request, http_client)
-    async with httpx2.AsyncClient(timeout=15) as client:
+    async with product_connector_client(timeout=15) as client:
         return await _validate_provider_capabilities(request, client)
 
 

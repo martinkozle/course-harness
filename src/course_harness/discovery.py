@@ -5,15 +5,16 @@ from typing import Any
 
 import httpx2
 
+from course_harness.product_connectors import product_connector_client
 from course_harness.resources import (
     MAX_REMOTE_REDIRECTS,
     Candidate,
     DiscoveryRequest,
     DiscoveryResult,
     RemoteHostResolver,
+    pin_remote_url,
     redirect_target,
     resolve_remote_host,
-    validate_remote_url,
 )
 
 _ARXIV_NAMESPACES = {
@@ -208,7 +209,7 @@ async def inspect_web_url(
 ) -> Candidate:
     resolver = host_resolver or resolve_remote_host
     if client is None:
-        async with httpx2.AsyncClient(timeout=15, follow_redirects=False) as owned_client:
+        async with product_connector_client(timeout=15) as owned_client:
             return await _inspect_web(client=owned_client, url=url, host_resolver=resolver)
     return await _inspect_web(client=client, url=url, host_resolver=resolver)
 
@@ -220,8 +221,13 @@ async def _inspect_web(
 ) -> Candidate:
     current_url = url
     for redirect_count in range(MAX_REMOTE_REDIRECTS + 1):
-        await validate_remote_url(current_url, host_resolver=host_resolver)
-        response = await client.head(current_url, follow_redirects=False)
+        target = await pin_remote_url(current_url, host_resolver=host_resolver)
+        response = await client.head(
+            target.url,
+            headers={"Host": target.host_header},
+            extensions={"sni_hostname": target.sni_hostname},
+            follow_redirects=False,
+        )
         if response.is_redirect:
             if redirect_count == MAX_REMOTE_REDIRECTS:
                 raise ValueError("Remote URL exceeded the redirect limit")
@@ -253,7 +259,7 @@ PROVIDERS: dict[str, Callable[..., Any]] = {
 
 async def discover(request: DiscoveryRequest) -> list[DiscoveryResult]:
     providers = request.providers or list(PROVIDERS)
-    async with httpx2.AsyncClient(timeout=15, follow_redirects=True) as client:
+    async with product_connector_client(timeout=15, follow_redirects=True) as client:
         tasks: list[asyncio.Task[DiscoveryResult]] = []
         for name in providers:
             fn = PROVIDERS.get(name)
@@ -294,7 +300,7 @@ async def _fetch_arxiv(
     url: str,
 ) -> list[Candidate]:
     if client is None:
-        async with httpx2.AsyncClient(timeout=15) as owned_client:
+        async with product_connector_client(timeout=15) as owned_client:
             return await _fetch_arxiv(client=owned_client, url=url)
     response = await client.get(url)
     response.raise_for_status()
@@ -306,7 +312,7 @@ async def _fetch_crossref(
     url: str,
 ) -> list[Candidate]:
     if client is None:
-        async with httpx2.AsyncClient(timeout=15) as owned_client:
+        async with product_connector_client(timeout=15) as owned_client:
             return await _fetch_crossref(client=owned_client, url=url)
     response = await client.get(url)
     response.raise_for_status()
@@ -318,7 +324,7 @@ async def _fetch_github(
     url: str,
 ) -> list[Candidate]:
     if client is None:
-        async with httpx2.AsyncClient(timeout=15) as owned_client:
+        async with product_connector_client(timeout=15) as owned_client:
             return await _fetch_github(client=owned_client, url=url)
     response = await client.get(
         url,
@@ -333,7 +339,7 @@ async def _fetch_huggingface(
     url: str,
 ) -> list[Candidate]:
     if client is None:
-        async with httpx2.AsyncClient(timeout=15) as owned_client:
+        async with product_connector_client(timeout=15) as owned_client:
             return await _fetch_huggingface(client=owned_client, url=url)
     response = await client.get(url)
     response.raise_for_status()

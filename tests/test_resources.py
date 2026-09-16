@@ -80,6 +80,26 @@ async def test_register_upload_resource(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("filename", ["../outside.md", "..\\outside.md", f"{'a' * 256}.md"])
+async def test_upload_rejects_unsafe_filenames(tmp_path: Path, filename: str) -> None:
+    workspace = tmp_path / "resource-course"
+    workspace.mkdir()
+    data_dir = tmp_path / "library-data"
+    cache_dir = tmp_path / "library-cache"
+    transport = httpx2.ASGITransport(app=_app(workspace, data_dir, cache_dir))
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/resources/upload",
+            files={"file": (filename, b"safe content", "text/markdown")},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "The upload filename is not safe."
+    assert not data_dir.exists()
+
+
+@pytest.mark.anyio
 async def test_resource_initial_state_is_unprocessed(tmp_path: Path) -> None:
     workspace = tmp_path / "resource-course"
     workspace.mkdir()
@@ -443,13 +463,15 @@ async def test_remote_url_rejects_each_disallowed_ip_address_class(address: str)
 
 @pytest.mark.anyio
 async def test_remote_fetch_revalidates_each_redirect_destination() -> None:
-    requested: list[str] = []
+    requested: list[tuple[str, str, str]] = []
 
     async def resolver(hostname: str, _port: int) -> set[str]:
         return {"127.0.0.1"} if hostname == "private.example" else {"8.8.8.8"}
 
     def transport(request: httpx2.Request) -> httpx2.Response:
-        requested.append(str(request.url))
+        requested.append(
+            (str(request.url), request.headers["host"], request.extensions["sni_hostname"])
+        )
         return httpx2.Response(302, headers={"location": "https://private.example/metadata"})
 
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(transport)) as client:
@@ -460,7 +482,32 @@ async def test_remote_fetch_revalidates_each_redirect_destination() -> None:
                 host_resolver=resolver,
             )
 
-    assert requested == ["https://public.example/resource"]
+    assert requested == [("https://8.8.8.8/resource", "public.example", "public.example")]
+
+
+@pytest.mark.anyio
+async def test_remote_fetch_pins_the_validated_address() -> None:
+    requested: list[tuple[str, str, str]] = []
+
+    async def resolver(_hostname: str, _port: int) -> set[str]:
+        return {"8.8.8.8"}
+
+    def transport(request: httpx2.Request) -> httpx2.Response:
+        requested.append(
+            (str(request.url), request.headers["host"], request.extensions["sni_hostname"])
+        )
+        return httpx2.Response(200, headers={"content-type": "text/markdown"}, text="# Remote")
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(transport)) as client:
+        content, media_type = await fetch_remote_resource(
+            "https://example.com/resource",
+            http_client=client,
+            host_resolver=resolver,
+        )
+
+    assert content == b"# Remote"
+    assert media_type == "text/markdown"
+    assert requested == [("https://8.8.8.8/resource", "example.com", "example.com")]
 
 
 @pytest.mark.anyio

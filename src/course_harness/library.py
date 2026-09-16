@@ -4,6 +4,7 @@ from pathlib import Path
 
 import httpx2
 
+from course_harness.product_connectors import product_connector_client
 from course_harness.resources import (
     MAX_REMOTE_REDIRECTS,
     RemoteHostResolver,
@@ -13,13 +14,13 @@ from course_harness.resources import (
     Snapshot,
     content_hash,
     create_snapshot,
+    pin_remote_url,
     process_snapshot,
     read_library_index,
     redirect_target,
     register_resource,
     resolve_remote_host,
     update_resource_snapshot,
-    validate_remote_url,
     write_library_index,
 )
 
@@ -292,7 +293,7 @@ async def fetch_remote_resource(
     resolver = host_resolver or resolve_remote_host
     resolved_type = media_type or "application/octet-stream"
     if http_client is None:
-        async with httpx2.AsyncClient(timeout=30, follow_redirects=False) as owned_client:
+        async with product_connector_client(timeout=30) as owned_client:
             return await _fetch_remote_resource(
                 owned_client,
                 url,
@@ -318,8 +319,13 @@ async def _fetch_remote_resource(
 ) -> tuple[bytes, str]:
     current_url = url
     for redirect_count in range(MAX_REMOTE_REDIRECTS + 1):
-        await validate_remote_url(current_url, host_resolver=host_resolver)
-        response = await client.get(current_url, follow_redirects=False)
+        target = await pin_remote_url(current_url, host_resolver=host_resolver)
+        response = await client.get(
+            target.url,
+            headers={"Host": target.host_header},
+            extensions={"sni_hostname": target.sni_hostname},
+            follow_redirects=False,
+        )
         if response.is_redirect:
             if redirect_count == MAX_REMOTE_REDIRECTS:
                 raise ValueError("Remote URL exceeded the redirect limit")

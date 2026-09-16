@@ -81,6 +81,22 @@ async def test_upload_template_returns_profile(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_upload_template_rejects_a_traversal_filename(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    templates_data = tmp_path / "tpl-data"
+    templates_cache = tmp_path / "tpl-cache"
+    transport = httpx2.ASGITransport(app=_app(workspace, templates_data, templates_cache))
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await _upload_pptx(client, _make_test_pptx(), "..\\outside.pptx")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "The upload filename is not safe."
+    assert not templates_data.exists()
+
+
+@pytest.mark.anyio
 async def test_upload_schedules_empty_layout_backgrounds_when_renderer_is_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

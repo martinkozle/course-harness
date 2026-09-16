@@ -3,18 +3,27 @@ import hashlib
 import ipaddress
 import socket
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 from urllib.parse import SplitResult, urljoin, urlsplit
 from uuid import uuid4
 
+import httpx2
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ResourceKind = Literal["local-file", "upload", "remote"]
 ProcessingStatus = Literal["unprocessed", "processing", "ready", "failed", "retrying"]
 MAX_REMOTE_REDIRECTS = 5
 RemoteHostResolver = Callable[[str, int], Awaitable[set[str]]]
+
+
+@dataclass(frozen=True)
+class PinnedRemoteRequest:
+    url: httpx2.URL
+    host_header: str
+    sni_hostname: str
 
 
 class ResourceRegistrationRequest(BaseModel):
@@ -163,19 +172,42 @@ async def validate_remote_url(
     value: str,
     *,
     host_resolver: RemoteHostResolver = resolve_remote_host,
-) -> None:
+) -> set[str]:
     """Reject destinations that could cross the local network trust boundary.
 
     The resolver is deliberately injectable so callers can test the policy without
-    accessing DNS. It is run before every outbound request; this narrows, but cannot
-    completely eliminate, the time-of-check/time-of-use window in ordinary HTTP clients.
+    accessing DNS. It is run before every outbound request and the validated addresses
+    are returned so a caller can pin the subsequent connection to the same result.
     """
     parsed = parse_remote_url(value)
     assert parsed.hostname is not None
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     addresses = await host_resolver(parsed.hostname, port)
+    if not addresses:
+        raise ValueError("Remote URL hostname could not be resolved")
     if any(_is_unsafe_remote_address(address) for address in addresses):
         raise ValueError("Remote URL resolves to a disallowed network address")
+    return addresses
+
+
+async def pin_remote_url(
+    value: str,
+    *,
+    host_resolver: RemoteHostResolver = resolve_remote_host,
+) -> PinnedRemoteRequest:
+    """Bind an outbound request to an address approved by the URL policy."""
+    addresses = await validate_remote_url(value, host_resolver=host_resolver)
+    original = httpx2.URL(value)
+    address = min(str(ipaddress.ip_address(candidate.split("%", 1)[0])) for candidate in addresses)
+    host = original.raw_host.decode("ascii")
+    authority = f"[{host}]" if ":" in host else host
+    if original.port is not None:
+        authority += f":{original.port}"
+    return PinnedRemoteRequest(
+        url=original.copy_with(host=address),
+        host_header=authority,
+        sni_hostname=host,
+    )
 
 
 def redirect_target(current_url: str, location: str | None) -> str:
