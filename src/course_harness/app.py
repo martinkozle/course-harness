@@ -329,14 +329,17 @@ def create_app(
         request: Request,
         exc: RequestValidationError,
     ) -> StarletteResponse:
+        errors = [
+            {key: value for key, value in error.items() if key != "input"} for error in exc.errors()
+        ]
         logger.warning(
             "Validation error on %s %s: %s",
             request.method,
             request.url.path,
-            exc.errors(),
+            errors,
         )
         return StarletteResponse(
-            content=json.dumps({"detail": exc.errors()}).encode("utf-8"),
+            content=json.dumps({"detail": errors}, default=str).encode("utf-8"),
             status_code=422,
             media_type="application/json",
         )

@@ -197,6 +197,28 @@ def _make_cross_file_drift(workspace: Path) -> str:
 
 
 @pytest.mark.anyio
+async def test_validation_errors_do_not_echo_provider_secrets(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    secret = "rejected-provider-secret-that-must-not-leak"
+    transport = httpx2.ASGITransport(
+        app=create_app(workspace, provider_store_path=tmp_path / "provider")
+    )
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/provider-accounts",
+            json={"name": "", "kind": "invalid-provider", "api_key": secret},
+        )
+
+    assert response.status_code == 422
+    assert secret not in response.text
+    assert secret not in caplog.text
+
+
+@pytest.mark.anyio
 async def test_provider_configuration_is_kept_outside_the_course_workspace(
     tmp_path: Path,
 ) -> None:
