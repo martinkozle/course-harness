@@ -184,6 +184,32 @@ async def test_discover_captures_provider_errors() -> None:
 
 
 @pytest.mark.anyio
+async def test_discover_does_not_follow_unvalidated_redirects() -> None:
+    requested: list[str] = []
+
+    def mock_transport(request: httpx2.Request) -> httpx2.Response:
+        requested.append(str(request.url))
+        return httpx2.Response(
+            302,
+            headers={"location": "http://127.0.0.1:9/private"},
+        )
+
+    request = res.DiscoveryRequest(query="redirect", providers=["arxiv"])
+    with patch(
+        "course_harness.discovery.httpx2.AsyncClient",
+        return_value=httpx2.AsyncClient(transport=httpx2.MockTransport(mock_transport)),
+    ):
+        results = await discover(request)
+
+    assert requested == [
+        "https://export.arxiv.org/api/query?search_query=all:redirect&start=0&max_results=15"
+        "&sortBy=relevance&sortOrder=descending"
+    ]
+    assert results[0].candidates == []
+    assert results[0].error is not None
+
+
+@pytest.mark.anyio
 async def test_inspect_web_url() -> None:
     def mock_transport(http_request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(

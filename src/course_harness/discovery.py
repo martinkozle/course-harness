@@ -259,7 +259,9 @@ PROVIDERS: dict[str, Callable[..., Any]] = {
 
 async def discover(request: DiscoveryRequest) -> list[DiscoveryResult]:
     providers = request.providers or list(PROVIDERS)
-    async with product_connector_client(timeout=15, follow_redirects=True) as client:
+    # A connector redirect may target a destination outside the connector's
+    # disclosed boundary. Surface it as a provider error instead of following it.
+    async with product_connector_client(timeout=15, follow_redirects=False) as client:
         tasks: list[asyncio.Task[DiscoveryResult]] = []
         for name in providers:
             fn = PROVIDERS.get(name)

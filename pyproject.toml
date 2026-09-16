@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [
   "fastapi",
+  "httpx",
+  "httpx2",
   "pydantic-ai-slim[ag-ui,anthropic,openai]",
   "python-multipart>=0.0.32",
   "python-pptx>=1.0.2",
@@ -23,7 +25,6 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-  "httpx2",
   "pytest",
   "ruff",
   "ty",
