@@ -123,6 +123,62 @@ async def test_upload_rejects_oversized_documents(
 
 
 @pytest.mark.anyio
+async def test_upload_rejects_large_multipart_request_before_parsing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "resource-course"
+    workspace.mkdir()
+    data_dir = tmp_path / "library-data"
+    cache_dir = tmp_path / "library-cache"
+    monkeypatch.setattr(app_module, "MAX_UPLOAD_BYTES", 8)
+    transport = httpx2.ASGITransport(app=_app(workspace, data_dir, cache_dir))
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/resources/upload",
+            files={"file": ("large.md", b"x" * (70 * 1024), "text/markdown")},
+        )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "The upload exceeds the 8-byte limit."
+    assert not data_dir.exists()
+
+
+@pytest.mark.anyio
+async def test_upload_rejects_chunked_oversized_file_during_multipart_parsing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "resource-course"
+    workspace.mkdir()
+    data_dir = tmp_path / "library-data"
+    cache_dir = tmp_path / "library-cache"
+    monkeypatch.setattr(app_module, "MAX_UPLOAD_BYTES", 8)
+    transport = httpx2.ASGITransport(app=_app(workspace, data_dir, cache_dir))
+    boundary = "resource-upload-boundary"
+
+    async def body():
+        yield (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="file"; filename="large.md"\r\n'
+            "Content-Type: text/markdown\r\n\r\n"
+        ).encode()
+        yield b"12345"
+        yield b"6789\r\n"
+        yield f"--{boundary}--\r\n".encode()
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/resources/upload",
+            headers={"content-type": f"multipart/form-data; boundary={boundary}"},
+            content=body(),
+        )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "The upload exceeds the 8-byte limit."
+    assert not data_dir.exists()
+
+
+@pytest.mark.anyio
 async def test_resource_initial_state_is_unprocessed(tmp_path: Path) -> None:
     workspace = tmp_path / "resource-course"
     workspace.mkdir()
@@ -531,6 +587,39 @@ async def test_remote_fetch_pins_the_validated_address() -> None:
     assert content == b"# Remote"
     assert media_type == "text/markdown"
     assert requested == [("https://8.8.8.8/resource", "example.com", "example.com")]
+
+
+@pytest.mark.anyio
+async def test_remote_fetch_stops_streaming_when_chunked_content_exceeds_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("course_harness.library.MAX_FETCH_BYTES", 8)
+    chunks_read: list[bytes] = []
+
+    class ChunkedBody(httpx2.AsyncByteStream):
+        async def __aiter__(self):
+            for chunk in (b"12345", b"6789", b"must-not-be-read"):
+                chunks_read.append(chunk)
+                yield chunk
+
+        async def aclose(self) -> None:
+            pass
+
+    async def resolver(_hostname: str, _port: int) -> set[str]:
+        return {"8.8.8.8"}
+
+    def transport(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, stream=ChunkedBody())
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(transport)) as client:
+        with pytest.raises(ValueError, match="maximum is 8 bytes"):
+            await fetch_remote_resource(
+                "https://example.com/resource",
+                http_client=client,
+                host_resolver=resolver,
+            )
+
+    assert chunks_read == [b"12345", b"6789"]
 
 
 @pytest.mark.anyio

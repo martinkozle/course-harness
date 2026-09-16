@@ -320,35 +320,42 @@ async def _fetch_remote_resource(
     current_url = url
     for redirect_count in range(MAX_REMOTE_REDIRECTS + 1):
         target = await pin_remote_url(current_url, host_resolver=host_resolver)
-        response = await client.get(
+        async with client.stream(
+            "GET",
             target.url,
             headers={"Host": target.host_header},
             extensions={"sni_hostname": target.sni_hostname},
             follow_redirects=False,
-        )
-        if response.is_redirect:
-            if redirect_count == MAX_REMOTE_REDIRECTS:
-                raise ValueError("Remote URL exceeded the redirect limit")
-            current_url = redirect_target(current_url, response.headers.get("location"))
-            continue
-        response.raise_for_status()
-        content_length = response.headers.get("content-length")
-        if (
-            content_length is not None
-            and content_length.isdigit()
-            and int(content_length) > MAX_FETCH_BYTES
-        ):
-            raise ValueError(
-                f"Remote content is {int(content_length)} bytes; "
-                f"maximum is {MAX_FETCH_BYTES} bytes."
-            )
-        header_type = response.headers.get("content-type", "").split(";")[0].strip()
-        if not requested_media_type and header_type:
-            resolved_type = header_type
-        content = await response.aread()
-        if len(content) > MAX_FETCH_BYTES:
-            raise ValueError(f"Fetched {len(content)} bytes; maximum is {MAX_FETCH_BYTES} bytes.")
-        return content, resolved_type
+        ) as response:
+            if response.is_redirect:
+                if redirect_count == MAX_REMOTE_REDIRECTS:
+                    raise ValueError("Remote URL exceeded the redirect limit")
+                current_url = redirect_target(current_url, response.headers.get("location"))
+                continue
+            response.raise_for_status()
+            content_length = response.headers.get("content-length")
+            if (
+                content_length is not None
+                and content_length.isdigit()
+                and int(content_length) > MAX_FETCH_BYTES
+            ):
+                raise ValueError(
+                    f"Remote content is {int(content_length)} bytes; "
+                    f"maximum is {MAX_FETCH_BYTES} bytes."
+                )
+            header_type = response.headers.get("content-type", "").split(";")[0].strip()
+            if not requested_media_type and header_type:
+                resolved_type = header_type
+
+            content = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(chunk) > MAX_FETCH_BYTES - len(content):
+                    raise ValueError(
+                        f"Fetched more than {MAX_FETCH_BYTES} bytes; maximum is "
+                        f"{MAX_FETCH_BYTES} bytes."
+                    )
+                content.extend(chunk)
+            return bytes(content), resolved_type
     raise AssertionError("Remote redirect loop did not return or raise")
 
 

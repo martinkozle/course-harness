@@ -117,6 +117,59 @@ async def test_upload_template_rejects_an_oversized_document(
 
 
 @pytest.mark.anyio
+async def test_template_upload_rejects_large_multipart_request_before_parsing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    templates_data = tmp_path / "tpl-data"
+    templates_cache = tmp_path / "tpl-cache"
+    monkeypatch.setattr(app_module, "MAX_UPLOAD_BYTES", 8)
+    transport = httpx2.ASGITransport(app=_app(workspace, templates_data, templates_cache))
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await _upload_pptx(client, b"x" * (70 * 1024))
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "The upload exceeds the 8-byte limit."
+    assert not templates_data.exists()
+
+
+@pytest.mark.anyio
+async def test_template_upload_rejects_chunked_oversized_file_during_multipart_parsing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    templates_data = tmp_path / "tpl-data"
+    templates_cache = tmp_path / "tpl-cache"
+    monkeypatch.setattr(app_module, "MAX_UPLOAD_BYTES", 8)
+    transport = httpx2.ASGITransport(app=_app(workspace, templates_data, templates_cache))
+    boundary = "template-upload-boundary"
+
+    async def body():
+        yield (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="file"; filename="large.pptx"\r\n'
+            f"Content-Type: {PP_MIME}\r\n\r\n"
+        ).encode()
+        yield b"12345"
+        yield b"6789\r\n"
+        yield f"--{boundary}--\r\n".encode()
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/templates/upload",
+            headers={"content-type": f"multipart/form-data; boundary={boundary}"},
+            content=body(),
+        )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "The upload exceeds the 8-byte limit."
+    assert not templates_data.exists()
+
+
+@pytest.mark.anyio
 async def test_upload_schedules_empty_layout_backgrounds_when_renderer_is_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

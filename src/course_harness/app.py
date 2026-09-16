@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import subprocess
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Literal, cast
@@ -14,7 +14,8 @@ from pydantic_ai import AgentRunResult, DeferredToolRequests
 from pydantic_ai.models import Model
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 from starlette.background import BackgroundTask
-from starlette.datastructures import UploadFile
+from starlette.datastructures import Headers, UploadFile
+from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.requests import Request
 from starlette.responses import Response as StarletteResponse
 from starlette.responses import StreamingResponse
@@ -177,6 +178,92 @@ from course_harness.workspaces import (
 STREAM_TERMINATION_CONFIRMATION_SECONDS = 0.5
 MAX_UPLOAD_FILENAME_LENGTH = 255
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+# This covers the multipart boundary and a normal file disposition. The parser
+# below remains the authoritative per-file limit, because Content-Length is
+# optional and includes multipart framing.
+MAX_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+
+
+def _upload_too_large() -> HTTPException:
+    return HTTPException(
+        status_code=413,
+        detail=f"The upload exceeds the {MAX_UPLOAD_BYTES}-byte limit.",
+    )
+
+
+class _BoundedUploadParser(MultiPartParser):
+    """Starlette's multipart limit excludes file parts; bound those explicitly."""
+
+    def __init__(
+        self,
+        headers: Headers,
+        stream: AsyncGenerator[bytes],
+        *,
+        maximum_file_bytes: int,
+        max_files: int | float = 1000,
+        max_fields: int | float = 1000,
+        max_part_size: int = 1024 * 1024,
+    ) -> None:
+        super().__init__(
+            headers,
+            stream,
+            max_files=max_files,
+            max_fields=max_fields,
+            max_part_size=max_part_size,
+        )
+        self.maximum_file_bytes = maximum_file_bytes
+        self._current_file_bytes = 0
+
+    def on_part_begin(self) -> None:
+        super().on_part_begin()
+        self._current_file_bytes = 0
+
+    def on_part_data(self, data: bytes, start: int, end: int) -> None:
+        if self._current_part.file is not None:
+            self._current_file_bytes += end - start
+            if self._current_file_bytes > self.maximum_file_bytes:
+                raise MultiPartException("File exceeded the configured upload limit.")
+        super().on_part_data(data, start, end)
+
+
+def _reject_oversized_upload_request(request: Request) -> None:
+    content_length = request.headers.get("content-length")
+    if content_length is None:
+        return
+    try:
+        request_bytes = int(content_length)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400, detail="The upload Content-Length is invalid."
+        ) from error
+    if request_bytes < 0:
+        raise HTTPException(status_code=400, detail="The upload Content-Length is invalid.")
+    if request_bytes > MAX_UPLOAD_BYTES + MAX_MULTIPART_OVERHEAD_BYTES:
+        raise _upload_too_large()
+
+
+async def _bounded_upload_form(request: Request):
+    """Parse one upload without allowing a file to grow an unbounded temp file."""
+
+    _reject_oversized_upload_request(request)
+    content_type = request.headers.get("content-type", "").lower()
+    if not content_type.startswith("multipart/form-data"):
+        return await request.form(max_files=1, max_fields=1, max_part_size=MAX_UPLOAD_BYTES)
+
+    parser = _BoundedUploadParser(
+        request.headers,
+        request.stream(),
+        max_files=1,
+        max_fields=1,
+        max_part_size=MAX_UPLOAD_BYTES,
+        maximum_file_bytes=MAX_UPLOAD_BYTES,
+    )
+    try:
+        return await parser.parse()
+    except MultiPartException as error:
+        if "configured upload limit" in str(error):
+            raise _upload_too_large() from error
+        raise HTTPException(status_code=422, detail=f"Invalid multipart upload: {error}") from error
 
 
 def _validated_upload_filename(value: object, *, fallback: str) -> str:
@@ -196,10 +283,7 @@ def _validated_upload_filename(value: object, *, fallback: str) -> str:
 async def _read_bounded_upload(uploaded_file: UploadFile) -> bytes:
     content = await uploaded_file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"The upload exceeds the {MAX_UPLOAD_BYTES}-byte limit.",
-        )
+        raise _upload_too_large()
     return content
 
 
@@ -2163,7 +2247,7 @@ def create_app(
     @app.post("/api/resources/upload", response_model=res.ResourceState, status_code=201)
     async def upload_resource(request: Request) -> res.ResourceState:
         require_workspace()
-        form = await request.form()
+        form = await _bounded_upload_form(request)
         uploaded_file = form.get("file")
         if uploaded_file is None:
             raise HTTPException(status_code=422, detail="A file attachment is required.")
@@ -2333,7 +2417,7 @@ def create_app(
     @app.post("/api/templates/upload", response_model=TemplateUploadResponse)
     async def api_upload_template(request: Request) -> TemplateUploadResponse:
 
-        form = await request.form()
+        form = await _bounded_upload_form(request)
         uploaded_file = form.get("file")
         if uploaded_file is None:
             raise HTTPException(status_code=422, detail="A .pptx or .potx file is required.")
