@@ -178,6 +178,7 @@ from course_harness.workspaces import (
 STREAM_TERMINATION_CONFIRMATION_SECONDS = 0.5
 MAX_UPLOAD_FILENAME_LENGTH = 255
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+MAX_MULTIPART_FIELD_BYTES = 64 * 1024
 # This covers the multipart boundary and a normal file disposition. The parser
 # below remains the authoritative per-file limit, because Content-Length is
 # optional and includes multipart framing.
@@ -248,14 +249,17 @@ async def _bounded_upload_form(request: Request):
     _reject_oversized_upload_request(request)
     content_type = request.headers.get("content-type", "").lower()
     if not content_type.startswith("multipart/form-data"):
-        return await request.form(max_files=1, max_fields=1, max_part_size=MAX_UPLOAD_BYTES)
+        raise HTTPException(
+            status_code=415,
+            detail="Uploads require multipart/form-data with one file attachment.",
+        )
 
     parser = _BoundedUploadParser(
         request.headers,
         request.stream(),
         max_files=1,
         max_fields=1,
-        max_part_size=MAX_UPLOAD_BYTES,
+        max_part_size=MAX_MULTIPART_FIELD_BYTES,
         maximum_file_bytes=MAX_UPLOAD_BYTES,
     )
     try:

@@ -179,6 +179,37 @@ async def test_upload_rejects_chunked_oversized_file_during_multipart_parsing(
 
 
 @pytest.mark.anyio
+async def test_upload_rejects_chunked_non_multipart_body_without_reading_it(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "resource-course"
+    workspace.mkdir()
+    data_dir = tmp_path / "library-data"
+    cache_dir = tmp_path / "library-cache"
+    transport = httpx2.ASGITransport(app=_app(workspace, data_dir, cache_dir))
+    chunks_read: list[bytes] = []
+
+    async def body():
+        for chunk in (b"file=", b"x" * 1024):
+            chunks_read.append(chunk)
+            yield chunk
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/resources/upload",
+            headers={"content-type": "application/x-www-form-urlencoded"},
+            content=body(),
+        )
+
+    assert response.status_code == 415
+    assert response.json()["detail"] == (
+        "Uploads require multipart/form-data with one file attachment."
+    )
+    assert chunks_read == []
+    assert not data_dir.exists()
+
+
+@pytest.mark.anyio
 async def test_resource_initial_state_is_unprocessed(tmp_path: Path) -> None:
     workspace = tmp_path / "resource-course"
     workspace.mkdir()
