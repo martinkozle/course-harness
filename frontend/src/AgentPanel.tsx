@@ -708,9 +708,24 @@ export function AgentPanel({
 						)}
 					</div>
 				</div>
+				{selected && selectedAccount ? (
+					<p className="agent-network-disclosure" role="note">
+						When you send a message, it and any Source excerpts needed for the
+						response leave this device for <strong>{selectedAccount.name}</strong>
+						 at <strong>{selectedAccount.base_url}</strong>, using the selected
+						Model Preset. Its credential stays in Course Harness&apos;s private
+						provider store. Only the credential saved for this Provider Account is
+						used.
+					</p>
+				) : null}
 			</header>
 
-			<section className="chat-scroll-container" aria-label="Conversation">
+			<section
+				className="chat-scroll-container"
+				aria-label="Conversation"
+				// biome-ignore lint/a11y/noNoninteractiveTabindex: the scrollable conversation needs a keyboard focus stop
+				tabIndex={0}
+			>
 				<ol className="chat-messages" aria-label="Course Agent conversation">
 					{messages.length === 0 ? (
 						<li className="chat-empty">

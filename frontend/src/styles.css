@@ -1704,6 +1704,11 @@ h1 {
 	flex-direction: column;
 }
 
+.chat-scroll-container:focus-visible {
+	outline: 3px solid var(--cobalt);
+	outline-offset: 3px;
+}
+
 .chat-messages {
 	display: grid;
 	flex: 1 1 0;
@@ -3381,7 +3386,7 @@ h1 {
 
 .lecture-status {
 	grid-column: 2;
-	color: var(--muted);
+	color: #4d5b74;
 	font-family: "SFMono-Regular", Consolas, monospace;
 	font-size: 0.6rem;
 	font-weight: 500;
@@ -3817,6 +3822,10 @@ h1 {
 	display: inline-flex;
 	align-items: center;
 	cursor: pointer;
+}
+
+.upload-label.primary-action {
+	color: white;
 }
 
 .search-form {
@@ -4274,7 +4283,7 @@ button.authoritative-content-slot:focus-visible {
 	display: grid;
 	place-items: center;
 	padding: 0.35rem;
-	background: rgb(15 23 42 / 48%);
+	background: rgb(15 23 42 / 60%);
 	color: #fff;
 	font-size: clamp(0.55rem, 2.8cqw, 0.9rem);
 	font-weight: 700;
@@ -4607,6 +4616,10 @@ button.authoritative-content-slot:focus-visible {
 	text-overflow: ellipsis;
 	white-space: nowrap;
 	color: var(--ink);
+}
+
+.chat-context-indicator .quiet-action {
+	color: var(--cobalt-dark);
 }
 
 @media (max-width: 800px) {

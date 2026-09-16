@@ -1,6 +1,8 @@
 import { resolve } from "node:path";
 import { expect, test } from "@playwright/test";
 
+import { clearSmokeModelCatalog } from "./smokeState";
+
 type PresentationPayload = {
 	profile_id: string;
 	profile_version: number;
@@ -82,6 +84,7 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	await expect(
 		page.getByRole("heading", { name: "Give the course a clear shape." }),
 	).toBeVisible();
+	await clearSmokeModelCatalog(page);
 	await page.getByRole("button", { name: "Models", exact: true }).click();
 	await expect(page.getByRole("heading", { name: "Models" })).toBeVisible();
 	await page.getByLabel("API key").fill("deterministic-test-key");
@@ -94,6 +97,9 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 
 	// The first fake-agent turn creates the two-Lecture Course Plan through chat.
 	await page.getByRole("button", { name: "Authoring", exact: true }).click();
+	await expect(
+		page.getByText(/When you send a message, it and any Source excerpts needed/),
+	).toBeVisible();
 	await page
 		.getByLabel("Message the Course Agent")
 		.fill(
@@ -121,6 +127,9 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	await page.getByRole("button", { name: "Library" }).click();
 	await expect(
 		page.getByRole("heading", { name: "Resources", exact: true }),
+	).toBeVisible();
+	await expect(
+		page.getByText(/Searching sends only your query to the listed public discovery services/),
 	).toBeVisible();
 	await page
 		.locator('input[type="file"]')

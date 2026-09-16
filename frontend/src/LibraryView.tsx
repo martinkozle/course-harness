@@ -731,6 +731,12 @@ export function LibraryView({
 						<h2>Find remote resources</h2>
 					</div>
 				</div>
+				<p className="network-disclosure" role="note">
+					Searching sends only your query to the listed public discovery services.
+					Adding a result sends its URL to that result&apos;s host so Course Harness
+					can capture a Snapshot. These connectors use no Provider Account or
+					unrelated environment credentials.
+				</p>
 
 				<form className="search-form" onSubmit={handleDiscoverySearch}>
 					<input
