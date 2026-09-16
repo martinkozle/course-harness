@@ -8,6 +8,7 @@ import pytest
 from pptx import Presentation as PPTXPresentation
 from pydantic_ai.models import Model
 
+from course_harness import app as app_module
 from course_harness.app import create_app
 from course_harness.course_plan import (
     CoursePlanInput,
@@ -93,6 +94,25 @@ async def test_upload_template_rejects_a_traversal_filename(tmp_path: Path) -> N
 
     assert response.status_code == 422
     assert response.json()["detail"] == "The upload filename is not safe."
+    assert not templates_data.exists()
+
+
+@pytest.mark.anyio
+async def test_upload_template_rejects_an_oversized_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    templates_data = tmp_path / "tpl-data"
+    templates_cache = tmp_path / "tpl-cache"
+    monkeypatch.setattr(app_module, "MAX_UPLOAD_BYTES", 8)
+    transport = httpx2.ASGITransport(app=_app(workspace, templates_data, templates_cache))
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await _upload_pptx(client, b"123456789")
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "The upload exceeds the 8-byte limit."
     assert not templates_data.exists()
 
 

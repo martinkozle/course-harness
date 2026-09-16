@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 import httpx2
 import pytest
 
+from course_harness import app as app_module
 from course_harness import resources as res
 from course_harness.app import create_app
 from course_harness.library import fetch_remote_resource
@@ -96,6 +97,28 @@ async def test_upload_rejects_unsafe_filenames(tmp_path: Path, filename: str) ->
 
     assert response.status_code == 422
     assert response.json()["detail"] == "The upload filename is not safe."
+    assert not data_dir.exists()
+
+
+@pytest.mark.anyio
+async def test_upload_rejects_oversized_documents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "resource-course"
+    workspace.mkdir()
+    data_dir = tmp_path / "library-data"
+    cache_dir = tmp_path / "library-cache"
+    monkeypatch.setattr(app_module, "MAX_UPLOAD_BYTES", 8)
+    transport = httpx2.ASGITransport(app=_app(workspace, data_dir, cache_dir))
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/resources/upload",
+            files={"file": ("large.md", b"123456789", "text/markdown")},
+        )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "The upload exceeds the 8-byte limit."
     assert not data_dir.exists()
 
 

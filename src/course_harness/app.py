@@ -14,6 +14,7 @@ from pydantic_ai import AgentRunResult, DeferredToolRequests
 from pydantic_ai.models import Model
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 from starlette.background import BackgroundTask
+from starlette.datastructures import UploadFile
 from starlette.requests import Request
 from starlette.responses import Response as StarletteResponse
 from starlette.responses import StreamingResponse
@@ -175,6 +176,7 @@ from course_harness.workspaces import (
 
 STREAM_TERMINATION_CONFIRMATION_SECONDS = 0.5
 MAX_UPLOAD_FILENAME_LENGTH = 255
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
 
 def _validated_upload_filename(value: object, *, fallback: str) -> str:
@@ -189,6 +191,16 @@ def _validated_upload_filename(value: object, *, fallback: str) -> str:
     ):
         raise HTTPException(status_code=422, detail="The upload filename is not safe.")
     return value
+
+
+async def _read_bounded_upload(uploaded_file: UploadFile) -> bytes:
+    content = await uploaded_file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"The upload exceeds the {MAX_UPLOAD_BYTES}-byte limit.",
+        )
+    return content
 
 
 class HealthResponse(BaseModel):
@@ -2155,15 +2167,13 @@ def create_app(
         uploaded_file = form.get("file")
         if uploaded_file is None:
             raise HTTPException(status_code=422, detail="A file attachment is required.")
-        if isinstance(uploaded_file, str):
+        if not isinstance(uploaded_file, UploadFile):
             raise HTTPException(status_code=422, detail="A file attachment is required.")
 
         filename = _validated_upload_filename(
             getattr(uploaded_file, "filename", None), fallback="uploaded-file"
         )
-        content = await uploaded_file.read()
-        if not isinstance(content, bytes):
-            raise HTTPException(status_code=422, detail="File content must be binary.")
+        content = await _read_bounded_upload(uploaded_file)
 
         media_type = getattr(uploaded_file, "content_type", None)
         if not isinstance(media_type, str) or not media_type:
@@ -2327,15 +2337,13 @@ def create_app(
         uploaded_file = form.get("file")
         if uploaded_file is None:
             raise HTTPException(status_code=422, detail="A .pptx or .potx file is required.")
-        if isinstance(uploaded_file, str):
+        if not isinstance(uploaded_file, UploadFile):
             raise HTTPException(status_code=422, detail="A file attachment is required.")
 
         filename = _validated_upload_filename(
             getattr(uploaded_file, "filename", None), fallback="uploaded.pptx"
         )
-        content = await uploaded_file.read()
-        if not isinstance(content, bytes):
-            raise HTTPException(status_code=422, detail="File content must be binary.")
+        content = await _read_bounded_upload(uploaded_file)
 
         media_type = getattr(uploaded_file, "content_type", None)
         if media_type and media_type not in {
