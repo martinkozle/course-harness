@@ -21,6 +21,13 @@ test("major Course Author journey surfaces meet automated and keyboard accessibi
 	await page.goto("/");
 	await expectNoAccessibilityViolations(page, "Workspace Launcher");
 
+	await page.getByRole("button", { name: "Runtime diagnostics" }).click();
+	await expect(
+		page.getByRole("dialog", { name: "Runtime diagnostics" }),
+	).toBeVisible();
+	await expectNoAccessibilityViolations(page, "Runtime diagnostics");
+	await page.keyboard.press("Escape");
+
 	await page.getByRole("button", { name: "New course" }).click();
 	await expect(
 		page.getByRole("heading", { name: "Give the course a clear shape." }),
@@ -31,7 +38,9 @@ test("major Course Author journey surfaces meet automated and keyboard accessibi
 	await page.getByRole("button", { name: "Models", exact: true }).click();
 	await expect(page.getByRole("heading", { name: "Models" })).toBeVisible();
 	await expect(
-		page.getByText(/Saving sends this key to https:\/\/openrouter\.ai\/api\/v1/),
+		page.getByText(
+			/Saving sends this key to https:\/\/openrouter\.ai\/api\/v1/,
+		),
 	).toBeVisible();
 	await expectNoAccessibilityViolations(page, "Provider and model setup");
 
@@ -42,7 +51,9 @@ test("major Course Author journey surfaces meet automated and keyboard accessibi
 			await route.fulfill({
 				status: 422,
 				contentType: "application/json",
-				body: JSON.stringify({ detail: "The Provider Account could not be verified." }),
+				body: JSON.stringify({
+					detail: "The Provider Account could not be verified.",
+				}),
 			});
 		},
 		{ times: 1 },
@@ -93,9 +104,9 @@ test("major Course Author journey surfaces meet automated and keyboard accessibi
 	await expect
 		.poll(() => conversation.evaluate((element) => element.scrollTop))
 		.toBeGreaterThan(0);
-	const course = (await (
-		await page.request.get("/api/course")
-	).json()) as { lectures: Array<{ id: string }> };
+	const course = (await (await page.request.get("/api/course")).json()) as {
+		lectures: Array<{ id: string }>;
+	};
 	const firstLecture = course.lectures[0];
 	expect(firstLecture).toBeDefined();
 	const createPresentation = await page.request.post(

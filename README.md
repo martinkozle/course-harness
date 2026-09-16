@@ -3,7 +3,46 @@
 Course Harness is a local-first application for creating source-grounded Courses in a
 human-readable Course Workspace.
 
-## Requirements
+## Install and launch
+
+Course Harness requires Python 3.14. Run the published package without a permanent installation:
+
+```bash
+uvx --python 3.14 course-harness
+```
+
+Or install it as a command-line tool:
+
+```bash
+uv tool install --python 3.14 course-harness
+course-harness
+```
+
+The package contains the production web interface. Course Authors do not need Node.js, Bun, Nix,
+Docker, a database, or a paid model provider to launch the Workspace Launcher. LibreOffice is
+optional and enables high-fidelity slide thumbnails when its `libreoffice` or `soffice` executable
+is available on `PATH`; semantic previews remain available without it.
+
+To try an unreleased revision directly from GitHub:
+
+```bash
+uvx --python 3.14 --from git+https://github.com/martinkozle/course-harness.git course-harness
+```
+
+The command starts one loopback-only process, opens `http://127.0.0.1:8765`, and shows the
+Workspace Launcher. Use the operating-system folder chooser to create or open a Course Workspace.
+Pass an explicit path (including `.`) to bypass the launcher, `--no-browser` to avoid opening the
+application automatically, or `--port <number>` to choose another local port:
+
+```bash
+course-harness /path/to/course-workspace
+```
+
+Course Harness stores canonical Course state in readable Workspace files. Runtime caches,
+application state, and provider credentials stay in platform-native user locations outside Course
+Workspaces; the in-app runtime diagnostics show the exact locations and available capabilities.
+
+## Development requirements
 
 - [Nix](https://nixos.org/) with flakes enabled
 
@@ -46,7 +85,7 @@ pre-commit run --all-files
 
 The hook configuration lives in `flake.nix`; `.pre-commit-config.yaml` is generated and ignored.
 
-## Install and launch Course Harness
+## Launch from a development checkout
 
 ```bash
 uv sync --locked
@@ -55,18 +94,11 @@ bun run build
 uv run course-harness
 ```
 
-The last command starts one loopback-only process, opens `http://127.0.0.1:8765`, and shows the
-Workspace Launcher. Use the operating-system folder chooser to create or open a Course Workspace.
-Pass an explicit path (including `.`) to bypass the launcher, `--no-browser` to avoid opening the
-application automatically, or `--port <number>` to choose another local port:
+The last command launches the checkout. Pass a Workspace path to bypass the launcher:
 
 ```bash
 uv run course-harness /path/to/course-workspace
 ```
-
-Course Harness stores the Course Plan in readable `course.yaml`. Runtime caches are not required to
-reopen the Course, and recent-Workspace metadata lives in platform-native user data outside Course
-folders.
 
 Course Harness rejects missing paths, files, symbolic links, and the filesystem root as unsafe
 Workspace choices. It does not expose a general filesystem API.
@@ -98,6 +130,16 @@ bun run build
 bun run test:e2e
 uv run pytest
 ```
+
+Build and smoke-test the wheel in an isolated temporary environment with:
+
+```bash
+uv run python scripts/verify_distribution.py
+```
+
+This verifies the wheel metadata and bundled React assets, launches the installed wheel through
+`uvx`, and checks both the health endpoint and production interface. Release publication is a
+separate explicit step; building and verifying locally never uploads an artifact.
 
 `bun run test:e2e` builds the production frontend, launches Course Harness on a verified-empty
 smoke Workspace under the ignored local cache, and runs the Playwright journey. Inside Nix, the test

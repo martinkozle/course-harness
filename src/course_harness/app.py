@@ -88,7 +88,6 @@ from course_harness.providers import (
     ProviderConfigurationRequest,
     ProviderStatus,
     ProviderValidationError,
-    default_provider_store_path,
     delete_provider_account,
     provider_request_for_credential_rotation,
     provider_request_for_model,
@@ -125,6 +124,8 @@ from course_harness.release_validation import (
     Waiver,
     validate_release,
 )
+from course_harness.runtime_diagnostics import RuntimeDiagnostics, runtime_diagnostics
+from course_harness.runtime_paths import RuntimePaths
 from course_harness.slide_preview import (
     PresentationPreview,
     PreviewContext,
@@ -168,7 +169,6 @@ from course_harness.workspace_history import (
 )
 from course_harness.workspaces import (
     WorkspaceSelectionError,
-    default_recent_store_path,
     native_folder_picker,
     read_recent_workspaces,
     remember_workspace,
@@ -372,6 +372,7 @@ def create_app(
     *,
     folder_picker: Callable[[], Path | None] = native_folder_picker,
     recent_store_path: Path | None = None,
+    runtime_paths: RuntimePaths | None = None,
     provider_store_path: Path | None = None,
     chat_store_path: Path | None = None,
     library_data_path: Path | None = None,
@@ -470,14 +471,15 @@ def create_app(
             media_type="application/json",
         )
 
-    recent_path = recent_store_path or default_recent_store_path()
-    provider_path = provider_store_path or default_provider_store_path()
-    data_dir = library_data_path or library.library_data_dir()
-    cache_dir = library_cache_path or library.library_cache_dir()
-    templates_data = templates_data_path or tpl.templates_data_dir()
-    templates_cache = templates_cache_path or tpl.templates_cache_dir()
-    release_data = release_data_path or templates_data.parent / "releases"
-    chat_path = chat_store_path or recent_path.parent / "chat"
+    paths = runtime_paths or RuntimePaths.platform()
+    recent_path = recent_store_path or paths.recent_store_path
+    provider_path = provider_store_path or paths.provider_store_path
+    data_dir = library_data_path or paths.library_data_path
+    cache_dir = library_cache_path or paths.library_cache_path
+    templates_data = templates_data_path or paths.templates_data_path
+    templates_cache = templates_cache_path or paths.templates_cache_path
+    release_data = release_data_path or paths.release_data_path
+    chat_path = chat_store_path or paths.chat_store_path
     course_agent = create_course_agent()
     autonomous_agent = create_autonomous_course_agent()
     reconciliation_agent = create_reconciliation_agent()
@@ -649,6 +651,24 @@ def create_app(
     @app.get("/api/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
         return HealthResponse(status="ok")
+
+    @app.get(
+        "/api/runtime-diagnostics",
+        response_model=RuntimeDiagnostics,
+        response_model_exclude_none=True,
+    )
+    async def read_runtime_diagnostics() -> RuntimeDiagnostics:
+        return runtime_diagnostics(
+            runtime_paths=paths,
+            recent_store_path=recent_path,
+            chat_store_path=chat_path,
+            library_data_path=data_dir,
+            library_cache_path=cache_dir,
+            templates_data_path=templates_data,
+            templates_cache_path=templates_cache,
+            release_data_path=release_data,
+            provider_store_path=provider_path,
+        )
 
     @app.get("/api/workspace", response_model=WorkspaceResponse)
     async def active_workspace() -> WorkspaceResponse:

@@ -72,8 +72,12 @@ class PresentationPreview(BaseModel):
     slides: list[SlidePreview]
 
 
+def _libreoffice_executable() -> str | None:
+    return shutil.which("libreoffice") or shutil.which("soffice")
+
+
 def renderer_capability() -> RendererCapability:
-    executable = shutil.which("libreoffice")
+    executable = _libreoffice_executable()
     if executable:
         return RendererCapability(
             available=True,
@@ -279,7 +283,7 @@ def _delete_all_slides(presentation) -> None:
 
 
 def _render_pptx_png(pptx_bytes: bytes, target: Path) -> None:
-    executable = shutil.which("libreoffice")
+    executable = _libreoffice_executable()
     if executable is None:
         raise RuntimeError("LibreOffice was not found")
     with tempfile.TemporaryDirectory() as directory:

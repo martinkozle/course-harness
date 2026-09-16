@@ -7,6 +7,8 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from course_harness.runtime_paths import RuntimePaths
+
 
 class WorkspaceSelectionError(ValueError):
     """A selected path cannot be used as a Course Workspace."""
@@ -45,19 +47,7 @@ def validate_workspace_path(value: str | Path) -> Path:
 
 
 def default_recent_store_path() -> Path:
-    if sys.platform == "win32":
-        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return root / "Course Harness" / "recent-workspaces.json"
-    if sys.platform == "darwin":
-        return (
-            Path.home()
-            / "Library"
-            / "Application Support"
-            / "Course Harness"
-            / "recent-workspaces.json"
-        )
-    root = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
-    return root / "course-harness" / "recent-workspaces.json"
+    return RuntimePaths.platform().recent_store_path
 
 
 def remember_workspace(store_path: Path, workspace: Path) -> None:

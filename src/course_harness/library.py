@@ -1,5 +1,3 @@
-import os
-import sys
 from pathlib import Path
 
 import httpx2
@@ -23,26 +21,15 @@ from course_harness.resources import (
     update_resource_snapshot,
     write_library_index,
 )
+from course_harness.runtime_paths import RuntimePaths
 
 
 def library_data_dir() -> Path:
-    if sys.platform == "win32":
-        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return root / "Course Harness" / "library"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Course Harness" / "library"
-    root = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return root / "course-harness" / "library"
+    return RuntimePaths.platform().library_data_path
 
 
 def library_cache_dir() -> Path:
-    if sys.platform == "win32":
-        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return root / "Course Harness" / "cache"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Caches" / "Course Harness"
-    root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    return root / "course-harness"
+    return RuntimePaths.platform().library_cache_path
 
 
 def registry_path(data_dir: Path | None = None) -> Path:

@@ -117,6 +117,15 @@ def test_renderer_capability_reports_detected_binary(monkeypatch) -> None:
     assert capability.name == "LibreOffice"
 
 
+def test_renderer_capability_accepts_soffice_binary(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "course_harness.slide_preview.shutil.which",
+        lambda name: "/opt/libreoffice/program/soffice" if name == "soffice" else None,
+    )
+
+    assert renderer_capability().available is True
+
+
 def test_render_populates_cached_background_and_authoritative_thumbnail(
     tmp_path: Path, monkeypatch
 ) -> None:

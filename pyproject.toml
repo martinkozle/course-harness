@@ -4,6 +4,19 @@ version = "0.1.0"
 description = "A local-first workspace for authoring source-grounded courses"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["course-authoring", "local-first", "presentations", "education"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Web Environment",
+  "Framework :: FastAPI",
+  "Intended Audience :: Education",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Education",
+]
 dependencies = [
   "fastapi",
   "httpx",
@@ -18,6 +31,11 @@ dependencies = [
 
 [project.scripts]
 course-harness = "course_harness.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/martinkozle/course-harness"
+Repository = "https://github.com/martinkozle/course-harness"
+Issues = "https://github.com/martinkozle/course-harness/issues"
 
 [build-system]
 requires = ["uv_build>=0.11.25,<0.12.0"]

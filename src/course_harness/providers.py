@@ -1,7 +1,7 @@
 import json
 import os
-import sys
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -11,6 +11,7 @@ import httpx2
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from course_harness.product_connectors import product_connector_client
+from course_harness.runtime_paths import RuntimePaths
 
 ProviderKind = Literal["openrouter", "openai-compatible", "anthropic"]
 
@@ -148,6 +149,14 @@ class ProviderStatus(BaseModel):
     diagnostics: list[str] | None = None
 
 
+class RuntimeProviderStatus(BaseModel):
+    """Provider state suitable for a read-only local diagnostics surface."""
+
+    configured: bool
+    selected_model_id: str | None = None
+    provider: ProviderStatus
+
+
 class ProviderCapabilityError(ValueError):
     """The selected model cannot run the Course planning agent."""
 
@@ -221,13 +230,7 @@ def require_planning_capabilities(capabilities: ProviderCapabilities) -> list[st
 
 
 def default_provider_store_path() -> Path:
-    if sys.platform == "win32":
-        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return root / "Course Harness" / "provider"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Course Harness" / "provider"
-    root = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    return root / "course-harness" / "provider"
+    return RuntimePaths.platform().provider_store_path
 
 
 def save_provider_configuration(
@@ -715,4 +718,61 @@ def provider_status(store_path: Path) -> ProviderStatus:
         base_url=configuration.base_url,
         capabilities=configuration.capabilities,
         diagnostics=provider_diagnostics(configuration.capabilities),
+    )
+
+
+def runtime_provider_status(store_path: Path) -> RuntimeProviderStatus:
+    """Read configured/selected provider metadata without migration or network I/O."""
+    catalog = ModelCatalog()
+    catalog_path = store_path / "catalog.json"
+    if catalog_path.is_file():
+        with suppress(OSError, ValueError):
+            catalog = ModelCatalog.model_validate_json(catalog_path.read_text(encoding="utf-8"))
+
+    selected = next(
+        (preset for preset in catalog.model_presets if preset.id == catalog.selected_model_id),
+        None,
+    )
+    account = (
+        next(
+            (item for item in catalog.provider_accounts if item.id == selected.provider_account_id),
+            None,
+        )
+        if selected is not None
+        else None
+    )
+    credentials = _read_credentials(store_path)
+    if selected is not None and account is not None and credentials.get(account.id):
+        provider = ProviderStatus(
+            configured=True,
+            kind=account.kind,
+            model=selected.model,
+            base_url=account.base_url,
+            capabilities=selected.capabilities,
+            diagnostics=provider_diagnostics(selected.capabilities),
+        )
+        return RuntimeProviderStatus(
+            configured=True,
+            selected_model_id=catalog.selected_model_id,
+            provider=provider,
+        )
+
+    # Keep legacy installations observable, but never call the migration helper:
+    # that helper writes catalog files and would violate diagnostics' read-only contract.
+    legacy = read_provider_configuration(store_path)
+    if legacy is not None and _read_legacy_api_key(store_path) is not None:
+        provider = ProviderStatus(
+            configured=True,
+            kind=legacy.kind,
+            model=legacy.model,
+            base_url=legacy.base_url,
+            capabilities=legacy.capabilities,
+            diagnostics=provider_diagnostics(legacy.capabilities),
+        )
+        return RuntimeProviderStatus(configured=True, provider=provider)
+
+    return RuntimeProviderStatus(
+        configured=False,
+        selected_model_id=catalog.selected_model_id,
+        provider=ProviderStatus(configured=False),
     )

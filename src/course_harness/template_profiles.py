@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sys
 import tempfile
 from pathlib import Path
 from typing import Literal
@@ -12,6 +11,7 @@ from pptx import Presentation as PPTXPresentation
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from course_harness.presentation import VALID_LAYOUTS
+from course_harness.runtime_paths import RuntimePaths
 from course_harness.template_slots import (
     find_body_placeholder,
     find_column_placeholder_groups,
@@ -156,23 +156,11 @@ def unique_profile_name(
 
 
 def templates_data_dir() -> Path:
-    if sys.platform == "win32":
-        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return root / "Course Harness" / "templates"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Course Harness" / "templates"
-    root = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return root / "course-harness" / "templates"
+    return RuntimePaths.platform().templates_data_path
 
 
 def templates_cache_dir() -> Path:
-    if sys.platform == "win32":
-        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        return root / "Course Harness" / "cache" / "templates"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Caches" / "Course Harness" / "templates"
-    root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    return root / "course-harness" / "templates"
+    return RuntimePaths.platform().templates_cache_path
 
 
 def profile_dir(data_dir: Path, profile_id: str) -> Path:

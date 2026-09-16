@@ -23,6 +23,7 @@ import { PresentationView } from "./PresentationView";
 import { ModelsView } from "./ProviderSetup";
 import { ReleasesView } from "./ReleasesView";
 import { ResizableSplit } from "./ResizableSplit";
+import { RuntimeDiagnosticsDialog } from "./RuntimeDiagnostics";
 import { TemplatesView } from "./TemplatesView";
 
 type Workspace = {
@@ -776,6 +777,7 @@ export function App() {
 	const [agentRunning, setAgentRunning] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
 
 	useLayoutEffect(() => {
 		void activeView;
@@ -1259,11 +1261,23 @@ export function App() {
 		<div className="app-shell">
 			<header className="topbar">
 				<Brand />
-				<p className="local-status">
-					<span aria-hidden="true" /> Local session
-				</p>
+				<div className="topbar-actions">
+					<button
+						className="runtime-diagnostics-trigger"
+						type="button"
+						onClick={() => setDiagnosticsOpen(true)}
+					>
+						Runtime diagnostics
+					</button>
+					<p className="local-status">
+						<span aria-hidden="true" /> Local session
+					</p>
+				</div>
 			</header>
 			{content}
+			{diagnosticsOpen ? (
+				<RuntimeDiagnosticsDialog onClose={() => setDiagnosticsOpen(false)} />
+			) : null}
 		</div>
 	);
 }

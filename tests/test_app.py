@@ -8,6 +8,7 @@ import course_harness.app as app_module
 from course_harness import canonical_mutation
 from course_harness.app import create_app
 from course_harness.course_plan import read_course_plan, write_course_plan
+from course_harness.runtime_paths import RuntimePaths
 
 
 @pytest.mark.anyio
@@ -39,6 +40,50 @@ async def test_application_starts_unbound_and_rejects_workspace_access() -> None
     assert health_response.status_code == 200
     assert workspace_response.status_code == 409
     assert workspace_response.json() == {"detail": "No Course Workspace is active"}
+
+
+@pytest.mark.anyio
+async def test_runtime_diagnostics_are_available_unbound_and_read_only(tmp_path: Path) -> None:
+    paths = RuntimePaths(
+        state=tmp_path / "state",
+        data=tmp_path / "data",
+        cache=tmp_path / "cache",
+        config=tmp_path / "config",
+    )
+    transport = httpx2.ASGITransport(app=create_app(runtime_paths=paths))
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/runtime-diagnostics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["paths"] == {
+        "recent_workspaces": str(paths.recent_store_path),
+        "chat_history": str(paths.chat_store_path),
+        "library_data": str(paths.library_data_path),
+        "library_cache": str(paths.library_cache_path),
+        "templates_data": str(paths.templates_data_path),
+        "templates_cache": str(paths.templates_cache_path),
+        "releases": str(paths.release_data_path),
+        "provider_configuration": str(paths.provider_store_path),
+        "provider_credentials": str(paths.provider_credentials_path),
+    }
+    assert body["provider"] == {
+        "configured": False,
+        "provider": {"configured": False},
+    }
+    assert body["parser"]["processors"]["text"] == [
+        "text/csv",
+        "text/markdown",
+        "text/plain",
+        "text/x-markdown",
+    ]
+    assert body["parser"]["remediation"].startswith("Text, Markdown, CSV")
+    assert body["renderer"]["name"] == "LibreOffice"
+    assert not paths.state.exists()
+    assert not paths.data.exists()
+    assert not paths.cache.exists()
+    assert not paths.config.exists()
 
 
 @pytest.mark.anyio

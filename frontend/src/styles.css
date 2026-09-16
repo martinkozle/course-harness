@@ -124,6 +124,26 @@ summary:focus-visible {
 	text-transform: uppercase;
 }
 
+.topbar-actions {
+	display: flex;
+	align-items: center;
+	gap: 18px;
+}
+
+.runtime-diagnostics-trigger {
+	padding: 7px 10px;
+	border: 1px solid var(--line);
+	background: var(--paper);
+	color: var(--cobalt-dark);
+	font-size: 0.75rem;
+	font-weight: 700;
+}
+
+.runtime-diagnostics-trigger:hover {
+	border-color: var(--cobalt);
+	background: var(--cobalt-soft);
+}
+
 .local-status span {
 	width: 8px;
 	height: 8px;
@@ -814,6 +834,115 @@ h1 {
 	color: var(--cobalt);
 	font-family: "SFMono-Regular", Consolas, monospace;
 	font-size: 0.62rem;
+}
+
+.runtime-diagnostics-backdrop {
+	position: fixed;
+	z-index: 100;
+	inset: 0;
+	display: grid;
+	place-items: center;
+	padding: 24px;
+	background: rgba(21, 32, 59, 0.42);
+}
+
+.runtime-diagnostics {
+	width: min(100%, 720px);
+	max-height: min(780px, calc(100vh - 48px));
+	overflow: auto;
+	padding: clamp(24px, 4vw, 38px);
+	border: 1px solid var(--line);
+	border-radius: 14px;
+	background: var(--paper);
+	box-shadow: var(--shadow);
+}
+
+.runtime-diagnostics > header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 24px;
+}
+
+.runtime-diagnostics h2 {
+	margin: 6px 0 0;
+	font-family: "Charter", "Bitstream Charter", Georgia, serif;
+	font-size: clamp(2rem, 5vw, 3rem);
+	line-height: 0.95;
+}
+
+.runtime-diagnostics-intro,
+.runtime-detail,
+.runtime-remediation {
+	color: var(--muted);
+	font-size: 0.84rem;
+	line-height: 1.55;
+}
+
+.runtime-diagnostics-intro {
+	margin: 20px 0 0;
+}
+
+.runtime-diagnostics-content {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px;
+	margin-top: 24px;
+}
+
+.runtime-diagnostics-content > section {
+	padding: 16px;
+	border: 1px solid var(--line);
+	border-radius: 9px;
+	background: #fbfcff;
+}
+
+.runtime-diagnostics-content h3 {
+	margin: 0;
+	font-size: 0.92rem;
+}
+
+.runtime-status {
+	margin: 12px 0 0;
+	color: var(--ink);
+	font-size: 0.86rem;
+	font-weight: 700;
+}
+
+.runtime-detail,
+.runtime-remediation {
+	margin: 8px 0 0;
+}
+
+.runtime-remediation {
+	padding-top: 8px;
+	border-top: 1px solid var(--line);
+}
+
+.runtime-path-list {
+	margin: 12px 0 0;
+}
+
+.runtime-path-list > div {
+	margin-top: 9px;
+}
+
+.runtime-path-list > div:first-child {
+	margin-top: 0;
+}
+
+.runtime-path-list dt {
+	color: var(--muted);
+	font-size: 0.72rem;
+	font-weight: 700;
+}
+
+.runtime-path-list dd {
+	margin: 2px 0 0;
+	overflow-wrap: anywhere;
+	font-family: "SFMono-Regular", Consolas, monospace;
+	font-size: 0.72rem;
+	line-height: 1.45;
 }
 
 .page-main {
@@ -2345,6 +2474,22 @@ h1 {
 	.local-status span {
 		width: 9px;
 		height: 9px;
+	}
+
+	.topbar-actions {
+		gap: 10px;
+	}
+
+	.runtime-diagnostics-trigger {
+		font-size: 0.68rem;
+	}
+
+	.runtime-diagnostics-backdrop {
+		padding: 12px;
+	}
+
+	.runtime-diagnostics-content {
+		grid-template-columns: 1fr;
 	}
 
 	.provider-account-list li {
