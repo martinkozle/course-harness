@@ -81,7 +81,7 @@ test("Course Author can inspect Current State before and after creating a Course
 	await page.getByRole("button", { name: "Refresh" }).click();
 	await page.getByLabel("Revision summary").fill("First revision");
 	await page.getByRole("button", { name: "Create Course Revision" }).click();
-	await expect(page.getByText("First revision")).toBeVisible();
+	await expect(page.getByText("First revision", { exact: true })).toBeVisible();
 
 	await page.request.patch(`/api/course/lectures/${lectureId}`, {
 		data: { title: "Second revision title" },
@@ -89,7 +89,9 @@ test("Course Author can inspect Current State before and after creating a Course
 	await page.getByRole("button", { name: "Refresh" }).click();
 	await page.getByLabel("Revision summary").fill("Second revision");
 	await page.getByRole("button", { name: "Create Course Revision" }).click();
-	await expect(page.getByText("Second revision")).toBeVisible();
+	await expect(
+		page.getByText("Second revision", { exact: true }),
+	).toBeVisible();
 
 	const firstRevision = page
 		.locator(".revision-list > li")
@@ -103,7 +105,9 @@ test("Course Author can inspect Current State before and after creating a Course
 	);
 });
 
-test("Course Author accepts valid Workspace Drift as a Course Revision", async ({ page }) => {
+test("Course Author accepts valid Workspace Drift as a Course Revision", async ({
+	page,
+}) => {
 	await page.request.post("/api/workspace/close");
 	await page.goto("/");
 	await page.getByRole("button", { name: "New course" }).click();
@@ -123,7 +127,10 @@ test("Course Author accepts valid Workspace Drift as a Course Revision", async (
 	const course = await readFile(coursePath, "utf8");
 	await writeFile(
 		coursePath,
-		course.replace("Drift review course", "Drift review course, edited outside the app"),
+		course.replace(
+			"Drift review course",
+			"Drift review course, edited outside the app",
+		),
 		"utf8",
 	);
 
@@ -131,7 +138,9 @@ test("Course Author accepts valid Workspace Drift as a Course Revision", async (
 	await expect(
 		page.getByRole("heading", { name: "Workspace Drift detected" }),
 	).toBeVisible();
-	await expect(page.getByLabel("Workspace Drift paths")).toContainText("course.yaml");
+	await expect(page.getByLabel("Workspace Drift paths")).toContainText(
+		"course.yaml",
+	);
 	await page
 		.getByLabel("Workspace Drift summary")
 		.fill("Accept external Course title edit");
@@ -148,7 +157,9 @@ test("Course Author accepts valid Workspace Drift as a Course Revision", async (
 		page.getByRole("button", { name: "Confirm acceptance" }).click(),
 	]);
 	expect(acceptResponse.ok()).toBe(true);
-	await expect(page.getByText("Accept external Course title edit")).toBeVisible();
+	await expect(
+		page.getByText("Accept external Course title edit"),
+	).toBeVisible();
 	await expect(
 		page.getByRole("heading", { name: "No Workspace Drift" }),
 	).toBeVisible();
@@ -187,7 +198,9 @@ test("Course Author can hand inconsistent Workspace Drift to the Course Agent", 
 	await expect(
 		page.getByRole("button", { name: "Reconcile with Course Agent" }),
 	).toBeVisible();
-	await page.getByRole("button", { name: "Reconcile with Course Agent" }).click();
+	await page
+		.getByRole("button", { name: "Reconcile with Course Agent" })
+		.click();
 	await expect(page.getByLabel("Message the Course Agent")).toBeVisible();
 	await expect(
 		page.getByText("Workspace Drift needs Reconciliation.", { exact: false }),

@@ -34,6 +34,9 @@ export function ModelsView({
 			: kind === "anthropic"
 				? "https://api.anthropic.com"
 				: baseUrl.trim() || "the configured API base URL";
+	const selectedProviderAccount = catalog.provider_accounts.find(
+		(account) => account.id === providerId,
+	);
 	const presetCountByProvider = new Map<string, number>();
 	for (const preset of catalog.model_presets) {
 		presetCountByProvider.set(
@@ -273,9 +276,9 @@ export function ModelsView({
 												id={`replacement-disclosure-${account.id}`}
 												role="note"
 											>
-												Saving sends this new key to {account.base_url} to verify it
-												before storage. Existing Model Presets will keep using this
-												account.
+												Saving sends this new key to {account.base_url} to
+												verify it before storage. Existing Model Presets will
+												keep using this account.
 											</p>
 											<button
 												className="primary-action compact-action"
@@ -374,8 +377,8 @@ export function ModelsView({
 							id="provider-network-disclosure"
 							role="note"
 						>
-							Saving sends this key to {verificationDestination} to verify access
-							before storing it outside every Course Workspace.
+							Saving sends this key to {verificationDestination} to verify
+							access before storing it outside every Course Workspace.
 						</p>
 						<button
 							className="primary-action compact-action"
@@ -468,10 +471,15 @@ export function ModelsView({
 								placeholder="nvidia/llama-3.3-nemotron-super-49b-v1:free"
 								required
 								autoComplete="off"
+								aria-describedby="preset-network-disclosure"
 							/>
 						</div>
-						<p className="form-help">
-							Capabilities are verified before this preset is saved.
+						<p className="form-help" id="preset-network-disclosure" role="note">
+							Saving sends this Model ID and uses the saved credential for{" "}
+							{selectedProviderAccount?.name ?? "the selected Provider Account"}{" "}
+							to contact{" "}
+							{selectedProviderAccount?.base_url ?? "its API endpoint"} and
+							verify capabilities.
 						</p>
 						<button
 							className="primary-action compact-action"

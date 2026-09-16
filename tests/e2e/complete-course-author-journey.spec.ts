@@ -88,11 +88,18 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	await page.getByRole("button", { name: "Models", exact: true }).click();
 	await expect(page.getByRole("heading", { name: "Models" })).toBeVisible();
 	await expect(
-		page.getByText(/Saving sends this key to https:\/\/openrouter\.ai\/api\/v1/),
+		page.getByText(
+			/Saving sends this key to https:\/\/openrouter\.ai\/api\/v1/,
+		),
 	).toBeVisible();
 	await page.getByLabel("API key").fill("deterministic-test-key");
 	await page.getByRole("button", { name: "Save Provider Account" }).click();
 	await expect(page.getByLabel("Preset name")).toBeVisible();
+	await expect(
+		page.getByText(
+			/Saving sends this Model ID and uses the saved credential for My OpenRouter to contact https:\/\/openrouter\.ai\/api\/v1/,
+		),
+	).toBeVisible();
 	await page.getByLabel("Preset name").fill("Planning model");
 	await page.getByLabel("Model ID").fill("deterministic/course-agent");
 	await page.getByRole("button", { name: "Save Model Preset" }).click();
@@ -101,7 +108,9 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	// The first fake-agent turn creates the two-Lecture Course Plan through chat.
 	await page.getByRole("button", { name: "Authoring", exact: true }).click();
 	await expect(
-		page.getByText(/When you send a message, it and any Source excerpts needed/),
+		page.getByText(
+			/When you send a message, it and any Source excerpts needed/,
+		),
 	).toBeVisible();
 	await page
 		.getByLabel("Message the Course Agent")
@@ -132,7 +141,9 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 		page.getByRole("heading", { name: "Resources", exact: true }),
 	).toBeVisible();
 	await expect(
-		page.getByText(/Searching sends only your query to the listed public discovery services/),
+		page.getByText(
+			/Searching sends only your query to the listed public discovery services/,
+		),
 	).toBeVisible();
 	await page
 		.locator('input[type="file"]')
