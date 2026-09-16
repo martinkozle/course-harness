@@ -93,6 +93,14 @@ async def test_provider_models_own_clients_that_ignore_ambient_proxy_settings(
     try:
         assert client._trust_env is False
         assert replacement._trust_env is False
+        assert client.timeout.connect == 5
+        assert client.timeout.read == 600
+        assert client.timeout.write == 600
+        assert client.timeout.pool == 600
+        assert replacement.timeout.connect == 5
+        assert replacement.timeout.read == 600
+        assert replacement.timeout.write == 600
+        assert replacement.timeout.pool == 600
     finally:
         await client.aclose()
         await replacement.aclose()

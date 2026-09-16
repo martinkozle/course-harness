@@ -633,7 +633,17 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             serialize_sources_index(SourcesIndex(sources=ctx.deps.course_state.sources)),
         )
         return ToolReturn(
-            return_value=f"Source '{source.label}' admitted as {source.id}.",
+            return_value=_untrusted_source_data(
+                "source_admission",
+                json.dumps(
+                    {
+                        "source_id": source.id,
+                        "label": source.label,
+                        "source_version_id": source.source_version_id,
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
             metadata=[
                 ActivitySnapshotEvent(
                     type=EventType.ACTIVITY_SNAPSHOT,
@@ -1032,7 +1042,14 @@ def create_reconciliation_agent() -> Agent[CourseAgentDeps, str]:
 
 
 def _isolated_model_http_client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(trust_env=False)
+    # Match Pydantic AI's `create_async_http_client` defaults while opting out of
+    # ambient proxy and credential environment variables. The explicit timeout
+    # matters because httpx defaults to five seconds for every phase, whereas
+    # model responses may legitimately stream for much longer.
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(timeout=600, connect=5),
+        trust_env=False,
+    )
 
 
 def _own_provider_http_client(provider: Any, client: httpx.AsyncClient) -> Any:
