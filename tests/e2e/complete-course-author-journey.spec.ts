@@ -192,6 +192,9 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 			"I created a cited Presentation grounded in the admitted Source.",
 		),
 	).toBeVisible();
+	await expect(page.locator("#agent-run-status")).toHaveText(
+		"Course Agent finished.",
+	);
 
 	const presentationResponse = await page.request.get(
 		`/api/presentations/${firstLecture.id}`,

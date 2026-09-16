@@ -390,11 +390,16 @@ export function AgentPanel({
 		initialApproval,
 	);
 	const [running, setRunning] = useState(false);
-	const [runStatus, setRunStatus] = useState("Course Agent needs a model.");
+	const [runStatus, setRunStatus] = useState(() =>
+		catalog.selected_model_id
+			? "Course Agent is ready."
+			: "Course Agent needs a model.",
+	);
 	const [error, setError] = useState<string | null>(null);
 	const [confirmingClear, setConfirmingClear] = useState(false);
 	const abortRef = useRef<AbortController | null>(null);
 	const chatEndRef = useRef<HTMLDivElement | null>(null);
+	const statusModelIdRef = useRef(catalog.selected_model_id);
 	const selected = catalog.model_presets.find(
 		(preset) => preset.id === catalog.selected_model_id,
 	);
@@ -407,7 +412,9 @@ export function AgentPanel({
 	useEffect(() => setApproval(initialApproval), [initialApproval]);
 	useEffect(() => onRunningChange(running), [onRunningChange, running]);
 	useEffect(() => {
-		if (!running) {
+		const selectedModelId = selected?.id ?? null;
+		if (!running && statusModelIdRef.current !== selectedModelId) {
+			statusModelIdRef.current = selectedModelId;
 			setRunStatus(
 				selected ? "Course Agent is ready." : "Course Agent needs a model.",
 			);
