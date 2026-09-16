@@ -91,3 +91,34 @@ class RuntimePaths:
     @property
     def release_data_path(self) -> Path:
         return self.data / "releases"
+
+
+@dataclass(frozen=True)
+class RuntimeLocations:
+    """Effective application locations after optional host overrides are applied."""
+
+    recent_store_path: Path
+    chat_store_path: Path
+    library_data_path: Path
+    library_cache_path: Path
+    templates_data_path: Path
+    templates_cache_path: Path
+    release_data_path: Path
+    provider_store_path: Path
+
+    @classmethod
+    def from_runtime_paths(cls, paths: RuntimePaths) -> RuntimeLocations:
+        return cls(
+            recent_store_path=paths.recent_store_path,
+            chat_store_path=paths.chat_store_path,
+            library_data_path=paths.library_data_path,
+            library_cache_path=paths.library_cache_path,
+            templates_data_path=paths.templates_data_path,
+            templates_cache_path=paths.templates_cache_path,
+            release_data_path=paths.release_data_path,
+            provider_store_path=paths.provider_store_path,
+        )
+
+    @property
+    def provider_credentials_path(self) -> Path:
+        return self.provider_store_path / "credentials.json"

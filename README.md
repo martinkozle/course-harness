@@ -137,9 +137,12 @@ Build and smoke-test the wheel in an isolated temporary environment with:
 uv run python scripts/verify_distribution.py
 ```
 
-This verifies the wheel metadata and bundled React assets, launches the installed wheel through
-`uvx`, and checks both the health endpoint and production interface. Release publication is a
-separate explicit step; building and verifying locally never uploads an artifact.
+This verifies the wheel metadata and bundled React assets, launches the wheel through `uvx`,
+installs and launches that same wheel with `uv tool install` in a temporary isolated tool home,
+and launches the current committed revision through a direct `uvx` `git+file://` URL. Each launch
+checks both the health endpoint and production interface. Release publication is a separate
+explicit step; building and verifying locally never uploads an artifact or changes your real uv
+tool installation.
 
 `bun run test:e2e` builds the production frontend, launches Course Harness on a verified-empty
 smoke Workspace under the ignored local cache, and runs the Playwright journey. Inside Nix, the test

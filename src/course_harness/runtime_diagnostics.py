@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from pydantic import BaseModel, ConfigDict
 
 from course_harness import resources
 from course_harness.providers import RuntimeProviderStatus, runtime_provider_status
-from course_harness.runtime_paths import RuntimePaths
+from course_harness.runtime_paths import RuntimeLocations
 from course_harness.slide_preview import renderer_capability
 
 
@@ -38,16 +36,7 @@ class RuntimeDiagnostics(BaseModel):
 
 
 def runtime_diagnostics(
-    *,
-    runtime_paths: RuntimePaths,
-    recent_store_path: Path,
-    chat_store_path: Path,
-    library_data_path: Path,
-    library_cache_path: Path,
-    templates_data_path: Path,
-    templates_cache_path: Path,
-    release_data_path: Path,
-    provider_store_path: Path,
+    locations: RuntimeLocations,
 ) -> RuntimeDiagnostics:
     """Build a local report without network activity or durable mutations."""
     processors: dict[str, list[str]] = {}
@@ -57,17 +46,17 @@ def runtime_diagnostics(
     renderer = renderer_capability()
     return RuntimeDiagnostics(
         paths={
-            "recent_workspaces": str(recent_store_path),
-            "chat_history": str(chat_store_path),
-            "library_data": str(library_data_path),
-            "library_cache": str(library_cache_path),
-            "templates_data": str(templates_data_path),
-            "templates_cache": str(templates_cache_path),
-            "releases": str(release_data_path),
-            "provider_configuration": str(provider_store_path),
-            "provider_credentials": str(provider_store_path / "credentials.json"),
+            "recent_workspaces": str(locations.recent_store_path),
+            "chat_history": str(locations.chat_store_path),
+            "library_data": str(locations.library_data_path),
+            "library_cache": str(locations.library_cache_path),
+            "templates_data": str(locations.templates_data_path),
+            "templates_cache": str(locations.templates_cache_path),
+            "releases": str(locations.release_data_path),
+            "provider_configuration": str(locations.provider_store_path),
+            "provider_credentials": str(locations.provider_credentials_path),
         },
-        provider=runtime_provider_status(provider_store_path),
+        provider=runtime_provider_status(locations.provider_store_path),
         parser=ParserCapability(
             processors=processors,
             remediation=(

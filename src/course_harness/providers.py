@@ -155,6 +155,7 @@ class RuntimeProviderStatus(BaseModel):
     configured: bool
     selected_model_id: str | None = None
     provider: ProviderStatus
+    remediation: str | None = None
 
 
 class ProviderCapabilityError(ValueError):
@@ -711,13 +712,28 @@ def provider_status(store_path: Path) -> ProviderStatus:
         configuration = read_provider_configuration(store_path)
     if configuration is None or read_provider_api_key(store_path) is None:
         return ProviderStatus(configured=False)
-    return ProviderStatus(
-        configured=True,
+    return _configured_provider_status(
         kind=configuration.kind,
         model=configuration.model,
         base_url=configuration.base_url,
         capabilities=configuration.capabilities,
-        diagnostics=provider_diagnostics(configuration.capabilities),
+    )
+
+
+def _configured_provider_status(
+    *,
+    kind: ProviderKind,
+    model: str,
+    base_url: str,
+    capabilities: ProviderCapabilities,
+) -> ProviderStatus:
+    return ProviderStatus(
+        configured=True,
+        kind=kind,
+        model=model,
+        base_url=base_url,
+        capabilities=capabilities,
+        diagnostics=provider_diagnostics(capabilities),
     )
 
 
@@ -743,13 +759,11 @@ def runtime_provider_status(store_path: Path) -> RuntimeProviderStatus:
     )
     credentials = _read_credentials(store_path)
     if selected is not None and account is not None and credentials.get(account.id):
-        provider = ProviderStatus(
-            configured=True,
+        provider = _configured_provider_status(
             kind=account.kind,
             model=selected.model,
             base_url=account.base_url,
             capabilities=selected.capabilities,
-            diagnostics=provider_diagnostics(selected.capabilities),
         )
         return RuntimeProviderStatus(
             configured=True,
@@ -761,13 +775,11 @@ def runtime_provider_status(store_path: Path) -> RuntimeProviderStatus:
     # that helper writes catalog files and would violate diagnostics' read-only contract.
     legacy = read_provider_configuration(store_path)
     if legacy is not None and _read_legacy_api_key(store_path) is not None:
-        provider = ProviderStatus(
-            configured=True,
+        provider = _configured_provider_status(
             kind=legacy.kind,
             model=legacy.model,
             base_url=legacy.base_url,
             capabilities=legacy.capabilities,
-            diagnostics=provider_diagnostics(legacy.capabilities),
         )
         return RuntimeProviderStatus(configured=True, provider=provider)
 
@@ -775,4 +787,8 @@ def runtime_provider_status(store_path: Path) -> RuntimeProviderStatus:
         configured=False,
         selected_model_id=catalog.selected_model_id,
         provider=ProviderStatus(configured=False),
+        remediation=(
+            "Create or select a Course Workspace, then open Models to add a Provider Account "
+            "and a compatible Model Preset."
+        ),
     )

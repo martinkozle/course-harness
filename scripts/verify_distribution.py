@@ -30,6 +30,78 @@ def _wait_for(url: str, *, timeout: float = 30) -> bytes:
     raise TimeoutError(f"Timed out waiting for {url}")
 
 
+def _run_server(
+    command: list[str],
+    *,
+    cwd: Path,
+    environment: dict[str, str],
+    label: str,
+) -> None:
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    terminated_by_verifier = False
+    try:
+        port = int(command[command.index("--port") + 1])
+        health = _wait_for(f"http://127.0.0.1:{port}/api/health")
+        if health != b'{"status":"ok"}':
+            raise RuntimeError(f"Unexpected health response from {label}: {health!r}")
+        index = _wait_for(f"http://127.0.0.1:{port}/")
+        if b"Course Harness" not in index:
+            raise RuntimeError(f"{label} did not serve the production frontend")
+    finally:
+        if process.poll() is None:
+            terminated_by_verifier = True
+            process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+    if not terminated_by_verifier and process.returncode != 0:
+        output = process.stdout.read() if process.stdout is not None else ""
+        raise RuntimeError(f"{label} exited unexpectedly:\n{output}")
+
+
+def _install_tool(
+    package: str,
+    *,
+    environment: dict[str, str],
+    temporary: Path,
+    label: str,
+) -> Path:
+    subprocess.run(
+        [
+            "uv",
+            "tool",
+            "install",
+            "--python",
+            "3.14",
+            "--no-cache",
+            "--force",
+            package,
+        ],
+        cwd=temporary,
+        env=environment,
+        check=True,
+    )
+    bin_directory = Path(
+        subprocess.check_output(
+            ["uv", "tool", "dir", "--bin"], cwd=temporary, env=environment, text=True
+        ).strip()
+    )
+    executable_name = "course-harness.exe" if os.name == "nt" else "course-harness"
+    executable = bin_directory / executable_name
+    if not executable.is_file():
+        raise RuntimeError(f"{label} did not install {executable}")
+    return executable
+
+
 def main() -> None:
     repository = Path(__file__).resolve().parent.parent
     with tempfile.TemporaryDirectory(prefix="course-harness-distribution-") as directory:
@@ -61,10 +133,10 @@ def main() -> None:
 
         workspace = temporary / "course"
         workspace.mkdir()
-        port = _available_port()
         environment = os.environ.copy()
         environment.update(
             {
+                "HOME": str(temporary / "home"),
                 "XDG_CACHE_HOME": str(temporary / "cache"),
                 "XDG_CONFIG_HOME": str(temporary / "config"),
                 "XDG_DATA_HOME": str(temporary / "data"),
@@ -72,6 +144,7 @@ def main() -> None:
                 "UV_CACHE_DIR": str(temporary / "uvx-cache"),
             }
         )
+        wheel_port = _available_port()
         command = [
             "uvx",
             "--python",
@@ -82,38 +155,65 @@ def main() -> None:
             str(workspace),
             "--no-browser",
             "--port",
-            str(port),
+            str(wheel_port),
         ]
-        process = subprocess.Popen(
-            command,
-            cwd=temporary,
-            env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        terminated_by_verifier = False
-        try:
-            health = _wait_for(f"http://127.0.0.1:{port}/api/health")
-            if health != b'{"status":"ok"}':
-                raise RuntimeError(f"Unexpected health response: {health!r}")
-            index = _wait_for(f"http://127.0.0.1:{port}/")
-            if b"Course Harness" not in index:
-                raise RuntimeError("Installed wheel did not serve the production frontend")
-        finally:
-            if process.poll() is None:
-                terminated_by_verifier = True
-                process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
-        if not terminated_by_verifier and process.returncode != 0:
-            output = process.stdout.read() if process.stdout is not None else ""
-            raise RuntimeError(f"Installed Course Harness exited unexpectedly:\n{output}")
+        _run_server(command, cwd=temporary, environment=environment, label="Installed wheel")
 
-        print(f"Verified wheel: {wheel.name}")
+        tool_home = temporary / "tool-home"
+        tool_environment = environment | {
+            "HOME": str(tool_home),
+            "XDG_CACHE_HOME": str(temporary / "tool-cache"),
+            "XDG_CONFIG_HOME": str(temporary / "tool-config"),
+            "XDG_DATA_HOME": str(temporary / "tool-data"),
+            "UV_CACHE_DIR": str(temporary / "uv-tool-cache"),
+        }
+        installed_executable = _install_tool(
+            str(wheel),
+            environment=tool_environment,
+            temporary=temporary,
+            label="uv tool wheel installation",
+        )
+        tool_workspace = temporary / "tool-course"
+        tool_workspace.mkdir()
+        tool_port = _available_port()
+        _run_server(
+            [
+                str(installed_executable),
+                str(tool_workspace),
+                "--no-browser",
+                "--port",
+                str(tool_port),
+            ],
+            cwd=temporary,
+            environment=tool_environment,
+            label="uv tool-installed wheel",
+        )
+
+        git_workspace = temporary / "git-course"
+        git_workspace.mkdir()
+        git_port = _available_port()
+        _run_server(
+            [
+                "uvx",
+                "--python",
+                "3.14",
+                "--no-cache",
+                "--from",
+                f"git+{repository.as_uri()}",
+                "course-harness",
+                str(git_workspace),
+                "--no-browser",
+                "--port",
+                str(git_port),
+            ],
+            cwd=temporary,
+            environment=environment,
+            label="direct Git revision",
+        )
+
+        print(
+            f"Verified uvx wheel, uv tool wheel, and direct local Git installations: {wheel.name}"
+        )
 
 
 if __name__ == "__main__":

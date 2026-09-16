@@ -12,6 +12,7 @@ type RuntimeDiagnostics = {
 	provider: {
 		configured: boolean;
 		selected_model_id: string | null;
+		remediation?: string;
 		provider: {
 			configured: boolean;
 			kind?: string;
@@ -36,7 +37,7 @@ const pathLabels: Record<string, string> = {
 	templates_data: "Template data",
 	templates_cache: "Template cache",
 	releases: "Published Releases",
-	provider_configuration: "Provider configuration",
+	provider_configuration: "Provider Account data",
 	provider_credentials: "Provider credentials",
 };
 
@@ -172,6 +173,11 @@ export function RuntimeDiagnosticsDialog({ onClose }: { onClose: () => void }) {
 									{finding}
 								</p>
 							))}
+							{diagnostics.provider.remediation ? (
+								<p className="runtime-remediation">
+									{diagnostics.provider.remediation}
+								</p>
+							) : null}
 						</section>
 						<section aria-labelledby="runtime-parser-heading">
 							<h3 id="runtime-parser-heading">Resource parser</h3>

@@ -1,3 +1,4 @@
+import logging
 from contextlib import suppress
 from pathlib import Path
 
@@ -71,6 +72,10 @@ async def test_runtime_diagnostics_are_available_unbound_and_read_only(tmp_path:
     assert body["provider"] == {
         "configured": False,
         "provider": {"configured": False},
+        "remediation": (
+            "Create or select a Course Workspace, then open Models to add a Provider Account "
+            "and a compatible Model Preset."
+        ),
     }
     assert body["parser"]["processors"]["text"] == [
         "text/csv",
@@ -84,6 +89,82 @@ async def test_runtime_diagnostics_are_available_unbound_and_read_only(tmp_path:
     assert not paths.data.exists()
     assert not paths.cache.exists()
     assert not paths.config.exists()
+
+
+def test_startup_reports_runtime_capabilities_and_remediation(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    paths = RuntimePaths(
+        state=tmp_path / "state",
+        data=tmp_path / "data",
+        cache=tmp_path / "cache",
+        config=tmp_path / "config",
+    )
+
+    with caplog.at_level(logging.INFO, logger="course-harness"):
+        create_app(runtime_paths=paths)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        message.startswith("Runtime capabilities: provider=not configured; parsers=")
+        and "LibreOffice=" in message
+        for message in messages
+    )
+    assert any(
+        message.startswith("Provider remediation: Create or select a Course Workspace")
+        for message in messages
+    )
+    assert not paths.config.exists()
+
+
+@pytest.mark.anyio
+async def test_runtime_diagnostics_use_effective_location_overrides(tmp_path: Path) -> None:
+    paths = RuntimePaths(
+        state=tmp_path / "state",
+        data=tmp_path / "data",
+        cache=tmp_path / "cache",
+        config=tmp_path / "config",
+    )
+    overrides = {
+        "recent_store_path": tmp_path / "overrides" / "recent.json",
+        "chat_store_path": tmp_path / "overrides" / "chat",
+        "library_data_path": tmp_path / "overrides" / "library",
+        "library_cache_path": tmp_path / "overrides" / "cache",
+        "templates_data_path": tmp_path / "overrides" / "templates",
+        "templates_cache_path": tmp_path / "overrides" / "template-cache",
+        "release_data_path": tmp_path / "overrides" / "releases",
+        "provider_store_path": tmp_path / "overrides" / "provider",
+    }
+    transport = httpx2.ASGITransport(
+        app=create_app(
+            runtime_paths=paths,
+            recent_store_path=overrides["recent_store_path"],
+            chat_store_path=overrides["chat_store_path"],
+            library_data_path=overrides["library_data_path"],
+            library_cache_path=overrides["library_cache_path"],
+            templates_data_path=overrides["templates_data_path"],
+            templates_cache_path=overrides["templates_cache_path"],
+            release_data_path=overrides["release_data_path"],
+            provider_store_path=overrides["provider_store_path"],
+        )
+    )
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/runtime-diagnostics")
+
+    assert response.status_code == 200
+    assert response.json()["paths"] == {
+        "recent_workspaces": str(overrides["recent_store_path"]),
+        "chat_history": str(overrides["chat_store_path"]),
+        "library_data": str(overrides["library_data_path"]),
+        "library_cache": str(overrides["library_cache_path"]),
+        "templates_data": str(overrides["templates_data_path"]),
+        "templates_cache": str(overrides["templates_cache_path"]),
+        "releases": str(overrides["release_data_path"]),
+        "provider_configuration": str(overrides["provider_store_path"]),
+        "provider_credentials": str(overrides["provider_store_path"] / "credentials.json"),
+    }
 
 
 @pytest.mark.anyio

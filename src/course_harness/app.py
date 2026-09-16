@@ -4,6 +4,7 @@ import logging
 import subprocess
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal, cast
 
@@ -124,8 +125,11 @@ from course_harness.release_validation import (
     Waiver,
     validate_release,
 )
-from course_harness.runtime_diagnostics import RuntimeDiagnostics, runtime_diagnostics
-from course_harness.runtime_paths import RuntimePaths
+from course_harness.runtime_diagnostics import (
+    RuntimeDiagnostics,
+    runtime_diagnostics,
+)
+from course_harness.runtime_paths import RuntimeLocations, RuntimePaths
 from course_harness.slide_preview import (
     PresentationPreview,
     PreviewContext,
@@ -471,15 +475,39 @@ def create_app(
             media_type="application/json",
         )
 
-    paths = runtime_paths or RuntimePaths.platform()
-    recent_path = recent_store_path or paths.recent_store_path
-    provider_path = provider_store_path or paths.provider_store_path
-    data_dir = library_data_path or paths.library_data_path
-    cache_dir = library_cache_path or paths.library_cache_path
-    templates_data = templates_data_path or paths.templates_data_path
-    templates_cache = templates_cache_path or paths.templates_cache_path
-    release_data = release_data_path or paths.release_data_path
-    chat_path = chat_store_path or paths.chat_store_path
+    default_locations = RuntimeLocations.from_runtime_paths(
+        runtime_paths or RuntimePaths.platform()
+    )
+    locations = replace(
+        default_locations,
+        recent_store_path=recent_store_path or default_locations.recent_store_path,
+        provider_store_path=provider_store_path or default_locations.provider_store_path,
+        library_data_path=library_data_path or default_locations.library_data_path,
+        library_cache_path=library_cache_path or default_locations.library_cache_path,
+        templates_data_path=templates_data_path or default_locations.templates_data_path,
+        templates_cache_path=templates_cache_path or default_locations.templates_cache_path,
+        release_data_path=release_data_path or default_locations.release_data_path,
+        chat_store_path=chat_store_path or default_locations.chat_store_path,
+    )
+    recent_path = locations.recent_store_path
+    provider_path = locations.provider_store_path
+    data_dir = locations.library_data_path
+    cache_dir = locations.library_cache_path
+    templates_data = locations.templates_data_path
+    templates_cache = locations.templates_cache_path
+    release_data = locations.release_data_path
+    chat_path = locations.chat_store_path
+    startup_diagnostics = runtime_diagnostics(locations)
+    logger.info(
+        "Runtime capabilities: provider=%s; parsers=%s; LibreOffice=%s",
+        "configured" if startup_diagnostics.provider.configured else "not configured",
+        ", ".join(startup_diagnostics.parser.processors),
+        "available" if startup_diagnostics.renderer.available else "not found",
+    )
+    if startup_diagnostics.provider.remediation is not None:
+        logger.warning("Provider remediation: %s", startup_diagnostics.provider.remediation)
+    if not startup_diagnostics.renderer.available:
+        logger.warning("Renderer remediation: %s", startup_diagnostics.renderer.remediation)
     course_agent = create_course_agent()
     autonomous_agent = create_autonomous_course_agent()
     reconciliation_agent = create_reconciliation_agent()
@@ -658,17 +686,7 @@ def create_app(
         response_model_exclude_none=True,
     )
     async def read_runtime_diagnostics() -> RuntimeDiagnostics:
-        return runtime_diagnostics(
-            runtime_paths=paths,
-            recent_store_path=recent_path,
-            chat_store_path=chat_path,
-            library_data_path=data_dir,
-            library_cache_path=cache_dir,
-            templates_data_path=templates_data,
-            templates_cache_path=templates_cache,
-            release_data_path=release_data,
-            provider_store_path=provider_path,
-        )
+        return runtime_diagnostics(locations)
 
     @app.get("/api/workspace", response_model=WorkspaceResponse)
     async def active_workspace() -> WorkspaceResponse:

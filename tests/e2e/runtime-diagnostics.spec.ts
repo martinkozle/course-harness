@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { clearSmokeModelCatalog } from "./smokeState";
+
 test("runtime diagnostics are available before and after selecting a Course Workspace", async ({
 	page,
 }) => {
@@ -11,6 +13,7 @@ test("runtime diagnostics are available before and after selecting a Course Work
 	await expect(dialog).toBeVisible();
 	await expect(dialog.getByRole("button", { name: "Close" })).toBeFocused();
 	await expect(dialog.getByText("Runtime paths")).toBeVisible();
+	await expect(dialog.getByText("Provider Account data")).toBeVisible();
 	await expect(
 		dialog.getByText("Provider services are not contacted"),
 	).toBeVisible();
@@ -26,7 +29,11 @@ test("runtime diagnostics are available before and after selecting a Course Work
 	await expect(
 		page.getByRole("heading", { name: "Give the course a clear shape." }),
 	).toBeVisible();
+	await clearSmokeModelCatalog(page);
 	await page.getByRole("button", { name: "Runtime diagnostics" }).click();
 	await expect(dialog).toBeVisible();
 	await expect(dialog.getByText("Presentation renderer")).toBeVisible();
+	await expect(
+		dialog.getByText(/open Models to add a Provider Account/),
+	).toBeVisible();
 });
