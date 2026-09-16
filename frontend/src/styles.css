@@ -1704,7 +1704,7 @@ h1 {
 	flex-direction: column;
 }
 
-.chat-scroll-container:focus-visible {
+.chat-messages:focus-visible {
 	outline: 3px solid var(--cobalt);
 	outline-offset: 3px;
 }

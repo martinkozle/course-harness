@@ -720,13 +720,13 @@ export function AgentPanel({
 				) : null}
 			</header>
 
-			<section
-				className="chat-scroll-container"
-				aria-label="Conversation"
-				// biome-ignore lint/a11y/noNoninteractiveTabindex: the scrollable conversation needs a keyboard focus stop
-				tabIndex={0}
-			>
-				<ol className="chat-messages" aria-label="Course Agent conversation">
+			<section className="chat-scroll-container" aria-label="Conversation">
+				<ol
+					className="chat-messages"
+					aria-label="Course Agent conversation"
+					// biome-ignore lint/a11y/noNoninteractiveTabindex: this is the element with scrollable conversation content
+					tabIndex={0}
+				>
 					{messages.length === 0 ? (
 						<li className="chat-empty">
 							<p className="section-kicker">Start here</p>

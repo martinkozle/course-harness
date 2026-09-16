@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx2
 import pytest
 from fastapi import FastAPI
-from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
+from pydantic_ai.messages import ModelMessage, ModelRequest, SystemPromptPart, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from course_harness import resources as res
@@ -637,11 +637,19 @@ async def test_agent_marks_prompt_injected_source_content_as_untrusted_data(
         )
         await client.put("/api/provider", json=_PROVIDER_PAYLOAD)
 
+    observed_system_prompts: list[str] = []
     observed_tool_results: dict[str, str] = {}
 
     async def inspect_source_result(
         messages: list[ModelMessage], _info: AgentInfo
     ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        observed_system_prompts.extend(
+            part.content
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+            if isinstance(part, SystemPromptPart)
+        )
         returned = {
             part.tool_name: part
             for message in messages
@@ -686,6 +694,7 @@ async def test_agent_marks_prompt_injected_source_content_as_untrusted_data(
 
     assert response.status_code == 200
     assert set(observed_tool_results) == {"list_sources", "read_source_content"}
+    assert injected_label not in "\n".join(observed_system_prompts)
     catalog_payload = json.loads(observed_tool_results["list_sources"])
     assert catalog_payload["kind"] == "source_catalog"
     assert injected_label in catalog_payload["content"]

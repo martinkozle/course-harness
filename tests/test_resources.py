@@ -534,6 +534,30 @@ async def test_remote_fetch_pins_the_validated_address() -> None:
 
 
 @pytest.mark.anyio
+async def test_remote_fetch_uses_the_default_resolver_and_pins_its_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested: list[str] = []
+
+    def getaddrinfo(*_args: object, **_kwargs: object) -> list[tuple[object, ...]]:
+        return [(0, 0, 0, "", ("8.8.4.4", 443))]
+
+    def transport(request: httpx2.Request) -> httpx2.Response:
+        requested.append(str(request.url))
+        return httpx2.Response(200, text="public")
+
+    monkeypatch.setattr(res.socket, "getaddrinfo", getaddrinfo)
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(transport)) as client:
+        content, _ = await fetch_remote_resource(
+            "https://example.com/resource",
+            http_client=client,
+        )
+
+    assert content == b"public"
+    assert requested == ["https://8.8.4.4/resource"]
+
+
+@pytest.mark.anyio
 async def test_snapshot_history_tracks_versions(tmp_path: Path) -> None:
     workspace = tmp_path / "snap-course"
     workspace.mkdir()

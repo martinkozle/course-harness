@@ -25,6 +25,7 @@ from course_harness.course_agent import (
     CoursePlanLectureCommand,
     ReplaceCoursePlanCommand,
     apply_course_plan_command,
+    build_provider_model,
 )
 from course_harness.course_plan import read_course_plan, write_course_plan
 from course_harness.providers import (
@@ -56,6 +57,45 @@ def _provider_request() -> dict[str, object]:
         "model": "openai/gpt-oss-20b:free",
         "api_key": "openrouter-secret",
     }
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("kind", "model", "base_url"),
+    [
+        ("openrouter", "openai/gpt-oss-20b:free", "https://openrouter.ai/api/v1"),
+        ("anthropic", "claude-sonnet", "https://api.anthropic.com"),
+        ("openai-compatible", "local-model", "http://127.0.0.1:11434/v1"),
+    ],
+)
+async def test_provider_models_own_clients_that_ignore_ambient_proxy_settings(
+    kind: str, model: str, base_url: str
+) -> None:
+    configured = {
+        "kind": kind,
+        "model": model,
+        "base_url": base_url,
+        "capabilities": {
+            "tool_calling": True,
+            "structured_output": True,
+            "streaming": True,
+            "context_window": 131_072,
+            "vision": False,
+        },
+    }
+
+    provider_model = build_provider_model(configured, "explicit-product-key")
+    provider = provider_model._provider  # type: ignore[unresolved-attribute]
+    assert provider._own_http_client is not None
+    assert provider._http_client_factory is not None
+    client = provider._own_http_client
+    replacement = provider._http_client_factory()
+    try:
+        assert client._trust_env is False
+        assert replacement._trust_env is False
+    finally:
+        await client.aclose()
+        await replacement.aclose()
 
 
 def _plan_command(**changes: object) -> ReplaceCoursePlanCommand:

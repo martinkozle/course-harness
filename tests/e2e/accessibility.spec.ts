@@ -80,6 +80,19 @@ test("major Course Author journey surfaces meet automated and keyboard accessibi
 	await expect(page.locator("#agent-run-status")).toHaveText(
 		"Course Agent finished.",
 	);
+	const conversation = page.locator(".chat-messages");
+	await conversation.evaluate((element) => {
+		element.style.flex = "0 0 40px";
+		element.style.height = "40px";
+		element.style.maxHeight = "40px";
+		element.style.overflowY = "auto";
+		element.scrollTop = 0;
+	});
+	await conversation.focus();
+	await conversation.press("End");
+	await expect
+		.poll(() => conversation.evaluate((element) => element.scrollTop))
+		.toBeGreaterThan(0);
 	const course = (await (
 		await page.request.get("/api/course")
 	).json()) as { lectures: Array<{ id: string }> };
