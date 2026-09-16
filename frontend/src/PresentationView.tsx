@@ -27,6 +27,7 @@ type PresentationViewProps = {
 	presentations: PresentationSummary[];
 	presentationVersion: number;
 	templates: TemplateProfileSummary[];
+	chatContext: string | null;
 	onChange: () => Promise<void>;
 	onChatContext: (instruction: string) => void;
 };
@@ -659,6 +660,7 @@ export function PresentationView({
 	presentations,
 	presentationVersion,
 	templates,
+	chatContext,
 	onChange,
 	onChatContext,
 }: PresentationViewProps) {
@@ -735,16 +737,18 @@ export function PresentationView({
 	}, []);
 
 	const selectLecture = useCallback(
-		async (lectureId: string) => {
+		async (lectureId: string, updateChatContext = true) => {
 			const lecture = course.lectures.find((item) => item.id === lectureId);
 			setSelectedLectureId(lectureId);
 			setSelectedSlideId(null);
 			setCurrentPresentation(null);
 			setError(null);
 			setShowArchived(false);
-			onChatContext(
-				`I'm working on the Lecture "${lecture?.title ?? "Untitled Lecture"}"`,
-			);
+			if (updateChatContext) {
+				onChatContext(
+					`I'm working on the Lecture "${lecture?.title ?? "Untitled Lecture"}"`,
+				);
+			}
 			await loadPresentation(lectureId);
 		},
 		[course.lectures, loadPresentation, onChatContext],
@@ -755,9 +759,9 @@ export function PresentationView({
 			(lecture) => lecture.id === selectedLectureId,
 		);
 		if (!selectionStillExists && course.lectures[0]) {
-			void selectLecture(course.lectures[0].id);
+			void selectLecture(course.lectures[0].id, chatContext === null);
 		}
-	}, [course.lectures, selectLecture, selectedLectureId]);
+	}, [chatContext, course.lectures, selectLecture, selectedLectureId]);
 
 	useEffect(() => {
 		if (presentationVersion !== prevVersion.current) {

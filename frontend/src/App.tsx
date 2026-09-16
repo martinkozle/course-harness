@@ -1134,6 +1134,7 @@ export function App() {
 											presentations={presentations}
 											presentationVersion={presentationVersion}
 											templates={templates}
+											chatContext={chatContext}
 											onChange={refreshPresentations}
 											onChatContext={openAgentWithContext}
 										/>

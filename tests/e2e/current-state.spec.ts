@@ -1,6 +1,6 @@
-import { expect, test } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { expect, test } from "@playwright/test";
 
 test("Course Author can inspect Current State before and after creating a Course", async ({
 	page,
