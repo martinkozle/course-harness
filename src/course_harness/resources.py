@@ -1,13 +1,20 @@
+import asyncio
 import hashlib
+import ipaddress
+import socket
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
+from urllib.parse import SplitResult, urljoin, urlsplit
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ResourceKind = Literal["local-file", "upload", "remote"]
 ProcessingStatus = Literal["unprocessed", "processing", "ready", "failed", "retrying"]
+MAX_REMOTE_REDIRECTS = 5
+RemoteHostResolver = Callable[[str, int], Awaitable[set[str]]]
 
 
 class ResourceRegistrationRequest(BaseModel):
@@ -95,6 +102,86 @@ class RemoteFetchRequest(BaseModel):
 
     url: str = Field(min_length=1, max_length=2000)
     media_type: str | None = None
+
+    @model_validator(mode="after")
+    def has_safe_url_shape(self) -> RemoteFetchRequest:
+        parse_remote_url(self.url)
+        return self
+
+
+def parse_remote_url(value: str) -> SplitResult:
+    """Parse an outbound URL and reject schemes or authority forms we never support."""
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("Remote URLs must use HTTP or HTTPS")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("Remote URLs cannot contain credentials")
+    if not parsed.hostname:
+        raise ValueError("Remote URLs must include a hostname")
+    try:
+        _ = parsed.port
+    except ValueError as error:
+        raise ValueError("Remote URL has an invalid port") from error
+    return parsed
+
+
+async def resolve_remote_host(hostname: str, port: int) -> set[str]:
+    """Resolve an outbound host immediately before connecting to it."""
+    try:
+        results = await asyncio.to_thread(
+            socket.getaddrinfo,
+            hostname,
+            port,
+            type=socket.SOCK_STREAM,
+        )
+    except OSError as error:
+        raise ValueError("Remote URL hostname could not be resolved") from error
+    addresses = {str(result[4][0]) for result in results}
+    if not addresses:
+        raise ValueError("Remote URL hostname could not be resolved")
+    return addresses
+
+
+def _is_unsafe_remote_address(value: str) -> bool:
+    try:
+        address = ipaddress.ip_address(value.split("%", 1)[0])
+    except ValueError:
+        return True
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return (
+        address.is_loopback
+        or address.is_private
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_unspecified
+        or address.is_reserved
+    )
+
+
+async def validate_remote_url(
+    value: str,
+    *,
+    host_resolver: RemoteHostResolver = resolve_remote_host,
+) -> None:
+    """Reject destinations that could cross the local network trust boundary.
+
+    The resolver is deliberately injectable so callers can test the policy without
+    accessing DNS. It is run before every outbound request; this narrows, but cannot
+    completely eliminate, the time-of-check/time-of-use window in ordinary HTTP clients.
+    """
+    parsed = parse_remote_url(value)
+    assert parsed.hostname is not None
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    addresses = await host_resolver(parsed.hostname, port)
+    if any(_is_unsafe_remote_address(address) for address in addresses):
+        raise ValueError("Remote URL resolves to a disallowed network address")
+
+
+def redirect_target(current_url: str, location: str | None) -> str:
+    if not location:
+        raise ValueError("Remote redirect did not include a location")
+    return urljoin(current_url, location)
 
 
 MEDIA_TYPE_PROCESSORS: dict[str, str] = {

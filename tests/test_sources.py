@@ -33,6 +33,10 @@ async def _verified_account(_request: object) -> None:
     return None
 
 
+async def _public_host_resolver(_hostname: str, _port: int) -> set[str]:
+    return {"8.8.8.8"}
+
+
 def _app(
     workspace: Path,
     *,
@@ -45,6 +49,7 @@ def _app(
         workspace,
         library_data_path=library_data or data_dir,
         library_cache_path=library_cache or cache_dir,
+        remote_host_resolver=_public_host_resolver,
     )
 
 
@@ -481,6 +486,7 @@ def _make_agent_app(
         agent_model=model,
         provider_validator=_verified_capabilities,
         provider_account_validator=_verified_account,
+        remote_host_resolver=_public_host_resolver,
     )
 
 

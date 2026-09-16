@@ -69,6 +69,10 @@ HUGGINGFACE_RESPONSE = [
 ]
 
 
+async def _public_host_resolver(_hostname: str, _port: int) -> set[str]:
+    return {"8.8.8.8"}
+
+
 def test_parse_arxiv() -> None:
     candidates = _parse_arxiv(ARXIV_RESPONSE)
     assert len(candidates) == 1
@@ -194,9 +198,34 @@ async def test_inspect_web_url() -> None:
         "course_harness.discovery.httpx2.AsyncClient",
         return_value=httpx2.AsyncClient(transport=httpx2.MockTransport(mock_transport)),
     ):
-        candidate = await inspect_web_url("https://example.com")
+        candidate = await inspect_web_url(
+            "https://example.com",
+            host_resolver=_public_host_resolver,
+        )
 
     assert candidate.provider == "web"
     assert candidate.url == "https://example.com"
     assert candidate.media_type == "text/html"
     assert candidate.size_bytes == 12345
+
+
+@pytest.mark.anyio
+async def test_inspect_web_url_revalidates_redirect_destinations() -> None:
+    requested: list[str] = []
+
+    async def resolver(hostname: str, _port: int) -> set[str]:
+        return {"127.0.0.1"} if hostname == "private.example" else {"8.8.8.8"}
+
+    def mock_transport(request: httpx2.Request) -> httpx2.Response:
+        requested.append(str(request.url))
+        return httpx2.Response(302, headers={"location": "https://private.example/metadata"})
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(mock_transport)) as client:
+        with pytest.raises(ValueError, match="disallowed network address"):
+            await inspect_web_url(
+                "https://public.example/resource",
+                client=client,
+                host_resolver=resolver,
+            )
+
+    assert requested == ["https://public.example/resource"]

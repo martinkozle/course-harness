@@ -6,12 +6,22 @@ import pytest
 
 from course_harness import resources as res
 from course_harness.app import create_app
+from course_harness.library import fetch_remote_resource
 
 FIXTURES = Path(__file__).with_name("fixtures") / "resources"
 
 
+async def _public_host_resolver(_hostname: str, _port: int) -> set[str]:
+    return {"8.8.8.8"}
+
+
 def _app(workspace: Path, data_dir: Path, cache_dir: Path):
-    return create_app(workspace, library_data_path=data_dir, library_cache_path=cache_dir)
+    return create_app(
+        workspace,
+        library_data_path=data_dir,
+        library_cache_path=cache_dir,
+        remote_host_resolver=_public_host_resolver,
+    )
 
 
 @pytest.mark.anyio
@@ -368,6 +378,89 @@ async def test_register_remote_resource(tmp_path: Path) -> None:
     assert body["location"] == "https://example.com/doc.md"
     assert body["status"] == "ready"
     assert body["indexed"] is True
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "ftp://example.com/resource",
+        "https://user:password@example.com/resource",
+    ],
+)
+def test_remote_fetch_request_rejects_unsafe_url_shapes(url: str) -> None:
+    with pytest.raises(ValueError):
+        res.RemoteFetchRequest(url=url)
+
+
+@pytest.mark.anyio
+async def test_remote_fetch_rejects_private_destinations_before_request() -> None:
+    requested: list[str] = []
+
+    async def private_resolver(_hostname: str, _port: int) -> set[str]:
+        return {"127.0.0.1"}
+
+    def transport(request: httpx2.Request) -> httpx2.Response:
+        requested.append(str(request.url))
+        return httpx2.Response(200, text="must not be read")
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(transport)) as client:
+        with pytest.raises(ValueError, match="disallowed network address"):
+            await fetch_remote_resource(
+                "https://example.com/resource",
+                http_client=client,
+                host_resolver=private_resolver,
+            )
+
+    assert requested == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "address",
+    [
+        "127.0.0.1",
+        "10.0.0.1",
+        "169.254.0.1",
+        "224.0.0.1",
+        "0.0.0.0",
+        "240.0.0.1",
+        "::1",
+        "fd00::1",
+        "fe80::1",
+        "ff00::1",
+        "::",
+        "::ffff:127.0.0.1",
+    ],
+)
+async def test_remote_url_rejects_each_disallowed_ip_address_class(address: str) -> None:
+    async def resolver(_hostname: str, _port: int) -> set[str]:
+        return {address}
+
+    with pytest.raises(ValueError, match="disallowed network address"):
+        await res.validate_remote_url("https://example.com/resource", host_resolver=resolver)
+
+
+@pytest.mark.anyio
+async def test_remote_fetch_revalidates_each_redirect_destination() -> None:
+    requested: list[str] = []
+
+    async def resolver(hostname: str, _port: int) -> set[str]:
+        return {"127.0.0.1"} if hostname == "private.example" else {"8.8.8.8"}
+
+    def transport(request: httpx2.Request) -> httpx2.Response:
+        requested.append(str(request.url))
+        return httpx2.Response(302, headers={"location": "https://private.example/metadata"})
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(transport)) as client:
+        with pytest.raises(ValueError, match="disallowed network address"):
+            await fetch_remote_resource(
+                "https://public.example/resource",
+                http_client=client,
+                host_resolver=resolver,
+            )
+
+    assert requested == ["https://public.example/resource"]
 
 
 @pytest.mark.anyio

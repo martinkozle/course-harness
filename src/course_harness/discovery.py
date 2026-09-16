@@ -5,7 +5,16 @@ from typing import Any
 
 import httpx2
 
-from course_harness.resources import Candidate, DiscoveryRequest, DiscoveryResult
+from course_harness.resources import (
+    MAX_REMOTE_REDIRECTS,
+    Candidate,
+    DiscoveryRequest,
+    DiscoveryResult,
+    RemoteHostResolver,
+    redirect_target,
+    resolve_remote_host,
+    validate_remote_url,
+)
 
 _ARXIV_NAMESPACES = {
     "atom": "http://www.w3.org/2005/Atom",
@@ -194,28 +203,44 @@ def _parse_huggingface(data: list[dict[str, Any]]) -> list[Candidate]:
 async def inspect_web_url(
     url: str,
     client: httpx2.AsyncClient | None = None,
+    *,
+    host_resolver: RemoteHostResolver | None = None,
 ) -> Candidate:
+    resolver = host_resolver or resolve_remote_host
     if client is None:
-        async with httpx2.AsyncClient(timeout=15) as owned_client:
-            return await _inspect_web(client=owned_client, url=url)
-    return await _inspect_web(client=client, url=url)
+        async with httpx2.AsyncClient(timeout=15, follow_redirects=False) as owned_client:
+            return await _inspect_web(client=owned_client, url=url, host_resolver=resolver)
+    return await _inspect_web(client=client, url=url, host_resolver=resolver)
 
 
-async def _inspect_web(client: httpx2.AsyncClient, url: str) -> Candidate:
-    response = await client.head(url, follow_redirects=True)
-    response.raise_for_status()
-    content_type = response.headers.get("content-type", "").split(";")[0].strip()
-    content_length = response.headers.get("content-length")
-    size: int | None = None
-    if content_length is not None and content_length.isdigit():
-        size = int(content_length)
-    return Candidate(
-        provider="web",
-        provider_id=url,
-        url=url,
-        media_type=content_type or None,
-        size_bytes=size,
-    )
+async def _inspect_web(
+    client: httpx2.AsyncClient,
+    url: str,
+    host_resolver: RemoteHostResolver,
+) -> Candidate:
+    current_url = url
+    for redirect_count in range(MAX_REMOTE_REDIRECTS + 1):
+        await validate_remote_url(current_url, host_resolver=host_resolver)
+        response = await client.head(current_url, follow_redirects=False)
+        if response.is_redirect:
+            if redirect_count == MAX_REMOTE_REDIRECTS:
+                raise ValueError("Remote URL exceeded the redirect limit")
+            current_url = redirect_target(current_url, response.headers.get("location"))
+            continue
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "").split(";")[0].strip()
+        content_length = response.headers.get("content-length")
+        size: int | None = None
+        if content_length is not None and content_length.isdigit():
+            size = int(content_length)
+        return Candidate(
+            provider="web",
+            provider_id=url,
+            url=url,
+            media_type=content_type or None,
+            size_bytes=size,
+        )
+    raise AssertionError("Remote redirect loop did not return or raise")
 
 
 PROVIDERS: dict[str, Callable[..., Any]] = {

@@ -2,7 +2,11 @@ import os
 import sys
 from pathlib import Path
 
+import httpx2
+
 from course_harness.resources import (
+    MAX_REMOTE_REDIRECTS,
+    RemoteHostResolver,
     Resource,
     ResourceRegistrationRequest,
     ResourceState,
@@ -11,8 +15,11 @@ from course_harness.resources import (
     create_snapshot,
     process_snapshot,
     read_library_index,
+    redirect_target,
     register_resource,
+    resolve_remote_host,
     update_resource_snapshot,
+    validate_remote_url,
     write_library_index,
 )
 
@@ -278,12 +285,46 @@ MAX_FETCH_BYTES = 100 * 1024 * 1024  # 100 MiB
 async def fetch_remote_resource(
     url: str,
     media_type: str | None = None,
+    *,
+    http_client: httpx2.AsyncClient | None = None,
+    host_resolver: RemoteHostResolver | None = None,
 ) -> tuple[bytes, str]:
-    import httpx2
-
+    resolver = host_resolver or resolve_remote_host
     resolved_type = media_type or "application/octet-stream"
-    async with httpx2.AsyncClient(timeout=30, follow_redirects=True, max_redirects=5) as client:
-        response = await client.get(url)
+    if http_client is None:
+        async with httpx2.AsyncClient(timeout=30, follow_redirects=False) as owned_client:
+            return await _fetch_remote_resource(
+                owned_client,
+                url,
+                resolved_type,
+                media_type,
+                resolver,
+            )
+    return await _fetch_remote_resource(
+        http_client,
+        url,
+        resolved_type,
+        media_type,
+        resolver,
+    )
+
+
+async def _fetch_remote_resource(
+    client: httpx2.AsyncClient,
+    url: str,
+    resolved_type: str,
+    requested_media_type: str | None,
+    host_resolver: RemoteHostResolver,
+) -> tuple[bytes, str]:
+    current_url = url
+    for redirect_count in range(MAX_REMOTE_REDIRECTS + 1):
+        await validate_remote_url(current_url, host_resolver=host_resolver)
+        response = await client.get(current_url, follow_redirects=False)
+        if response.is_redirect:
+            if redirect_count == MAX_REMOTE_REDIRECTS:
+                raise ValueError("Remote URL exceeded the redirect limit")
+            current_url = redirect_target(current_url, response.headers.get("location"))
+            continue
         response.raise_for_status()
         content_length = response.headers.get("content-length")
         if (
@@ -296,12 +337,13 @@ async def fetch_remote_resource(
                 f"maximum is {MAX_FETCH_BYTES} bytes."
             )
         header_type = response.headers.get("content-type", "").split(";")[0].strip()
-        if not media_type and header_type:
+        if not requested_media_type and header_type:
             resolved_type = header_type
         content = await response.aread()
         if len(content) > MAX_FETCH_BYTES:
             raise ValueError(f"Fetched {len(content)} bytes; maximum is {MAX_FETCH_BYTES} bytes.")
         return content, resolved_type
+    raise AssertionError("Remote redirect loop did not return or raise")
 
 
 async def register_remote_resource(
@@ -309,8 +351,14 @@ async def register_remote_resource(
     cache_dir: Path,
     url: str,
     media_type: str | None = None,
+    *,
+    host_resolver: RemoteHostResolver | None = None,
 ) -> ResourceState:
-    content, resolved_type = await fetch_remote_resource(url, media_type)
+    content, resolved_type = await fetch_remote_resource(
+        url,
+        media_type,
+        host_resolver=host_resolver,
+    )
     request = ResourceRegistrationRequest(
         kind="remote",
         location=url,
@@ -324,6 +372,8 @@ async def refresh_remote_resource(
     data_dir: Path,
     cache_dir: Path,
     resource_id: str,
+    *,
+    host_resolver: RemoteHostResolver | None = None,
 ) -> ResourceState:
     index = read_library_index(registry_path(data_dir))
     resource = next((r for r in index.resources if r.id == resource_id), None)
@@ -332,7 +382,11 @@ async def refresh_remote_resource(
     if resource.kind != "remote":
         raise ValueError("Only remote resources can be refreshed.")
 
-    content, _ = await fetch_remote_resource(resource.location, resource.media_type)
+    content, _ = await fetch_remote_resource(
+        resource.location,
+        resource.media_type,
+        host_resolver=host_resolver,
+    )
     new_hash = content_hash(content)
 
     if new_hash == resource.snapshot_hash:

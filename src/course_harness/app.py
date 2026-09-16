@@ -267,6 +267,7 @@ def create_app(
     agent_model: Model | None = None,
     provider_validator: ProviderCapabilityValidator = validate_provider_capabilities,
     provider_account_validator: ProviderAccountValidator = validate_provider_account,
+    remote_host_resolver: res.RemoteHostResolver = res.resolve_remote_host,
     precompute_template_backgrounds: bool = True,
 ) -> FastAPI:
     """Create the HTTP application, optionally bound to one Course Workspace."""
@@ -2188,7 +2189,7 @@ def create_app(
         from course_harness.discovery import inspect_web_url  # noqa: PLC0415
 
         try:
-            return await inspect_web_url(request.url)
+            return await inspect_web_url(request.url, host_resolver=remote_host_resolver)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -2196,8 +2197,13 @@ def create_app(
     async def register_remote(request: res.RemoteFetchRequest) -> res.ResourceState:
         require_workspace()
         try:
+            await res.validate_remote_url(request.url, host_resolver=remote_host_resolver)
             return await library.register_remote_resource(
-                data_dir, cache_dir, request.url, request.media_type
+                data_dir,
+                cache_dir,
+                request.url,
+                request.media_type,
+                host_resolver=remote_host_resolver,
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
@@ -2206,7 +2212,12 @@ def create_app(
     async def refresh_resource(resource_id: str) -> res.ResourceState:
         require_workspace()
         try:
-            return await library.refresh_remote_resource(data_dir, cache_dir, resource_id)
+            return await library.refresh_remote_resource(
+                data_dir,
+                cache_dir,
+                resource_id,
+                host_resolver=remote_host_resolver,
+            )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
