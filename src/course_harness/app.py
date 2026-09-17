@@ -464,6 +464,26 @@ def create_app(
             media_type="application/json",
         )
 
+    @app.exception_handler(CredentialStoreError)
+    async def _credential_storage_error(
+        _request: Request,
+        _exc: CredentialStoreError,
+    ) -> StarletteResponse:
+        return StarletteResponse(
+            content=json.dumps(
+                {
+                    "detail": (
+                        "Provider credential storage is unavailable. Unlock the operating-system "
+                        "keyring or repair the private credential file shown in Runtime "
+                        "diagnostics, "
+                        "then try again."
+                    )
+                }
+            ).encode("utf-8"),
+            status_code=503,
+            media_type="application/json",
+        )
+
     @app.exception_handler(CanonicalMutationConflict)
     async def _canonical_mutation_conflict(
         _request: Request,
@@ -1117,14 +1137,6 @@ def create_app(
             raise HTTPException(status_code=404, detail="Provider Account was not found") from error
         except ProviderAccountInUseError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
-        except CredentialStoreError as error:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "The Provider Account was not deleted because its credential could not be "
-                    "removed safely. Try again after unlocking the operating-system keyring."
-                ),
-            ) from error
 
     @app.post("/api/models", response_model=ModelPreset, status_code=201)
     async def create_model_preset(request: ModelPresetRequest) -> ModelPreset:

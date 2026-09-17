@@ -12,7 +12,7 @@ from uuid import uuid4
 import httpx2
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
-from course_harness.credential_store import CredentialStore
+from course_harness.credential_store import CredentialStore, CredentialStoreError
 from course_harness.product_connectors import product_connector_client
 from course_harness.runtime_paths import RuntimePaths
 
@@ -267,14 +267,30 @@ def save_provider_configuration(
     credential_store: CredentialStore | None = None,
 ) -> ProviderConfiguration:
     configuration = request.configuration(capabilities)
-    store_path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(store_path, 0o700)
-    _write_private_json(
-        store_path / "provider.json", configuration.model_dump(mode="json"), mode=0o600
-    )
-    _credential_store(store_path, credential_store).write(
-        "provider-legacy", request.api_key.get_secret_value()
-    )
+    configuration_path = store_path / "provider.json"
+    previous_configuration: bytes | None = None
+    try:
+        store_path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(store_path, 0o700)
+        previous_configuration = _snapshot_private_file(configuration_path)
+        _write_private_json(
+            configuration_path,
+            configuration.model_dump(mode="json"),
+            mode=0o600,
+        )
+        _credential_store(store_path, credential_store).write(
+            "provider-legacy", request.api_key.get_secret_value()
+        )
+    except (CredentialStoreError, OSError) as error:
+        try:
+            _restore_private_file(configuration_path, previous_configuration)
+        except OSError as rollback_error:
+            raise CredentialStoreError(
+                "Provider configuration could not be restored safely."
+            ) from rollback_error
+        if isinstance(error, CredentialStoreError):
+            raise
+        raise CredentialStoreError("Provider configuration could not be saved safely.") from error
     return configuration
 
 
@@ -463,7 +479,17 @@ def save_provider_account(
     )
     catalog.provider_accounts.append(account)
     store.write(account.id, request.api_key.get_secret_value())
-    _write_catalog(store_path, catalog)
+    try:
+        _write_catalog(store_path, catalog)
+    except OSError as error:
+        try:
+            store.delete(account.id)
+        except CredentialStoreError as rollback_error:
+            raise CredentialStoreError(
+                "The new Provider Account could not be saved and its credential could not be "
+                "removed safely."
+            ) from rollback_error
+        raise CredentialStoreError("The new Provider Account could not be saved safely.") from error
     return account
 
 
@@ -509,7 +535,6 @@ def replace_provider_account_credential(
     if account is None:
         raise KeyError(account_id)
     store.write(account_id, request.api_key.get_secret_value())
-    _write_catalog(store_path, catalog)
     return account
 
 
@@ -537,8 +562,8 @@ def delete_provider_account(
 
     # Delete the secret before mutating account metadata.  A backend failure is
     # surfaced and leaves the catalog and its storage-mode metadata intact.
-    credential = store.read(account_id)
-    store.delete(account_id)
+    recovery = store.delete(account_id)
+    post_delete_metadata, post_delete_credentials = store.private_state()
     removed_preset_ids = {preset.id for preset in attached_presets}
     catalog.provider_accounts = [
         account for account in catalog.provider_accounts if account.id != account_id
@@ -550,10 +575,19 @@ def delete_provider_account(
         catalog.selected_model_id = catalog.model_presets[0].id if catalog.model_presets else None
     try:
         _write_catalog(store_path, catalog)
-    except Exception:
-        if credential is not None:
-            store.write(account_id, credential)
-        raise
+    except OSError as error:
+        try:
+            store.restore_recovery(
+                recovery,
+                post_delete_metadata=post_delete_metadata,
+                post_delete_credentials=post_delete_credentials,
+            )
+        except CredentialStoreError as rollback_error:
+            raise CredentialStoreError(
+                "The Provider Account could not be deleted and its credential could not be "
+                "restored safely."
+            ) from rollback_error
+        raise CredentialStoreError("The Provider Account could not be deleted safely.") from error
     return catalog
 
 
@@ -704,7 +738,12 @@ def _migrate_legacy_catalog(
     )
     # Keep the original credential representation.  Discovering a keyring must
     # never silently migrate an existing private JSON credential.
-    _write_catalog(store_path, catalog)
+    try:
+        _write_catalog(store_path, catalog)
+    except OSError as error:
+        raise CredentialStoreError(
+            "Legacy Provider Account metadata could not be migrated safely."
+        ) from error
     return catalog
 
 
@@ -715,18 +754,32 @@ def _write_catalog(store_path: Path, catalog: ModelCatalog) -> None:
 
 
 def _write_private_json(path: Path, payload: object, *, mode: int) -> None:
+    _write_private_bytes(path, json.dumps(payload, indent=2).encode("utf-8") + b"\n", mode=mode)
+
+
+def _write_private_bytes(path: Path, payload: bytes, *, mode: int) -> None:
     temporary_path = path.with_suffix(f"{path.suffix}.tmp")
     descriptor = os.open(temporary_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(payload, stream, indent=2)
-            stream.write("\n")
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
         os.chmod(temporary_path, mode)
         temporary_path.replace(path)
     finally:
         temporary_path.unlink(missing_ok=True)
+
+
+def _snapshot_private_file(path: Path) -> bytes | None:
+    return path.read_bytes() if path.is_file() else None
+
+
+def _restore_private_file(path: Path, snapshot: bytes | None) -> None:
+    if snapshot is None:
+        path.unlink(missing_ok=True)
+        return
+    _write_private_bytes(path, snapshot, mode=0o600)
 
 
 def read_provider_configuration(store_path: Path) -> ProviderConfiguration | None:
@@ -780,8 +833,8 @@ def _configured_provider_status(
 
 
 def runtime_provider_status(store_path: Path) -> RuntimeProviderStatus:
-    """Report provider metadata without reading a secret or contacting a keyring."""
-    store = CredentialStore.for_provider_store(store_path, use_os_keyring=False)
+    """Report provider metadata after a non-secret, non-prompting keyring availability check."""
+    store = CredentialStore.for_provider_store(store_path, use_os_keyring=True)
     catalog = ModelCatalog()
     catalog_path = store_path / "catalog.json"
     if catalog_path.is_file():
@@ -800,8 +853,14 @@ def runtime_provider_status(store_path: Path) -> RuntimeProviderStatus:
         if selected is not None
         else None
     )
-    if selected is not None and account is not None and store.has_reference(account.id):
+    if selected is not None and account is not None:
         storage_mode, storage_location = store.diagnostics(account.id)
+        if storage_mode == "unavailable":
+            return _unavailable_runtime_provider_status(
+                catalog.selected_model_id,
+                storage_mode,
+                storage_location,
+            )
         provider = _configured_provider_status(
             kind=account.kind,
             model=selected.model,
@@ -821,8 +880,14 @@ def runtime_provider_status(store_path: Path) -> RuntimeProviderStatus:
     # Keep legacy installations observable, but never call the migration helper:
     # that helper writes catalog files and would violate diagnostics' read-only contract.
     legacy = read_provider_configuration(store_path)
-    if legacy is not None and store.has_reference("provider-legacy"):
+    if not catalog_path.is_file() and legacy is not None:
         storage_mode, storage_location = store.diagnostics("provider-legacy")
+        if storage_mode == "unavailable":
+            return _unavailable_runtime_provider_status(
+                None,
+                storage_mode,
+                storage_location,
+            )
         provider = _configured_provider_status(
             kind=legacy.kind,
             model=legacy.model,
@@ -857,4 +922,25 @@ def runtime_provider_status(store_path: Path) -> RuntimeProviderStatus:
             location=storage_location,
         ),
         remediation=remediation,
+    )
+
+
+def _unavailable_runtime_provider_status(
+    selected_model_id: str | None,
+    storage_mode: Literal["unavailable"],
+    storage_location: str,
+) -> RuntimeProviderStatus:
+    return RuntimeProviderStatus(
+        configured=False,
+        selected_model_id=selected_model_id,
+        provider=ProviderStatus(configured=False),
+        credential_storage=CredentialStorageStatus(
+            mode=storage_mode,
+            location=storage_location,
+        ),
+        remediation=(
+            f"Provider credential storage is unavailable ({storage_location}). Unlock or configure "
+            "the operating-system keyring, or restore the private credential file, then update the "
+            "Provider Account."
+        ),
     )

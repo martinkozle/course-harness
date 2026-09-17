@@ -19,6 +19,7 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 from starlette.responses import StreamingResponse
 
 from course_harness import canonical_mutation
+from course_harness import providers as providers_module
 from course_harness import workspace_history as history
 from course_harness.app import create_app
 from course_harness.course_agent import (
@@ -557,6 +558,92 @@ async def test_provider_capability_failures_are_explained_before_a_run(
     assert "Streaming is required" in detail
     assert "at least 16,384 tokens" in detail
     assert not provider_store.exists()
+
+
+@pytest.mark.anyio
+async def test_credential_storage_failures_are_actionable_and_do_not_echo_the_secret(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    provider_store = tmp_path / "user-data" / "provider"
+    provider_store.mkdir(parents=True)
+    (provider_store / "credential-modes.json").write_text("not json\n", encoding="utf-8")
+    transport = httpx2.ASGITransport(
+        app=create_app(
+            workspace,
+            provider_store_path=provider_store,
+            provider_validator=_verified_capabilities,
+        )
+    )
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.put("/api/provider", json=_provider_request())
+
+    assert response.status_code == 503
+    assert "credential storage" in response.json()["detail"].lower()
+    assert "openrouter-secret" not in response.text
+
+
+@pytest.mark.anyio
+async def test_provider_configuration_disk_failures_are_safe_and_actionable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    provider_store = tmp_path / "user-data" / "provider"
+
+    def disk_full(*_args: object, **_kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(providers_module, "_write_private_json", disk_full)
+    transport = httpx2.ASGITransport(
+        app=create_app(
+            workspace,
+            provider_store_path=provider_store,
+            provider_validator=_verified_capabilities,
+        )
+    )
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.put("/api/provider", json=_provider_request())
+
+    assert response.status_code == 503
+    assert "credential storage" in response.json()["detail"].lower()
+    assert "openrouter-secret" not in response.text
+
+
+@pytest.mark.anyio
+async def test_legacy_catalog_migration_disk_failures_are_safe_and_actionable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    provider_store = tmp_path / "user-data" / "provider"
+    transport = httpx2.ASGITransport(
+        app=create_app(
+            workspace,
+            provider_store_path=provider_store,
+            provider_validator=_verified_capabilities,
+        )
+    )
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        configured = await client.put("/api/provider", json=_provider_request())
+        (provider_store / "catalog.json").unlink()
+
+        def disk_full(*_args: object, **_kwargs: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(providers_module, "_write_catalog", disk_full)
+        response = await client.get("/api/models")
+
+    assert configured.status_code == 200
+    assert response.status_code == 503
+    assert "credential storage" in response.json()["detail"].lower()
+    assert "openrouter-secret" not in response.text
 
 
 @pytest.mark.anyio

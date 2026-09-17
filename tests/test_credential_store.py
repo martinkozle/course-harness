@@ -34,6 +34,8 @@ class FakeKeyring:
         self.secrets: dict[tuple[str, str], str] = {}
         self.get_calls = 0
         self.fail_write = False
+        self.mutate_then_fail_write = False
+        self.mutate_then_fail_once = False
         self.fail_delete = False
         self.missing_delete = False
 
@@ -45,6 +47,11 @@ class FakeKeyring:
         if self.fail_write:
             raise RuntimeError("locked")
         self.secrets[(service, username)] = password
+        if self.mutate_then_fail_write:
+            raise RuntimeError("write reported failure")
+        if self.mutate_then_fail_once:
+            self.mutate_then_fail_once = False
+            raise RuntimeError("write reported failure")
 
     def delete_password(self, service: str, username: str) -> None:
         if self.fail_delete:
@@ -89,6 +96,117 @@ def test_failed_keyring_write_uses_private_file_fallback(tmp_path: Path) -> None
     assert store.credentials_path.stat().st_mode & 0o777 == 0o600
 
 
+def test_new_account_uses_file_fallback_when_keyring_write_and_rollback_both_fail(
+    tmp_path: Path,
+) -> None:
+    backend = FakeKeyring()
+    backend.fail_write = True
+    backend.missing_delete = True
+    store = CredentialStore(tmp_path / "provider", keyring_backend=backend)
+
+    assert store.write("account-1", "fallback") == "file"
+
+    assert store.read("account-1") == "fallback"
+    assert json.loads(store.metadata_path.read_text(encoding="utf-8")) == {"account-1": "file"}
+
+
+def test_keyring_write_that_mutates_then_raises_removes_the_orphan_before_fallback(
+    tmp_path: Path,
+) -> None:
+    backend = FakeKeyring()
+    backend.mutate_then_fail_write = True
+    store = CredentialStore(tmp_path / "provider", keyring_backend=backend)
+
+    assert store.write("account-1", "fallback") == "file"
+
+    assert backend.secrets == {}
+    assert store.read("account-1") == "fallback"
+
+
+def test_keyring_rotation_that_mutates_then_raises_restores_the_previous_secret(
+    tmp_path: Path,
+) -> None:
+    backend = FakeKeyring()
+    store = CredentialStore(tmp_path / "provider", keyring_backend=backend)
+    store.write("account-1", "original")
+    backend.mutate_then_fail_once = True
+
+    with pytest.raises(CredentialStoreError, match="could not be updated safely"):
+        store.write("account-1", "replacement")
+
+    assert store.read("account-1") == "original"
+    assert not store.credentials_path.exists()
+    assert json.loads(store.metadata_path.read_text(encoding="utf-8")) == {"account-1": "keyring"}
+
+
+def test_failed_file_mode_commit_restores_the_prior_private_file_and_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = CredentialStore(tmp_path / "provider")
+    store.write("account-1", "original")
+    original_credentials = store.credentials_path.read_bytes()
+    original_modes = store.metadata_path.read_bytes()
+
+    def fail_mode_commit(_account_id: str, _mode: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "_set_mode", fail_mode_commit)
+
+    with pytest.raises(CredentialStoreError, match="private credential could not be updated"):
+        store.write("account-1", "replacement")
+
+    assert store.credentials_path.read_bytes() == original_credentials
+    assert store.metadata_path.read_bytes() == original_modes
+    assert store.read("account-1") == "original"
+
+
+def test_legacy_configuration_restores_provider_metadata_when_credential_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store_path = tmp_path / "provider"
+    store = CredentialStore(store_path)
+    capabilities = ProviderCapabilities(
+        tool_calling=True,
+        structured_output=True,
+        streaming=True,
+        context_window=32_000,
+        vision=False,
+    )
+    save_provider_configuration(
+        store_path,
+        ProviderConfigurationRequest(
+            kind="openrouter",
+            model="original/model",
+            api_key=SecretStr("original"),
+        ),
+        capabilities,
+        credential_store=store,
+    )
+    original_configuration = (store_path / "provider.json").read_bytes()
+
+    def fail_mode_commit(_account_id: str, _mode: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "_set_mode", fail_mode_commit)
+
+    with pytest.raises(CredentialStoreError, match="private credential could not be updated"):
+        save_provider_configuration(
+            store_path,
+            ProviderConfigurationRequest(
+                kind="openrouter",
+                model="replacement/model",
+                api_key=SecretStr("replacement"),
+            ),
+            capabilities,
+            credential_store=store,
+        )
+
+    assert (store_path / "provider.json").read_bytes() == original_configuration
+    assert store.read("provider-legacy") == "original"
+
+
 def test_keyring_owned_read_never_uses_a_stale_file_value(tmp_path: Path) -> None:
     store_path = tmp_path / "provider"
     store_path.mkdir()
@@ -100,7 +218,10 @@ def test_keyring_owned_read_never_uses_a_stale_file_value(tmp_path: Path) -> Non
     store = CredentialStore(store_path)
 
     assert store.read("account-1") is None
-    assert store.diagnostics("account-1") == ("os-keyring", "Operating-system keyring")
+    assert store.diagnostics("account-1") == (
+        "unavailable",
+        "Operating-system keyring is unavailable",
+    )
 
 
 def test_existing_legacy_json_remains_file_owned(tmp_path: Path) -> None:
@@ -200,15 +321,81 @@ def test_failed_keyring_delete_preserves_provider_metadata(tmp_path: Path) -> No
     assert store.mode_for(account.id) == "keyring"
 
 
-def test_missing_keyring_credential_does_not_block_idempotent_delete(tmp_path: Path) -> None:
+def test_keyring_delete_error_fails_closed_without_removing_metadata(tmp_path: Path) -> None:
     backend = FakeKeyring()
     store = CredentialStore(tmp_path / "provider", keyring_backend=backend)
     store.write("account-1", "secret")
     backend.missing_delete = True
 
-    store.delete("account-1")
+    with pytest.raises(CredentialStoreError, match="could not delete"):
+        store.delete("account-1")
 
-    assert "account-1" not in json.loads(store.metadata_path.read_text(encoding="utf-8"))
+    assert json.loads(store.metadata_path.read_text(encoding="utf-8")) == {"account-1": "keyring"}
+
+
+def test_failed_keyring_cleanup_restores_the_previous_credential(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = FakeKeyring()
+    store = CredentialStore(tmp_path / "provider", keyring_backend=backend)
+    store.write("account-1", "original")
+
+    def fail_cleanup(_account_id: str) -> None:
+        raise OSError("cleanup failed")
+
+    monkeypatch.setattr(store, "_remove_file_credential", fail_cleanup)
+
+    with pytest.raises(CredentialStoreError, match="could not be updated safely"):
+        store.write("account-1", "replacement")
+
+    assert store.read("account-1") == "original"
+    assert json.loads(store.metadata_path.read_text(encoding="utf-8")) == {"account-1": "keyring"}
+    assert not store.credentials_path.exists()
+
+
+def test_keyring_delete_restores_the_secret_when_stale_file_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = FakeKeyring()
+    store = CredentialStore(tmp_path / "provider", keyring_backend=backend)
+    store.write("account-1", "secret")
+
+    def fail_cleanup(_account_id: str) -> None:
+        raise OSError("cleanup failed")
+
+    monkeypatch.setattr(store, "_remove_file_credential", fail_cleanup)
+
+    with pytest.raises(CredentialStoreError, match="could not be removed safely"):
+        store.delete("account-1")
+
+    assert store.read("account-1") == "secret"
+    assert json.loads(store.metadata_path.read_text(encoding="utf-8")) == {"account-1": "keyring"}
+    assert not store.credentials_path.exists()
+
+
+def test_keyring_delete_restores_the_secret_even_when_private_recovery_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = FakeKeyring()
+    store = CredentialStore(tmp_path / "provider", keyring_backend=backend)
+    store.write("account-1", "secret")
+
+    def fail_cleanup(_account_id: str) -> None:
+        raise OSError("cleanup failed")
+
+    def fail_private_recovery(_metadata: bytes | None, _credentials: bytes | None) -> None:
+        raise CredentialStoreError("private recovery failed")
+
+    monkeypatch.setattr(store, "_remove_file_credential", fail_cleanup)
+    monkeypatch.setattr(store, "_restore_private_snapshots", fail_private_recovery)
+
+    with pytest.raises(CredentialStoreError, match="could not be removed safely"):
+        store.delete("account-1")
+
+    assert store.read("account-1") == "secret"
 
 
 def test_catalog_write_failure_restores_deleted_keyring_credential(
@@ -228,7 +415,7 @@ def test_catalog_write_failure_restores_deleted_keyring_credential(
 
     monkeypatch.setattr(providers_module, "_write_catalog", fail_catalog_write)
 
-    with pytest.raises(OSError, match="disk full"):
+    with pytest.raises(CredentialStoreError, match="could not be deleted safely"):
         delete_provider_account(store.store_path, account.id, credential_store=store)
 
     assert store.read(account.id) == "secret"
@@ -237,7 +424,69 @@ def test_catalog_write_failure_restores_deleted_keyring_credential(
     ]
 
 
-def test_runtime_diagnostics_do_not_read_keyring_secret(tmp_path: Path) -> None:
+def test_catalog_write_failure_removes_a_new_keyring_credential(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = FakeKeyring()
+    store = CredentialStore(tmp_path / "provider", keyring_backend=backend)
+
+    def fail_catalog_write(*_args: object, **_kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(providers_module, "_write_catalog", fail_catalog_write)
+
+    with pytest.raises(CredentialStoreError, match="could not be saved safely"):
+        save_provider_account(
+            store.store_path,
+            _account_request("secret"),
+            credential_store=store,
+        )
+
+    assert backend.secrets == {}
+    assert not store.metadata_path.exists()
+
+
+def test_catalog_failure_undoes_a_partial_keyring_restore(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = FakeKeyring()
+    store = CredentialStore(tmp_path / "provider", keyring_backend=backend)
+    account = save_provider_account(
+        store.store_path,
+        _account_request("secret"),
+        credential_store=store,
+    )
+    recovery_metadata, recovery_credentials = store.private_state()
+    original_restore = store._restore_private_snapshots
+
+    def fail_catalog_write(*_args: object, **_kwargs: object) -> None:
+        raise OSError("disk full")
+
+    def fail_only_pre_delete_restore(
+        metadata_snapshot: bytes | None,
+        credentials_snapshot: bytes | None,
+    ) -> None:
+        if metadata_snapshot == recovery_metadata and credentials_snapshot == recovery_credentials:
+            raise OSError("metadata restore failed")
+        original_restore(metadata_snapshot, credentials_snapshot)
+
+    monkeypatch.setattr(providers_module, "_write_catalog", fail_catalog_write)
+    monkeypatch.setattr(store, "_restore_private_snapshots", fail_only_pre_delete_restore)
+
+    with pytest.raises(CredentialStoreError, match="could not be deleted"):
+        delete_provider_account(store.store_path, account.id, credential_store=store)
+
+    assert backend.secrets == {}
+    assert not store.metadata_path.exists()
+    assert not store.credentials_path.exists()
+
+
+def test_runtime_diagnostics_do_not_read_keyring_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     backend = FakeKeyring()
     store = CredentialStore(tmp_path / "provider", keyring_backend=backend)
     account = save_provider_account(
@@ -263,6 +512,7 @@ def test_runtime_diagnostics_do_not_read_keyring_secret(tmp_path: Path) -> None:
     )
     before = backend.get_calls
 
+    monkeypatch.setattr(credential_store_module, "_safe_keyring_backend", lambda: backend)
     status = runtime_provider_status(store.store_path)
 
     assert status.configured
@@ -270,6 +520,80 @@ def test_runtime_diagnostics_do_not_read_keyring_secret(tmp_path: Path) -> None:
     assert status.credential_storage.mode == "os-keyring"
     assert backend.get_calls == before
     assert store.mode_for(account.id) == "keyring"
+
+
+def test_runtime_diagnostics_report_keyring_unavailable_without_reading_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = FakeKeyring()
+    store = CredentialStore(tmp_path / "provider", keyring_backend=backend)
+    account = save_provider_account(
+        store.store_path,
+        _account_request("secret"),
+        credential_store=store,
+    )
+    save_model_preset(
+        store.store_path,
+        ModelPresetRequest(
+            name="Planning",
+            provider_account_id=account.id,
+            model="example/model",
+        ),
+        ProviderCapabilities(
+            tool_calling=True,
+            structured_output=True,
+            streaming=True,
+            context_window=32_000,
+            vision=False,
+        ),
+        credential_store=store,
+    )
+    before = backend.get_calls
+    monkeypatch.setattr(credential_store_module, "_safe_keyring_backend", lambda: None)
+
+    status = runtime_provider_status(store.store_path)
+
+    assert not status.configured
+    assert status.credential_storage.mode == "unavailable"
+    assert status.remediation is not None
+    assert "operating-system keyring" in status.remediation.lower()
+    assert backend.get_calls == before
+
+
+def test_runtime_diagnostics_report_a_present_private_file_without_reading_its_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store_path = tmp_path / "provider"
+    store = CredentialStore(store_path)
+    save_provider_configuration(
+        store_path,
+        ProviderConfigurationRequest(
+            kind="openrouter",
+            model="legacy/model",
+            api_key=SecretStr("secret"),
+        ),
+        ProviderCapabilities(
+            tool_calling=True,
+            structured_output=True,
+            streaming=True,
+            context_window=32_000,
+            vision=False,
+        ),
+        credential_store=store,
+    )
+    store.credentials_path.write_text("not json\n", encoding="utf-8")
+
+    def credentials_must_not_be_read(_self: CredentialStore) -> dict[str, str]:
+        raise AssertionError("runtime diagnostics must not read credentials")
+
+    monkeypatch.setattr(CredentialStore, "_read_file_credentials", credentials_must_not_be_read)
+
+    status = runtime_provider_status(store_path)
+
+    assert status.configured
+    assert status.credential_storage.mode == "private-json-file"
 
 
 def test_selected_catalog_never_falls_back_to_stale_legacy_provider(tmp_path: Path) -> None:
@@ -343,6 +667,35 @@ def test_legacy_diagnostics_require_a_credential_reference(tmp_path: Path) -> No
         credential_store=store,
     )
     store.delete("provider-legacy")
+
+    assert not runtime_provider_status(store_path).configured
+
+
+def test_runtime_diagnostics_do_not_fall_back_to_legacy_when_a_catalog_exists(
+    tmp_path: Path,
+) -> None:
+    store_path = tmp_path / "provider"
+    store = CredentialStore(store_path)
+    save_provider_configuration(
+        store_path,
+        ProviderConfigurationRequest(
+            kind="openrouter",
+            model="legacy/model",
+            api_key=SecretStr("legacy-secret"),
+        ),
+        ProviderCapabilities(
+            tool_calling=True,
+            structured_output=True,
+            streaming=True,
+            context_window=32_000,
+            vision=False,
+        ),
+        credential_store=store,
+    )
+    (store_path / "catalog.json").write_text(
+        '{"provider_accounts": [], "model_presets": [], "selected_model_id": null}\n',
+        encoding="utf-8",
+    )
 
     assert not runtime_provider_status(store_path).configured
 
