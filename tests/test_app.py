@@ -71,6 +71,10 @@ async def test_runtime_diagnostics_are_available_unbound_and_read_only(tmp_path:
     }
     assert body["provider"] == {
         "configured": False,
+        "credential_storage": {
+            "mode": "unconfigured",
+            "location": str(paths.provider_credentials_path),
+        },
         "provider": {"configured": False},
         "remediation": (
             "Create or select a Course Workspace, then open Models to add a Provider Account "

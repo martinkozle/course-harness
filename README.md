@@ -40,7 +40,9 @@ course-harness /path/to/course-workspace
 
 Course Harness stores canonical Course state in readable Workspace files. Runtime caches,
 application state, and provider credentials stay in platform-native user locations outside Course
-Workspaces; the in-app runtime diagnostics show the exact locations and available capabilities.
+Workspaces. Provider credentials use a safe operating-system keyring when one is available and a
+private application file otherwise; the in-app runtime diagnostics show the active storage mode,
+exact runtime locations, and available capabilities.
 
 ## Development requirements
 

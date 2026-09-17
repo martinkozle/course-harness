@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 from collections.abc import Awaitable, Callable
@@ -10,6 +12,7 @@ from uuid import uuid4
 import httpx2
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
+from course_harness.credential_store import CredentialStore
 from course_harness.product_connectors import product_connector_client
 from course_harness.runtime_paths import RuntimePaths
 
@@ -149,12 +152,20 @@ class ProviderStatus(BaseModel):
     diagnostics: list[str] | None = None
 
 
+class CredentialStorageStatus(BaseModel):
+    """Non-secret credential storage information for runtime diagnostics."""
+
+    mode: Literal["os-keyring", "private-json-file", "unavailable", "unconfigured"]
+    location: str
+
+
 class RuntimeProviderStatus(BaseModel):
     """Provider state suitable for a read-only local diagnostics surface."""
 
     configured: bool
     selected_model_id: str | None = None
     provider: ProviderStatus
+    credential_storage: CredentialStorageStatus
     remediation: str | None = None
 
 
@@ -234,10 +245,26 @@ def default_provider_store_path() -> Path:
     return RuntimePaths.platform().provider_store_path
 
 
+def _credential_store(
+    store_path: Path, credential_store: CredentialStore | None = None
+) -> CredentialStore:
+    if credential_store is not None:
+        return credential_store
+    # An explicitly injected path is used by tests and host integrations.  Do
+    # not let it reach into a user's keyring; the platform default is the only
+    # production path that opportunistically opts in.
+    return CredentialStore.for_provider_store(
+        store_path,
+        use_os_keyring=store_path == default_provider_store_path(),
+    )
+
+
 def save_provider_configuration(
     store_path: Path,
     request: ProviderConfigurationRequest,
     capabilities: ProviderCapabilities,
+    *,
+    credential_store: CredentialStore | None = None,
 ) -> ProviderConfiguration:
     configuration = request.configuration(capabilities)
     store_path.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -245,10 +272,8 @@ def save_provider_configuration(
     _write_private_json(
         store_path / "provider.json", configuration.model_dump(mode="json"), mode=0o600
     )
-    _write_private_json(
-        store_path / "credentials.json",
-        {"api_key": request.api_key.get_secret_value()},
-        mode=0o600,
+    _credential_store(store_path, credential_store).write(
+        "provider-legacy", request.api_key.get_secret_value()
     )
     return configuration
 
@@ -410,18 +435,26 @@ def _capabilities_from_metadata(metadata: object) -> ProviderCapabilities:
     )
 
 
-def read_model_catalog(store_path: Path) -> ModelCatalog:
+def read_model_catalog(
+    store_path: Path, *, credential_store: CredentialStore | None = None
+) -> ModelCatalog:
     path = store_path / "catalog.json"
     if path.is_file():
         try:
             return ModelCatalog.model_validate_json(path.read_text(encoding="utf-8"))
         except OSError, ValueError:
             return ModelCatalog()
-    return _migrate_legacy_catalog(store_path)
+    return _migrate_legacy_catalog(store_path, credential_store=credential_store)
 
 
-def save_provider_account(store_path: Path, request: ProviderAccountRequest) -> ProviderAccount:
-    catalog = read_model_catalog(store_path)
+def save_provider_account(
+    store_path: Path,
+    request: ProviderAccountRequest,
+    *,
+    credential_store: CredentialStore | None = None,
+) -> ProviderAccount:
+    store = _credential_store(store_path, credential_store)
+    catalog = read_model_catalog(store_path, credential_store=store)
     account = ProviderAccount(
         id=f"provider-{uuid4().hex[:12]}",
         name=request.name,
@@ -429,9 +462,8 @@ def save_provider_account(store_path: Path, request: ProviderAccountRequest) -> 
         base_url=request.resolved_base_url(),
     )
     catalog.provider_accounts.append(account)
-    credentials = _read_credentials(store_path)
-    credentials[account.id] = request.api_key.get_secret_value()
-    _write_catalog(store_path, catalog, credentials)
+    store.write(account.id, request.api_key.get_secret_value())
+    _write_catalog(store_path, catalog)
     return account
 
 
@@ -439,11 +471,15 @@ def provider_request_for_credential_rotation(
     store_path: Path,
     account_id: str,
     request: ProviderAccountCredentialRequest,
+    *,
+    credential_store: CredentialStore | None = None,
 ) -> ProviderAccountRequest:
     account = next(
         (
             candidate
-            for candidate in read_model_catalog(store_path).provider_accounts
+            for candidate in read_model_catalog(
+                store_path, credential_store=credential_store
+            ).provider_accounts
             if candidate.id == account_id
         ),
         None,
@@ -462,16 +498,18 @@ def replace_provider_account_credential(
     store_path: Path,
     account_id: str,
     request: ProviderAccountCredentialRequest,
+    *,
+    credential_store: CredentialStore | None = None,
 ) -> ProviderAccount:
-    catalog = read_model_catalog(store_path)
+    store = _credential_store(store_path, credential_store)
+    catalog = read_model_catalog(store_path, credential_store=store)
     account = next(
         (candidate for candidate in catalog.provider_accounts if candidate.id == account_id), None
     )
     if account is None:
         raise KeyError(account_id)
-    credentials = _read_credentials(store_path)
-    credentials[account_id] = request.api_key.get_secret_value()
-    _write_catalog(store_path, catalog, credentials)
+    store.write(account_id, request.api_key.get_secret_value())
+    _write_catalog(store_path, catalog)
     return account
 
 
@@ -480,8 +518,10 @@ def delete_provider_account(
     account_id: str,
     *,
     delete_model_presets: bool = False,
+    credential_store: CredentialStore | None = None,
 ) -> ModelCatalog:
-    catalog = read_model_catalog(store_path)
+    store = _credential_store(store_path, credential_store)
+    catalog = read_model_catalog(store_path, credential_store=store)
     if all(account.id != account_id for account in catalog.provider_accounts):
         raise KeyError(account_id)
     attached_presets = [
@@ -495,6 +535,10 @@ def delete_provider_account(
             "Confirm that those presets should also be deleted."
         )
 
+    # Delete the secret before mutating account metadata.  A backend failure is
+    # surfaced and leaves the catalog and its storage-mode metadata intact.
+    credential = store.read(account_id)
+    store.delete(account_id)
     removed_preset_ids = {preset.id for preset in attached_presets}
     catalog.provider_accounts = [
         account for account in catalog.provider_accounts if account.id != account_id
@@ -504,9 +548,12 @@ def delete_provider_account(
     ]
     if catalog.selected_model_id in removed_preset_ids:
         catalog.selected_model_id = catalog.model_presets[0].id if catalog.model_presets else None
-    credentials = _read_credentials(store_path)
-    credentials.pop(account_id, None)
-    _write_catalog(store_path, catalog, credentials)
+    try:
+        _write_catalog(store_path, catalog)
+    except Exception:
+        if credential is not None:
+            store.write(account_id, credential)
+        raise
     return catalog
 
 
@@ -514,8 +561,10 @@ def save_model_preset(
     store_path: Path,
     request: ModelPresetRequest,
     capabilities: ProviderCapabilities,
+    *,
+    credential_store: CredentialStore | None = None,
 ) -> ModelPreset:
-    catalog = read_model_catalog(store_path)
+    catalog = read_model_catalog(store_path, credential_store=credential_store)
     if all(account.id != request.provider_account_id for account in catalog.provider_accounts):
         raise KeyError(request.provider_account_id)
     preset = ModelPreset(
@@ -529,23 +578,29 @@ def save_model_preset(
     catalog.model_presets.append(preset)
     if catalog.selected_model_id is None:
         catalog.selected_model_id = preset.id
-    _write_catalog(store_path, catalog, _read_credentials(store_path))
+    _write_catalog(store_path, catalog)
     return preset
 
 
-def select_model_preset(store_path: Path, model_id: str) -> ModelCatalog:
-    catalog = read_model_catalog(store_path)
+def select_model_preset(
+    store_path: Path, model_id: str, *, credential_store: CredentialStore | None = None
+) -> ModelCatalog:
+    catalog = read_model_catalog(store_path, credential_store=credential_store)
     if all(preset.id != model_id for preset in catalog.model_presets):
         raise KeyError(model_id)
     catalog.selected_model_id = model_id
-    _write_catalog(store_path, catalog, _read_credentials(store_path))
+    _write_catalog(store_path, catalog)
     return catalog
 
 
 def provider_request_for_model(
-    store_path: Path, request: ModelPresetRequest
+    store_path: Path,
+    request: ModelPresetRequest,
+    *,
+    credential_store: CredentialStore | None = None,
 ) -> ProviderConfigurationRequest:
-    catalog = read_model_catalog(store_path)
+    store = _credential_store(store_path, credential_store)
+    catalog = read_model_catalog(store_path, credential_store=store)
     account = next(
         (
             candidate
@@ -554,7 +609,7 @@ def provider_request_for_model(
         ),
         None,
     )
-    api_key = _read_credentials(store_path).get(request.provider_account_id)
+    api_key = store.read(request.provider_account_id)
     if account is None or api_key is None:
         raise KeyError(request.provider_account_id)
     return ProviderConfigurationRequest(
@@ -566,9 +621,10 @@ def provider_request_for_model(
 
 
 def resolve_selected_model(
-    store_path: Path,
+    store_path: Path, *, credential_store: CredentialStore | None = None
 ) -> tuple[ProviderConfiguration, str] | None:
-    catalog = read_model_catalog(store_path)
+    store = _credential_store(store_path, credential_store)
+    catalog = read_model_catalog(store_path, credential_store=store)
     preset = next(
         (
             candidate
@@ -587,7 +643,7 @@ def resolve_selected_model(
         ),
         None,
     )
-    api_key = _read_credentials(store_path).get(preset.provider_account_id)
+    api_key = store.read(preset.provider_account_id)
     if account is None or api_key is None:
         return None
     return (
@@ -601,9 +657,26 @@ def resolve_selected_model(
     )
 
 
-def _migrate_legacy_catalog(store_path: Path) -> ModelCatalog:
+def resolve_active_model(
+    store_path: Path, *, credential_store: CredentialStore | None = None
+) -> tuple[ProviderConfiguration, str] | None:
+    """Resolve the selected model, using legacy state only before a catalog exists."""
+    store = _credential_store(store_path, credential_store)
+    selected = resolve_selected_model(store_path, credential_store=store)
+    if selected is not None or (store_path / "catalog.json").is_file():
+        return selected
     configuration = read_provider_configuration(store_path)
-    api_key = _read_legacy_api_key(store_path)
+    api_key = store.read("provider-legacy")
+    if configuration is None or api_key is None:
+        return None
+    return configuration, api_key
+
+
+def _migrate_legacy_catalog(
+    store_path: Path, *, credential_store: CredentialStore | None = None
+) -> ModelCatalog:
+    configuration = read_provider_configuration(store_path)
+    api_key = _credential_store(store_path, credential_store).read("provider-legacy")
     if configuration is None or api_key is None:
         return ModelCatalog()
     account = ProviderAccount(
@@ -629,46 +702,16 @@ def _migrate_legacy_catalog(store_path: Path) -> ModelCatalog:
         model_presets=[preset],
         selected_model_id=preset.id,
     )
-    _write_catalog(store_path, catalog, {account.id: api_key})
+    # Keep the original credential representation.  Discovering a keyring must
+    # never silently migrate an existing private JSON credential.
+    _write_catalog(store_path, catalog)
     return catalog
 
 
-def _write_catalog(store_path: Path, catalog: ModelCatalog, credentials: dict[str, str]) -> None:
+def _write_catalog(store_path: Path, catalog: ModelCatalog) -> None:
     store_path.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(store_path, 0o700)
     _write_private_json(store_path / "catalog.json", catalog.model_dump(mode="json"), mode=0o600)
-    _write_private_json(store_path / "credentials.json", credentials, mode=0o600)
-
-
-def _read_credentials(store_path: Path) -> dict[str, str]:
-    path = store_path / "credentials.json"
-    if not path.is_file():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except OSError, json.JSONDecodeError:
-        return {}
-    if isinstance(payload, dict) and isinstance(payload.get("api_key"), str):
-        return {"provider-legacy": payload["api_key"]}
-    if not isinstance(payload, dict):
-        return {}
-    return {
-        key: value
-        for key, value in payload.items()
-        if isinstance(key, str) and isinstance(value, str) and value
-    }
-
-
-def _read_legacy_api_key(store_path: Path) -> str | None:
-    path = store_path / "credentials.json"
-    if not path.is_file():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        api_key = payload.get("api_key")
-        return api_key if isinstance(api_key, str) and api_key else None
-    except OSError, json.JSONDecodeError, AttributeError:
-        return None
 
 
 def _write_private_json(path: Path, payload: object, *, mode: int) -> None:
@@ -696,22 +739,21 @@ def read_provider_configuration(store_path: Path) -> ProviderConfiguration | Non
         return None
 
 
-def read_provider_api_key(store_path: Path) -> str | None:
-    legacy = _read_legacy_api_key(store_path)
-    if legacy is not None:
-        return legacy
-    selected = resolve_selected_model(store_path)
-    return selected[1] if selected is not None else None
+def read_provider_api_key(
+    store_path: Path, *, credential_store: CredentialStore | None = None
+) -> str | None:
+    active = resolve_active_model(store_path, credential_store=credential_store)
+    return active[1] if active is not None else None
 
 
-def provider_status(store_path: Path) -> ProviderStatus:
-    selected = resolve_selected_model(store_path)
-    if selected is not None:
-        configuration, _ = selected
-    else:
-        configuration = read_provider_configuration(store_path)
-    if configuration is None or read_provider_api_key(store_path) is None:
+def provider_status(
+    store_path: Path, *, credential_store: CredentialStore | None = None
+) -> ProviderStatus:
+    store = _credential_store(store_path, credential_store)
+    active = resolve_active_model(store_path, credential_store=store)
+    if active is None:
         return ProviderStatus(configured=False)
+    configuration, _ = active
     return _configured_provider_status(
         kind=configuration.kind,
         model=configuration.model,
@@ -738,7 +780,8 @@ def _configured_provider_status(
 
 
 def runtime_provider_status(store_path: Path) -> RuntimeProviderStatus:
-    """Read configured/selected provider metadata without migration or network I/O."""
+    """Report provider metadata without reading a secret or contacting a keyring."""
+    store = CredentialStore.for_provider_store(store_path, use_os_keyring=False)
     catalog = ModelCatalog()
     catalog_path = store_path / "catalog.json"
     if catalog_path.is_file():
@@ -757,8 +800,8 @@ def runtime_provider_status(store_path: Path) -> RuntimeProviderStatus:
         if selected is not None
         else None
     )
-    credentials = _read_credentials(store_path)
-    if selected is not None and account is not None and credentials.get(account.id):
+    if selected is not None and account is not None and store.has_reference(account.id):
+        storage_mode, storage_location = store.diagnostics(account.id)
         provider = _configured_provider_status(
             kind=account.kind,
             model=selected.model,
@@ -769,26 +812,49 @@ def runtime_provider_status(store_path: Path) -> RuntimeProviderStatus:
             configured=True,
             selected_model_id=catalog.selected_model_id,
             provider=provider,
+            credential_storage=CredentialStorageStatus(
+                mode=storage_mode,
+                location=storage_location,
+            ),
         )
 
     # Keep legacy installations observable, but never call the migration helper:
     # that helper writes catalog files and would violate diagnostics' read-only contract.
     legacy = read_provider_configuration(store_path)
-    if legacy is not None and _read_legacy_api_key(store_path) is not None:
+    if legacy is not None and store.has_reference("provider-legacy"):
+        storage_mode, storage_location = store.diagnostics("provider-legacy")
         provider = _configured_provider_status(
             kind=legacy.kind,
             model=legacy.model,
             base_url=legacy.base_url,
             capabilities=legacy.capabilities,
         )
-        return RuntimeProviderStatus(configured=True, provider=provider)
+        return RuntimeProviderStatus(
+            configured=True,
+            provider=provider,
+            credential_storage=CredentialStorageStatus(
+                mode=storage_mode,
+                location=storage_location,
+            ),
+        )
 
+    storage_mode, storage_location = store.diagnostics(None)
+    remediation = (
+        "Credential storage metadata is unreadable. Restore or remove the reported metadata "
+        "file, then configure the Provider Account again."
+        if storage_mode == "unavailable"
+        else (
+            "Create or select a Course Workspace, then open Models to add a Provider Account "
+            "and a compatible Model Preset."
+        )
+    )
     return RuntimeProviderStatus(
         configured=False,
         selected_model_id=catalog.selected_model_id,
         provider=ProviderStatus(configured=False),
-        remediation=(
-            "Create or select a Course Workspace, then open Models to add a Provider Account "
-            "and a compatible Model Preset."
+        credential_storage=CredentialStorageStatus(
+            mode=storage_mode,
+            location=storage_location,
         ),
+        remediation=remediation,
     )

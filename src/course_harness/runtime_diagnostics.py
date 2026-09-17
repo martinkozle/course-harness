@@ -44,6 +44,7 @@ def runtime_diagnostics(
         processors.setdefault(processor, []).append(media_type)
 
     renderer = renderer_capability()
+    provider = runtime_provider_status(locations.provider_store_path)
     return RuntimeDiagnostics(
         paths={
             "recent_workspaces": str(locations.recent_store_path),
@@ -54,9 +55,9 @@ def runtime_diagnostics(
             "templates_cache": str(locations.templates_cache_path),
             "releases": str(locations.release_data_path),
             "provider_configuration": str(locations.provider_store_path),
-            "provider_credentials": str(locations.provider_credentials_path),
+            "provider_credentials": provider.credential_storage.location,
         },
-        provider=runtime_provider_status(locations.provider_store_path),
+        provider=provider,
         parser=ParserCapability(
             processors=processors,
             remediation=(

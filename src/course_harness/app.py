@@ -61,6 +61,7 @@ from course_harness.course_plan import (
     serialize_course_plan,
     write_course_plan,
 )
+from course_harness.credential_store import CredentialStoreError
 from course_harness.export import ExportError, export_presentation, validate_export_mapping
 from course_harness.presentation import (
     Presentation,
@@ -94,10 +95,9 @@ from course_harness.providers import (
     provider_request_for_model,
     provider_status,
     read_model_catalog,
-    read_provider_api_key,
-    read_provider_configuration,
     replace_provider_account_credential,
     require_planning_capabilities,
+    resolve_active_model,
     resolve_selected_model,
     save_model_preset,
     save_provider_account,
@@ -1117,6 +1117,14 @@ def create_app(
             raise HTTPException(status_code=404, detail="Provider Account was not found") from error
         except ProviderAccountInUseError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except CredentialStoreError as error:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "The Provider Account was not deleted because its credential could not be "
+                    "removed safely. Try again after unlocking the operating-system keyring."
+                ),
+            ) from error
 
     @app.post("/api/models", response_model=ModelPreset, status_code=201)
     async def create_model_preset(request: ModelPresetRequest) -> ModelPreset:
@@ -1276,17 +1284,13 @@ def create_app(
                     )
                 is_reconciliation = True
 
-            selected_model = resolve_selected_model(provider_path)
-            if selected_model is None:
-                configuration = read_provider_configuration(provider_path)
-                api_key = read_provider_api_key(provider_path)
-            else:
-                configuration, api_key = selected_model
-            if configuration is None or api_key is None:
+            active_model = resolve_active_model(provider_path)
+            if active_model is None:
                 raise HTTPException(
                     status_code=409,
                     detail="Configure a model provider before starting the Course Agent.",
                 )
+            configuration, api_key = active_model
             try:
                 require_planning_capabilities(configuration.capabilities)
             except ProviderCapabilityError as error:

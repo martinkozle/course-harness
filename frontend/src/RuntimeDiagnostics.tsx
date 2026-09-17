@@ -13,6 +13,14 @@ type RuntimeDiagnostics = {
 		configured: boolean;
 		selected_model_id: string | null;
 		remediation?: string;
+		credential_storage: {
+			mode:
+				| "os-keyring"
+				| "private-json-file"
+				| "unavailable"
+				| "unconfigured";
+			location: string;
+		};
 		provider: {
 			configured: boolean;
 			kind?: string;
@@ -40,6 +48,13 @@ const pathLabels: Record<string, string> = {
 	provider_configuration: "Provider Account data",
 	provider_credentials: "Provider credentials",
 };
+
+const credentialStorageLabels = {
+	"os-keyring": "Operating-system keyring",
+	"private-json-file": "Private application file",
+	unavailable: "Unavailable — inspect the reported metadata path",
+	unconfigured: "Not configured",
+} as const;
 
 export function RuntimeDiagnosticsDialog({ onClose }: { onClose: () => void }) {
 	const [diagnostics, setDiagnostics] = useState<RuntimeDiagnostics | null>(
@@ -167,6 +182,14 @@ export function RuntimeDiagnosticsDialog({ onClose }: { onClose: () => void }) {
 								{diagnostics.provider.selected_model_id
 									? `Selected model ID: ${diagnostics.provider.selected_model_id}`
 									: "No model preset is selected."}
+							</p>
+							<p className="runtime-detail">
+								Credential storage:{" "}
+								{
+									credentialStorageLabels[
+										diagnostics.provider.credential_storage.mode
+									]
+								}
 							</p>
 							{diagnostics.provider.provider.diagnostics?.map((finding) => (
 								<p className="runtime-detail" key={finding}>
