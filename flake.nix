@@ -24,37 +24,45 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
+          hookExcludes = [
+            "^\\.agents/"
+            "^src/course_harness/static/"
+          ];
+          commonHooks = {
+            biome = {
+              enable = true;
+              entry = "${pkgs.biome}/bin/biome lint";
+              files = "^(frontend/|playwright\\.config\\.ts$|tests/e2e/)";
+            };
+            check-added-large-files.enable = true;
+            check-case-conflicts.enable = true;
+            check-executables-have-shebangs.enable = true;
+            check-json.enable = true;
+            check-merge-conflicts.enable = true;
+            check-python.enable = true;
+            check-shebang-scripts-are-executable.enable = true;
+            check-symlinks.enable = true;
+            check-toml.enable = true;
+            check-yaml.enable = true;
+            detect-private-keys.enable = true;
+            end-of-file-fixer.enable = true;
+            fix-byte-order-marker.enable = true;
+            forbid-new-submodules.enable = true;
+            mixed-line-endings.enable = true;
+            nixfmt.enable = true;
+            ruff.enable = true;
+            ruff-format.enable = true;
+            trim-trailing-whitespace.enable = true;
+          };
           preCommitCheck = git-hooks.lib.${system}.run {
             src = ./.;
-            excludes = [
-              "^\\.agents/"
-              "^src/course_harness/static/"
-            ];
-            hooks = {
-              biome = {
-                enable = true;
-                entry = "${pkgs.biome}/bin/biome lint";
-                files = "^(frontend/|playwright\\.config\\.ts$|tests/e2e/)";
-              };
-              check-added-large-files.enable = true;
-              check-case-conflicts.enable = true;
-              check-executables-have-shebangs.enable = true;
-              check-json.enable = true;
-              check-merge-conflicts.enable = true;
-              check-python.enable = true;
-              check-shebang-scripts-are-executable.enable = true;
-              check-symlinks.enable = true;
-              check-toml.enable = true;
-              check-yaml.enable = true;
-              detect-private-keys.enable = true;
-              end-of-file-fixer.enable = true;
-              fix-byte-order-marker.enable = true;
-              forbid-new-submodules.enable = true;
-              mixed-line-endings.enable = true;
-              nixfmt.enable = true;
-              ruff.enable = true;
-              ruff-format.enable = true;
-              trim-trailing-whitespace.enable = true;
+            excludes = hookExcludes;
+            hooks = commonHooks;
+          };
+          developmentPreCommitCheck = git-hooks.lib.${system}.run {
+            src = ./.;
+            excludes = hookExcludes;
+            hooks = commonHooks // {
               ty = {
                 enable = true;
                 name = "ty";
@@ -83,7 +91,7 @@
                 uv
                 zenity
               ])
-              ++ preCommitCheck.enabledPackages;
+              ++ developmentPreCommitCheck.enabledPackages;
 
             PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH = "${pkgs.chromium}/bin/chromium";
             PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
@@ -91,7 +99,7 @@
             UV_PYTHON_DOWNLOADS = "never";
 
             shellHook = ''
-              ${preCommitCheck.shellHook}
+              ${developmentPreCommitCheck.shellHook}
               export UV_CACHE_DIR="$PWD/.cache/uv"
             '';
           };
