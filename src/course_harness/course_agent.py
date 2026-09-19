@@ -497,9 +497,12 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
 
     @agent.tool
     async def read_conversation(
-        ctx: RunContext[CourseAgentDeps], conversation_id: str, max_chars: int = 4000
+        ctx: RunContext[CourseAgentDeps],
+        conversation_id: str,
+        offset: int = 0,
+        max_chars: int = 4000,
     ) -> ToolReturn:
-        """Read bounded messages from a current or archived Workspace conversation."""
+        """Read a bounded transcript page. Use next_offset to read later turns."""
         if ctx.deps.chat_store_path is None:
             return ToolReturn(return_value="Conversation history is unavailable.")
         try:
@@ -515,9 +518,20 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             )
         bounded = max(1, min(max_chars, 8000))
         content = transcript.model_dump_json(indent=2)
-        if len(content) > bounded:
-            content = content[:bounded] + "\n…[truncated]"
-        return ToolReturn(return_value=_untrusted_source_data("conversation_history", content))
+        start = max(0, min(offset, len(content)))
+        end = min(start + bounded, len(content))
+        page = {
+            "conversation_id": conversation_id,
+            "offset": start,
+            "next_offset": end if end < len(content) else None,
+            "total_chars": len(content),
+            "content": content[start:end],
+        }
+        return ToolReturn(
+            return_value=_untrusted_source_data(
+                "conversation_history", json.dumps(page, ensure_ascii=False)
+            )
+        )
 
     @agent.tool
     async def list_sources(ctx: RunContext[CourseAgentDeps]) -> ToolReturn:

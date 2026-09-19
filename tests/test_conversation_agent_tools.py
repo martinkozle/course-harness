@@ -1,5 +1,6 @@
 """The Course Agent may inspect earlier conversations without changing them."""
 
+import json
 from pathlib import Path
 
 from pydantic_ai.messages import (
@@ -35,7 +36,15 @@ def test_course_agent_can_read_archived_conversation_without_mutating_it(tmp_pat
         chat_store,
         workspace,
         [
-            ModelRequest(parts=[UserPromptPart(content="Keep the first lecture practical.")]),
+            ModelRequest(
+                parts=[
+                    UserPromptPart(
+                        content="Keep the first lecture practical. "
+                        + "x" * 9000
+                        + " Final decision: use worked examples."
+                    )
+                ]
+            ),
             ModelResponse(parts=[TextPart(content="I will focus on worked examples.")]),
         ],
     )
@@ -56,13 +65,17 @@ def test_course_agent_can_read_archived_conversation_without_mutating_it(tmp_pat
             return ModelResponse(
                 parts=[ToolCallPart(tool_name="list_conversations", args={}, tool_call_id="list-1")]
             )
-        if len(returned) == 1:
+        if len(returned) <= 3:
             return ModelResponse(
                 parts=[
                     ToolCallPart(
                         tool_name="read_conversation",
-                        args={"conversation_id": archived_id},
-                        tool_call_id="read-1",
+                        args={
+                            "conversation_id": archived_id,
+                            "offset": (len(returned) - 1) * 4000,
+                            "max_chars": 4000,
+                        },
+                        tool_call_id=f"read-{len(returned)}",
                     )
                 ]
             )
@@ -87,9 +100,11 @@ def test_course_agent_can_read_archived_conversation_without_mutating_it(tmp_pat
         for part in message.parts
         if isinstance(part, ToolReturnPart)
     ]
-    assert len(returns) == 2
+    assert len(returns) == 4
     assert archived_id in returns[0]
     assert "conversation_catalog" in returns[0]
     assert "Keep the first lecture practical." in returns[1]
     assert "conversation_history" in returns[1]
+    assert json.loads(json.loads(returns[1])["content"])["next_offset"] == 4000
+    assert "Final decision: use worked examples." in returns[3]
     assert read_conversation_transcript(chat_store, workspace, archived_id) == original
