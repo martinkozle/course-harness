@@ -1,5 +1,5 @@
 ---
-title: Threat-model local and self-hosted modes
+title: Threat-model local and optional container modes
 parent: ../course-harness-product-and-architecture.md
 label: wayfinder:research
 status: open
@@ -10,8 +10,8 @@ blocked_by:
   - WF-010-design-local-distribution-and-provider-configuration.md
 ---
 
-# Threat-model local and self-hosted modes
+# Threat-model local and optional container modes
 
 ## Question
 
-What boundaries are required for filesystem writes, connector credentials, prompt-injected Resources, remote fetches, parser execution, generated code, localhost exposure, and an optional single-user self-hosted deployment, and which controls belong in the proof of concept?
+What boundaries are required for filesystem writes, connector credentials, prompt-injected Resources, remote fetches, parser execution, generated code, localhost exposure, and an optional locally run container, and which controls belong in the proof of concept? A hosted Course Harness service is not in scope.

@@ -141,5 +141,5 @@ A named model choice with verified capabilities that uses one Provider Account; 
 _Avoid_: Provider, connection, model configuration
 
 **Worker Agent**:
-A temporary delegate that returns research, Evidence, or a draft proposal to the Course Agent without directly changing authoritative Course state.
-_Avoid_: Course Agent, pipeline node
+A temporary model-powered delegate that receives a narrow assignment and returns research, Evidence, critique, or a draft proposal without directly changing authoritative Course state. It is distinct from a generic asynchronous or background application job.
+_Avoid_: Course Agent, pipeline node, background task

@@ -14,7 +14,7 @@ The Course Author needs working local software, not a separate academic report: 
 
 ## Solution
 
-Course Harness is a local-first, chat-first application that starts in a restricted Workspace Launcher and binds to at most one explicitly chosen Course Workspace. A persistent Course Agent collaborates with the Course Author, may delegate bounded research and drafting to Worker Agents, and changes typed Course state only through validated tools. The Course Plan contains an ordered flat list of Lectures; each Lecture may progressively acquire a Presentation, notes, and later other Artifacts.
+Course Harness is a local-first, chat-first application that starts in a restricted Workspace Launcher and binds to at most one explicitly chosen Course Workspace. One persistent Course Agent collaborates with the Course Author and changes typed Course state only through validated tools. The Course Plan contains an ordered flat list of Lectures; each Lecture may progressively acquire a Presentation, notes, and later other Artifacts. Model-powered Worker Agents are a possible post-demo extension rather than part of this proof of concept.
 
 The application maintains a reusable global Library while keeping each Course portable and inspectable through human-readable files and Git-backed history. Local files, uploads, URLs, papers, GitHub material, and future connectors enter a provider-neutral Resource lifecycle, with immutable Source Versions, Evidence, and human-verifiable Citations. Research can remain exploratory until a Resource is admitted as a Course Source.
 
@@ -52,11 +52,11 @@ PowerPoint remains the flagship deliverable. Course Harness onboards arbitrary s
 28. As a Course Author, I want the agent to create progressive Slides with stable identities, so that outline skeletons can become authored Slides without a mandatory pipeline.
 29. As a Course Author, I want completed Slides to survive reordering and replanning, so that small structural changes do not destroy authored work.
 30. As a Course Author, I want to watch the outline and Slides appear on a live canvas, so that the agent's staged work is visible and steerable.
-31. As a Course Author, I want to see compact research, delegation, retrieval, and mutation activity, so that agent behavior is understandable without exposing raw internals.
+31. As a Course Author, I want to see compact research, retrieval, and mutation activity, so that agent behavior is understandable without exposing raw internals.
 32. As a Course Author, I want to select a Course, Lecture, Slide, content block, or Citation and send a contextual instruction, so that most editing remains conversational and precise.
 33. As a Course Author, I want simple direct controls for rename, reorder, approve, archive, restore, and small corrections, so that trivial actions do not require elaborate prompting.
 34. As a Course Author, I want one persistent Course Agent accountable for changes, so that the experience remains coherent across many Lectures.
-35. As a Course Author, I want the Course Agent to delegate bounded work to Worker Agents, so that research and drafting can scale without concurrent authoritative writes.
+35. **Post-demo:** As a Course Author, I may want the Course Agent to delegate bounded work to Worker Agents, so that research and drafting can scale without concurrent authoritative writes.
 36. As a Course Author, I want validated working-state changes to apply as the Course Agent works, so that conversational authoring is not interrupted by repetitive approval prompts.
 37. As a Course Author, I want the Course Agent to ask a concise chat question before acting on materially ambiguous intent or discarding substantial authored work, so that autonomy does not become guesswork.
 38. As a Course Author, I want to steer an active run at safe boundaries, so that I can redirect work without racing state mutations.
@@ -89,7 +89,7 @@ PowerPoint remains the flagship deliverable. Course Harness onboards arbitrary s
 65. As a Course Author, I want keyboard-accessible chat, navigation, canvas selection, dialogs, and streaming announcements, so that the application is usable without pointer-only interaction.
 66. As a Course Author, I want the UI to address me neutrally as “you” rather than “professor,” so that Course Harness works for instructors, trainers, and other authors.
 67. As a Course Author, I want local operation without mandatory Docker or external databases, so that initial use is straightforward.
-68. As a Course Author, I want an optional Docker deployment path, so that the same application can later run on a trusted self-hosted machine.
+68. **Post-demo option:** As a Course Author, I may want a Docker run path, so that I can launch the same local single-user application in a container.
 69. As a Course Author, I want clear disclosure before content is sent to an external model, parser, vision provider, or connector, so that local-first operation does not hide data movement.
 70. As a Course Author, I want convenience defaults and advanced escape hatches, so that common workflows are easy without preventing expert control.
 
@@ -113,8 +113,8 @@ PowerPoint remains the flagship deliverable. Course Harness onboards arbitrary s
 - Implement the lifecycle `Candidate → Resource → Snapshot → Derived Representation → Evidence → Citation`; Source is the Course-scoped admission of a Resource, and Source Version pins an immutable Snapshot.
 - Registration is metadata-first. Full inspection lazily materializes remote content and selects a processor by media type. Docling or LlamaParse are candidates for complex PDF, PPTX, DOCX, and scanned content, not universal definitions of reading.
 - Deduplicate Snapshots globally by content hash. Refresh creates a new immutable Snapshot, existing Courses remain pinned, and adoption of a new Source Version marks affected content for review.
-- Start retrieval with source listing, bounded reading, and SQLite FTS5 over Derived Representations. Preserve a provider-neutral Evidence coordinate model. Add semantic retrieval only after evaluation demonstrates material benefit.
-- Use one persistent Course Agent for conversation and authoritative typed mutations. Worker Agents may perform bounded research or drafting and return proposals/Evidence but cannot mutate Course state.
+- Start retrieval with source listing, bounded reading, and SQLite FTS5 over Derived Representations. Preserve a provider-neutral Evidence coordinate model. Add semantic retrieval only after a demonstrated product need justifies it.
+- Use one persistent Course Agent for conversation and authoritative typed mutations. Defer Worker Agents from the proof of concept; they are a post-demo extension for parallel research or drafting. If added later, a Worker Agent is a temporary model-powered subagent with a narrow assignment, bounded context, read-only tools, execution limits, and a structured result, not a generic FastAPI background task. It may return research, proposals, or Evidence but cannot mutate Course state.
 - Allow only one mutating run per Workspace. Stream read-only progress through AG-UI, lock competing mutations, accept steering at safe boundaries, and preserve valid partial state on cancellation.
 - Apply validated working-state changes autonomously by default. Ask through ordinary chat only when intent is materially ambiguous or an operation would discard substantial authored work; keep Course Release publication explicit. Do not require approval cards without a useful semantic diff.
 - Route both chat intent and limited direct UI actions through the same validated application commands. Emphasize contextual chat instructions over building a general PowerPoint editor.
@@ -139,7 +139,7 @@ PowerPoint remains the flagship deliverable. Course Harness onboards arbitrary s
 - Build deterministic fake model, search, fetch, parser, and connector fixtures. Live provider runs may be optional smoke checks but are not the primary correctness suite.
 - Test Course state commands through their highest application-service seam: Course Plan changes, Lecture reorder/archive, progressive Slide updates, Source Version adoption, cancellation, steering boundaries, validation, Reconciliation, and release creation.
 - Test Resource processing with fixed local fixtures for PDF, PPTX, DOCX, Markdown, code, and notebook inputs. Assert immutable Snapshot hashing, processor/version metadata, coordinate preservation, cache deletion recovery, and global deduplication.
-- Test retrieval on a small labeled corpus. Measure whether expected Evidence is found and whether coordinates resolve; use the result to decide if FTS5 is sufficient before adding embeddings.
+- Test retrieval deterministically on a small representative corpus by asserting that expected Evidence and resolvable coordinates are returned. Do not require a quantitative evaluation study for the product demo; add semantic retrieval only in response to a demonstrated product need.
 - Test PowerPoint export with representative fixture templates. Generate decks, read them back, and assert layout selection, placeholder targeting, slide order, text, images, notes, hyperlinks, and Citation presence.
 - Test Template Profile inference using structural fixture reports and expected mappings. Keep LLM/vision suggestions deterministic in tests and separately exercise user correction and version pinning.
 - Maintain renderer-specific visual fixtures for PowerPoint and LibreOffice where available. Do not require pixel identity across renderers; use explicit tolerances and structural assertions.
@@ -159,20 +159,25 @@ PowerPoint remains the flagship deliverable. Course Harness onboards arbitrary s
 - Guaranteed zero-configuration support for malformed templates or templates without meaningful layouts/placeholders.
 - Reimplementing PowerPoint rendering completely in React.
 - Mandatory Microsoft PowerPoint, LibreOffice, Docker, Postgres, Redis, MinIO, or external vector infrastructure.
+- A hosted Course Harness service; the proof of concept is a locally run, single-user application.
+- Backward-compatible Workspace migrations before the project declares a stable format. The Course Author's existing local Workspaces may be migrated manually while the format is pre-stable.
+- Model-powered Worker Agent orchestration in the first product demo.
 - A separate academic report deliverable.
 - Full H5P/Moodle packages, mini-books, notebooks, Colab publishing, and executable exercises in the first presentation-centered proof of concept.
 - Consumer NotebookLM as authoritative storage, parsing, or retrieval infrastructure.
 - Google Drive and NotebookLM integration in the first vertical slice, beyond preserving connector-compatible Resource boundaries.
-- Hosted multi-user authentication beyond a later safe single-user self-hosted mode.
+- Hosted operation, remote authentication, and multi-user behavior.
 - Automated LLM-judge scoring as the primary definition of Course quality.
 - Unrestricted shell, filesystem, Git, Office macro, or MCP access for the Course Agent.
 - Template Profile archival and referential protection after hard deletion in the first proof of concept.
 
 ## Further Notes
 
-- “Course Harness” is the working product name. Naming and license remain reversible decisions.
+- The product name is **Course Harness** and the repository includes an MIT license. The repository remains private during development; making it public is a separate delivery decision.
+- Distribution prioritizes a PyPI package runnable with `uvx` and installable with `uv tool install`. The committed production React bundle is package data, and direct Git installation works without a frontend toolchain. A Docker image was not retained for the first demo; it remains optional local packaging, not a hosted product variant.
+- Public delivery may use ordinary GitHub Releases and PyPI artifacts; publication is deferred until the Course Author authorizes it and credentials are available. No separate release-branding system is required.
 - Ease of use and quality of life are the highest product priorities: sensible defaults, progressive disclosure, and UI control should hide infrastructure complexity without hiding provenance or state changes.
-- The proof of concept should visibly demonstrate agent-harness engineering and data-science concerns through retrieval, evidence grounding, source processing, versioning, evaluation, and observable agent work.
+- The proof of concept is assessed as a polished working product demonstration. It should visibly demonstrate agent-harness engineering and data-science concerns through retrieval, evidence grounding, source processing, versioning, and observable agent work, without requiring a separate quantitative evaluation study.
 - `course-embroider` remains valuable prior art for connector breadth, per-Lecture parallelism, review, and future Artifacts, but Course Harness intentionally replaces its fixed batch FSM with a steerable persistent Course Agent.
 - The source-abstraction and implementation-agent-tooling research documents are supporting evidence for this spec.
-- Open Wayfinder tickets still de-risk stack compatibility, Workspace persistence, agent runtime, connector contracts, retrieval evaluation, template onboarding, rendering, UX, packaging, security, academic demonstration, validation assets, and final vertical-slice scope. This PRD states the intended product contract; those tickets may refine implementation details without silently changing settled user-facing behavior.
+- The completed Wayfinder tickets record the product and architecture decisions behind this contract. The remaining open threat-model ticket and implementation queue may refine local security, hardening, and packaging details without silently changing settled user-facing behavior.
