@@ -44,6 +44,13 @@ Workspaces. Provider credentials use a safe operating-system keyring when one is
 private application file otherwise; the in-app runtime diagnostics show the active storage mode,
 exact runtime locations, and available capabilities.
 
+Each Workspace can keep multiple Conversations in that private application state. Use
+**Conversations** in the Course Agent panel to start or reopen one, rename it, archive it, or delete
+it. **Compact current conversation** shows an editable summary for review before using it as the
+earlier context for future model runs. The full transcript remains visible. Resolve any pending
+agent approval before compacting, archiving, or deleting its Conversation. An existing single
+transcript is migrated automatically when that Workspace's Conversations are first opened.
+
 ## Development requirements
 
 - [Nix](https://nixos.org/) with flakes enabled

@@ -79,9 +79,45 @@ test("Course Author creates a Course through chat and revises its Syllabus", asy
 	);
 
 	await page.getByRole("button", { name: "Authoring", exact: true }).click();
-	await page.getByRole("button", { name: "Clear conversation" }).click();
-	await expect(page.getByText("This cannot be undone.")).toBeVisible();
-	await page.getByRole("button", { name: "Clear now" }).click();
+	await page
+		.getByRole("button", { name: "Conversations", exact: true })
+		.click();
+	await page.getByRole("button", { name: "New conversation" }).click();
+	await expect(
+		page.getByRole("heading", { name: "What should we work on?" }),
+	).toBeVisible();
+	await page
+		.locator(".conversation-list li:not(.is-active) .conversation-select")
+		.first()
+		.click();
+	await expect(
+		page.getByText("I created a two-Lecture Course Plan."),
+	).toBeVisible();
+	const savedConversation = page
+		.locator(".conversation-list li:not(.is-active)")
+		.first();
+	await savedConversation.getByRole("button", { name: "Archive" }).click();
+	await expect(savedConversation.getByText("Archived")).toBeVisible();
+	await savedConversation.getByRole("button", { name: "Restore" }).click();
+	await page
+		.getByRole("button", { name: "Compact current conversation" })
+		.click();
+	const summary = page.getByLabel(
+		/Review the summary that will replace model context/,
+	);
+	await expect(summary).toHaveValue(/Conversation so far:/);
+	await summary.fill(
+		"We drafted a two-Lecture course plan for applied researchers.",
+	);
+	await page.getByRole("button", { name: "Use this summary" }).click();
+	await expect(
+		page.getByText("I created a two-Lecture Course Plan."),
+	).toBeVisible();
+	await page
+		.locator(".conversation-list li.is-active")
+		.getByRole("button", { name: "Delete", exact: true })
+		.click();
+	await page.getByRole("button", { name: "Delete now" }).click();
 	await expect(
 		page.getByRole("heading", { name: "What should we work on?" }),
 	).toBeVisible();

@@ -36,10 +36,22 @@ from course_harness.canonical_mutation import (
 )
 from course_harness.chat_history import (
     ChatTranscript,
+    CompactionPreview,
+    ConversationCatalog,
+    ConversationConflict,
+    activate_conversation,
+    active_conversation_id,
     clear_chat_history,
+    compact_conversation,
+    create_conversation,
+    delete_conversation,
+    list_conversations,
+    preview_compaction,
     read_chat_history,
     read_chat_transcript,
+    read_conversation_transcript,
     save_chat_history,
+    update_conversation,
 )
 from course_harness.course_agent import (
     AgentMode,
@@ -1159,6 +1171,111 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Model Preset was not found") from error
 
+    class ConversationCreateRequest(BaseModel):
+        title: str | None = Field(default=None, max_length=200)
+
+    class ConversationUpdateRequest(BaseModel):
+        title: str | None = Field(default=None, max_length=200)
+        archived: bool | None = None
+
+    class CompactionRequest(BaseModel):
+        summary: str = Field(min_length=1, max_length=4000)
+        revision: str
+
+    @app.get("/api/conversations", response_model=ConversationCatalog)
+    async def conversations() -> ConversationCatalog:
+        return list_conversations(chat_path, require_workspace())
+
+    @app.post("/api/conversations", response_model=ConversationCatalog, status_code=201)
+    async def new_conversation(body: ConversationCreateRequest) -> ConversationCatalog:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            try:
+                return create_conversation(chat_path, active, body.title)
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.post("/api/conversations/{conversation_id}/activate", response_model=ConversationCatalog)
+    async def open_conversation(conversation_id: str) -> ConversationCatalog:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            try:
+                return activate_conversation(chat_path, active, conversation_id)
+            except KeyError as error:
+                raise HTTPException(status_code=404, detail="Conversation was not found") from error
+            except ConversationConflict as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.patch("/api/conversations/{conversation_id}", response_model=ConversationCatalog)
+    async def edit_conversation(
+        conversation_id: str, body: ConversationUpdateRequest
+    ) -> ConversationCatalog:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            try:
+                return update_conversation(
+                    chat_path, active, conversation_id, title=body.title, archived=body.archived
+                )
+            except KeyError as error:
+                raise HTTPException(status_code=404, detail="Conversation was not found") from error
+            except ConversationConflict as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.delete("/api/conversations/{conversation_id}", response_model=ConversationCatalog)
+    async def remove_conversation(conversation_id: str) -> ConversationCatalog:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            try:
+                return delete_conversation(chat_path, active, conversation_id)
+            except KeyError as error:
+                raise HTTPException(status_code=404, detail="Conversation was not found") from error
+            except ConversationConflict as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.get("/api/conversations/{conversation_id}", response_model=ChatTranscript)
+    async def conversation_transcript(conversation_id: str) -> ChatTranscript:
+        active = require_workspace()
+        try:
+            return read_conversation_transcript(chat_path, active, conversation_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Conversation was not found") from error
+
+    @app.post(
+        "/api/conversations/{conversation_id}/compact/preview", response_model=CompactionPreview
+    )
+    async def preview_conversation_compaction(conversation_id: str) -> CompactionPreview:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            try:
+                return preview_compaction(chat_path, active, conversation_id)
+            except KeyError as error:
+                raise HTTPException(status_code=404, detail="Conversation was not found") from error
+            except ConversationConflict as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.post("/api/conversations/{conversation_id}/compact", response_model=ChatTranscript)
+    async def confirm_conversation_compaction(
+        conversation_id: str, body: CompactionRequest
+    ) -> ChatTranscript:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            try:
+                return compact_conversation(
+                    chat_path,
+                    active,
+                    conversation_id,
+                    summary=body.summary,
+                    revision=body.revision,
+                )
+            except KeyError as error:
+                raise HTTPException(status_code=404, detail="Conversation was not found") from error
+            except ConversationConflict as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+
     @app.get("/api/chat", response_model=ChatTranscript)
     async def chat_transcript() -> ChatTranscript:
         active = require_workspace()
@@ -1168,7 +1285,10 @@ def create_app(
     async def clear_chat_transcript() -> Response:
         active = require_workspace()
         async with exclusive_mutation(active):
-            clear_chat_history(chat_path, active)
+            try:
+                clear_chat_history(chat_path, active)
+            except ConversationConflict as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
         return Response(status_code=204)
 
     @app.post("/api/agent/cancel", status_code=204)
@@ -1273,6 +1393,19 @@ def create_app(
             try:
                 body_json = json.loads(body) if body else {}
                 if isinstance(body_json, dict):
+                    requested_conversation_id = body_json.get("threadId")
+                    actual_conversation_id = active_conversation_id(chat_path, active)
+                    legacy_single_thread = (
+                        len(list_conversations(chat_path, active).conversations) == 1
+                    )
+                    if (
+                        requested_conversation_id not in (None, actual_conversation_id)
+                        and not legacy_single_thread
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail=("Active conversation changed; reload before sending."),
+                        )
                     forwarded = body_json.get("forwardedProps", {})
                     if isinstance(forwarded, dict):
                         props = cast(dict[str, object], forwarded)
@@ -1356,6 +1489,7 @@ def create_app(
                 workspace=active,
                 data_dir=data_dir,
                 cache_dir=cache_dir,
+                chat_store_path=chat_path,
                 before_mutation=None if is_reconciliation else protect_agent_mutation,
                 after_mutation=None if is_reconciliation else checkpoint_agent_mutation,
                 create_revision=(
@@ -1373,12 +1507,13 @@ def create_app(
                 apply_reconciliation=(apply_reconciliation_patch if is_reconciliation else None),
                 canonical_preconditions=canonical_preconditions,
             )
-            history = read_chat_history(chat_path, active)
+            conversation_id = active_conversation_id(chat_path, active)
+            history = read_chat_history(chat_path, active, conversation_id)
 
             async def persist_if_not_cancelled(result: object) -> None:
                 if not cancel.is_set():
                     completed = cast(AgentRunResult[str], result)
-                    save_chat_history(chat_path, active, completed.all_messages())
+                    save_chat_history(chat_path, active, completed.all_messages(), conversation_id)
 
             model = agent_model or build_provider_model(configuration, api_key)
             active_agent = (
@@ -1405,7 +1540,7 @@ def create_app(
                 deps=deps,
                 output_type=[str, DeferredToolRequests],
                 message_history=history,
-                conversation_id="course-agent",
+                conversation_id=conversation_id,
                 on_complete=persist_if_not_cancelled,
                 allowed_file_url_schemes=frozenset(),
             )

@@ -2736,6 +2736,47 @@ h1 {
 	justify-content: flex-end;
 }
 
+.conversation-library {
+	display: grid;
+	gap: 10px;
+	max-height: min(46vh, 390px);
+	padding: 14px;
+	overflow-y: auto;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: #f7f9fd;
+}
+
+.conversation-library-heading,
+.conversation-entry,
+.conversation-entry-actions,
+.conversation-confirmation {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.conversation-library-heading strong { font-size: 0.85rem; }
+.conversation-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.conversation-list li { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.conversation-list li.is-active { border-color: #6784bd; background: #edf3ff; }
+.conversation-entry { min-width: 0; }
+.conversation-select { min-width: 0; padding: 3px 0; overflow: hidden; border: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.conversation-select:disabled { cursor: default; }
+.conversation-entry small { color: var(--muted); }
+.conversation-entry-actions { justify-content: flex-end; }
+.conversation-confirmation { flex-wrap: wrap; margin-top: 6px; color: var(--danger); font-size: 0.75rem; }
+.conversation-guard { margin: 0; color: var(--muted); font-size: 0.75rem; }
+.compaction-preview { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+.compaction-preview label { font-weight: 600; font-size: 0.8rem; }
+.compaction-preview textarea { width: 100%; min-height: 120px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+.compaction-preview p { margin: 0; color: var(--muted); font-size: 0.75rem; }
+.conversation-rename { display: grid; gap: 5px; margin-top: 8px; }
+.conversation-rename label { font-size: 0.75rem; font-weight: 600; }
+.conversation-rename input { width: 100%; min-width: 0; padding: 6px; border: 1px solid var(--line); border-radius: 5px; font: inherit; }
+.conversation-library :focus-visible { outline: 2px solid #2453a6; outline-offset: 2px; }
+
 .clear-confirmation {
 	display: flex;
 	align-items: center;

@@ -909,6 +909,7 @@ async def test_active_agent_run_locks_competing_workspace_mutations(tmp_path: Pa
     app = create_app(
         workspace,
         provider_store_path=tmp_path / "provider",
+        chat_store_path=tmp_path / "chat",
         agent_model=FunctionModel(stream_function=waiting_model),
         provider_validator=_verified_capabilities,
     )
@@ -951,6 +952,7 @@ async def test_agent_setup_failure_releases_the_workspace_lock(tmp_path: Path) -
     app = create_app(
         workspace,
         provider_store_path=tmp_path / "provider",
+        chat_store_path=tmp_path / "chat",
         agent_model=FunctionModel(
             lambda _messages, _info: ModelResponse(parts=[TextPart(content="unused")])
         ),
@@ -1026,6 +1028,7 @@ async def test_autonomous_agent_can_create_a_semantic_revision_without_deadlock(
     app = create_app(
         workspace,
         provider_store_path=tmp_path / "provider",
+        chat_store_path=tmp_path / "chat",
         agent_model=FunctionModel(stream_function=revising_model),
         provider_validator=_verified_capabilities,
     )
@@ -1078,6 +1081,7 @@ async def test_guided_agent_approval_creates_a_semantic_revision(tmp_path: Path)
     app = create_app(
         workspace,
         provider_store_path=tmp_path / "provider",
+        chat_store_path=tmp_path / "chat",
         agent_model=FunctionModel(stream_function=revising_model),
         provider_validator=_verified_capabilities,
     )
@@ -1211,6 +1215,7 @@ async def _create_reconciliation_app(
     app = create_app(
         workspace,
         provider_store_path=tmp_path / "provider",
+        chat_store_path=tmp_path / "chat",
         agent_model=_reconciliation_model(repaired_course),
         provider_validator=_verified_capabilities,
     )
@@ -1547,6 +1552,7 @@ async def test_cancelling_an_active_agent_run_preserves_partial_state(
     app = create_app(
         workspace,
         provider_store_path=tmp_path / "provider",
+        chat_store_path=tmp_path / "chat",
         agent_model=FunctionModel(stream_function=long_running_model),
         provider_validator=_verified_capabilities,
     )
@@ -1615,6 +1621,7 @@ async def test_uncancellable_stream_keeps_run_boundary_and_workspace_locked(
     app = create_app(
         workspace,
         provider_store_path=tmp_path / "provider",
+        chat_store_path=tmp_path / "chat",
         agent_model=FunctionModel(
             lambda _messages, _info: ModelResponse(parts=[TextPart(content="unused")])
         ),
@@ -1733,6 +1740,7 @@ async def test_agent_can_archive_and_restore_slides(tmp_path: Path) -> None:
     app = create_app(
         workspace,
         provider_store_path=provider_store,
+        chat_store_path=tmp_path / "chat",
         agent_model=FunctionModel(stream_function=archive_model),
         provider_validator=_verified_capabilities,
     )
@@ -2160,3 +2168,69 @@ async def test_presentation_state_snapshots_stream_on_canvas_updates(
     stored = read_presentation_for_lecture(workspace, lecture_id)
     assert stored is not None
     assert len(stored.slides) == 3
+
+
+@pytest.mark.anyio
+async def test_agent_runs_use_the_active_conversation_history(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    seen_histories: list[str] = []
+
+    async def responding_model(
+        messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str]:
+        seen_histories.append(" ".join(str(message) for message in messages))
+        yield "Response saved."
+
+    app = create_app(
+        workspace,
+        provider_store_path=tmp_path / "provider",
+        chat_store_path=tmp_path / "chat",
+        agent_model=FunctionModel(stream_function=responding_model),
+        provider_validator=_verified_capabilities,
+    )
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        first = (await client.get("/api/conversations")).json()["active_id"]
+        run = {
+            "threadId": first,
+            "runId": "first-run",
+            "state": {},
+            "messages": [{"id": "first-message", "role": "user", "content": "First thread topic"}],
+            "tools": [],
+            "context": [],
+            "forwardedProps": {"mode": "guided"},
+        }
+        status, _ = await _post_stream(app, "/api/agent", run)
+        assert status == 200
+        second = (await client.post("/api/conversations", json={"title": "Second"})).json()[
+            "active_id"
+        ]
+        stale = await client.post("/api/agent", json={**run, "runId": "stale-run"})
+        assert stale.status_code == 409
+        legacy_stale = await client.post(
+            "/api/agent", json={**run, "threadId": "course-agent", "runId": "legacy-stale"}
+        )
+        assert legacy_stale.status_code == 409
+        status, _ = await _post_stream(
+            app,
+            "/api/agent",
+            {
+                **run,
+                "threadId": second,
+                "runId": "second-run",
+                "messages": [
+                    {"id": "second-message", "role": "user", "content": "Second thread topic"}
+                ],
+            },
+        )
+        assert status == 200
+        assert "First thread topic" not in seen_histories[-1]
+        assert "Second thread topic" in seen_histories[-1]
+        assert (await client.get(f"/api/conversations/{first}")).json()["messages"][0][
+            "content"
+        ] == "First thread topic"
+        assert (await client.get("/api/chat")).json()["messages"][0][
+            "content"
+        ] == "Second thread topic"

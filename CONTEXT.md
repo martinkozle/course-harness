@@ -132,6 +132,14 @@ _Avoid_: Slide, Artifact, browser reimplementation of PowerPoint
 The persistent conversational agent accountable to the Course Author for planning and changing a Course.
 _Avoid_: Pipeline, orchestrator, chatbot
 
+**Conversation**:
+A named, reopenable exchange between the Course Author and Course Agent within one Course Workspace. Its transcript lives in private application state, outside canonical Course files.
+_Avoid_: Course Revision, Course state
+
+**Context Compaction**:
+A Course Author-reviewed summary of a Conversation's earlier turns that replaces those turns in future model context while retaining the complete visible transcript.
+_Avoid_: Transcript deletion, Course Revision
+
 **Provider Account**:
 A reusable connection to a model provider, consisting of an endpoint and one private credential.
 _Avoid_: Model, connection, provider configuration

@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import { type AgentInterrupt, streamAgentRun } from "./agentStream";
+import { responseError } from "./api";
 import type { ModelCatalog } from "./models";
 
 export type CoursePlan = {
@@ -53,6 +54,23 @@ type ReconciliationProposal = {
 type Activity = { id: string; title: string; detail: string };
 
 type AgentMode = "guided" | "autonomous";
+
+type Conversation = {
+	id: string;
+	title: string;
+	created_at: string;
+	updated_at: string;
+	archived: boolean;
+	has_pending_approval: boolean;
+};
+
+type ConversationList = { active_id: string; conversations: Conversation[] };
+type Transcript = { messages: ChatMessage[]; approval: AgentInterrupt | null };
+type CompactionPreview = {
+	summary: string;
+	source_message_count: number;
+	revision: string | number;
+};
 
 type AgentPanelProps = {
 	embedded?: boolean;
@@ -396,8 +414,17 @@ export function AgentPanel({
 			: "Course Agent needs a model.",
 	);
 	const [error, setError] = useState<string | null>(null);
-	const [confirmingClear, setConfirmingClear] = useState(false);
+	const [conversationList, setConversationList] =
+		useState<ConversationList | null>(null);
+	const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+	const [renaming, setRenaming] = useState<string | null>(null);
+	const [draftTitle, setDraftTitle] = useState("");
+	const [compaction, setCompaction] = useState<CompactionPreview | null>(null);
+	const [summary, setSummary] = useState("");
+	const [conversationBusy, setConversationBusy] = useState(false);
+	const [conversationOpen, setConversationOpen] = useState(false);
 	const abortRef = useRef<AbortController | null>(null);
+	const renameInputRef = useRef<HTMLInputElement | null>(null);
 	const chatEndRef = useRef<HTMLDivElement | null>(null);
 	const statusModelIdRef = useRef(catalog.selected_model_id);
 	const selected = catalog.model_presets.find(
@@ -410,6 +437,25 @@ export function AgentPanel({
 
 	useEffect(() => setMessages(initialMessages), [initialMessages]);
 	useEffect(() => setApproval(initialApproval), [initialApproval]);
+	useEffect(() => { if (renaming) renameInputRef.current?.focus(); }, [renaming]);
+	useEffect(() => {
+		const controller = new AbortController();
+		void fetch("/api/conversations", { signal: controller.signal })
+			.then(async (response) => {
+				if (!response.ok) throw new Error(await responseError(response));
+				setConversationList((await response.json()) as ConversationList);
+			})
+			.catch((caught: unknown) => {
+				if (!(caught instanceof DOMException && caught.name === "AbortError")) {
+					setError(
+						caught instanceof Error
+							? caught.message
+							: "Conversations could not be loaded.",
+					);
+				}
+			});
+		return () => controller.abort();
+	}, []);
 	useEffect(() => onRunningChange(running), [onRunningChange, running]);
 	useEffect(() => {
 		const selectedModelId = selected?.id ?? null;
@@ -452,6 +498,7 @@ export function AgentPanel({
 		resume?: object[],
 		modeForRun: AgentMode = "autonomous",
 	) {
+		if (!conversationList) return;
 		setActivities([]);
 		setError(null);
 		setRunStatus("Course Agent is working.");
@@ -462,7 +509,7 @@ export function AgentPanel({
 		try {
 			const result = await streamAgentRun(
 				{
-					threadId: "course-agent",
+					threadId: conversationList.active_id,
 					runId: crypto.randomUUID(),
 					state: {},
 					messages: messagesForRun,
@@ -523,6 +570,9 @@ export function AgentPanel({
 				}
 			}
 			setRunStatus("Course Agent finished.");
+			void refreshConversations().catch(() => {
+				setError("The conversation list could not be refreshed.");
+			});
 		} catch (caught) {
 			if (caught instanceof DOMException && caught.name === "AbortError") {
 				setRunStatus("Course Agent stopped.");
@@ -548,31 +598,147 @@ export function AgentPanel({
 		}
 	}
 
-	async function clearConversation() {
-		if (running || approval) return;
+	async function refreshConversations() {
+		const response = await fetch("/api/conversations");
+		if (!response.ok) throw new Error(await responseError(response));
+		setConversationList((await response.json()) as ConversationList);
+	}
+
+	async function conversationAction(action: () => Promise<void>) {
+		if (running || conversationBusy) return;
+		setConversationBusy(true);
 		setError(null);
 		try {
-			const response = await fetch("/api/chat", { method: "DELETE" });
-			if (!response.ok) {
-				throw new Error("The conversation could not be cleared.");
-			}
-			setMessages([]);
-			setActivities([]);
-			setConfirmingClear(false);
-			onConversationCleared();
+			await action();
+			await refreshConversations();
 		} catch (caught) {
 			setError(
 				caught instanceof Error
 					? caught.message
-					: "The conversation could not be cleared.",
+					: "The conversation could not be changed.",
 			);
+		} finally {
+			setConversationBusy(false);
 		}
+	}
+
+	async function requestConversation(
+		path: string,
+		method: string,
+		body?: object,
+	) {
+		const response = await fetch(path, {
+			method,
+			...(body
+				? {
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify(body),
+					}
+				: {}),
+		});
+		if (!response.ok) throw new Error(await responseError(response));
+		return response;
+	}
+
+	async function loadActiveTranscript() {
+		const response = await fetch("/api/chat");
+		if (!response.ok) throw new Error(await responseError(response));
+		const transcript = (await response.json()) as Transcript;
+		setMessages(transcript.messages);
+		setApproval(transcript.approval);
+		setActivities([]);
+		setPrompt("");
+		setCompaction(null);
+		setConfirmingDelete(null);
+		onTranscriptChange(transcript.messages, transcript.approval);
+	}
+
+	function createConversation() {
+		void conversationAction(async () => {
+			await requestConversation("/api/conversations", "POST", {});
+			await loadActiveTranscript();
+			onConversationCleared();
+		});
+	}
+
+	function activateConversation(id: string) {
+		void conversationAction(async () => {
+			await requestConversation(
+				`/api/conversations/${encodeURIComponent(id)}/activate`,
+				"POST",
+			);
+			await loadActiveTranscript();
+		});
+	}
+
+	function archiveConversation(id: string, archived: boolean) {
+		void conversationAction(async () => {
+			await requestConversation(
+				`/api/conversations/${encodeURIComponent(id)}`,
+				"PATCH",
+				{ archived },
+			);
+			if (id === conversationList?.active_id) await loadActiveTranscript();
+		});
+	}
+
+	function renameConversation(id: string) {
+		const title = draftTitle.trim();
+		if (!title) return;
+		void conversationAction(async () => {
+			await requestConversation(
+				`/api/conversations/${encodeURIComponent(id)}`,
+				"PATCH",
+				{ title },
+			);
+			setRenaming(null);
+		});
+	}
+
+	function deleteConversation(id: string) {
+		void conversationAction(async () => {
+			await requestConversation(
+				`/api/conversations/${encodeURIComponent(id)}`,
+				"DELETE",
+			);
+			await loadActiveTranscript();
+		});
+	}
+
+	function previewCompaction() {
+		const id = conversationList?.active_id;
+		if (!id) return;
+		void conversationAction(async () => {
+			const response = await requestConversation(
+				`/api/conversations/${encodeURIComponent(id)}/compact/preview`,
+				"POST",
+			);
+			const preview = (await response.json()) as CompactionPreview;
+			setCompaction(preview);
+			setSummary(preview.summary);
+		});
+	}
+
+	function confirmCompaction() {
+		const id = conversationList?.active_id;
+		if (!id || !compaction || !summary.trim()) return;
+		void conversationAction(async () => {
+			await requestConversation(
+				`/api/conversations/${encodeURIComponent(id)}/compact`,
+				"POST",
+				{
+					summary: summary.trim(),
+					revision: compaction.revision,
+				},
+			);
+			await loadActiveTranscript();
+		});
 	}
 
 	function sendMessage(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		const content = prompt.trim();
-		if (!content || running) return;
+		if (!content || running || !conversationList) return;
 		const contextPrefix = chatContext ? `[Context: ${chatContext}]\n\n` : "";
 		const userMessage: ChatMessage = {
 			id: crypto.randomUUID(),
@@ -591,7 +757,7 @@ export function AgentPanel({
 	}
 
 	function resolveApproval(approved: boolean) {
-		if (!approval || running) return;
+		if (!approval || running || !conversationList) return;
 		const pending = approval;
 		setApproval(null);
 		void run(
@@ -677,45 +843,281 @@ export function AgentPanel({
 							>
 								Stop
 							</button>
-						) : confirmingClear ? (
-							<fieldset className="clear-confirmation">
-								<legend>Confirm clear conversation</legend>
-								<span>This cannot be undone.</span>
-								<button
-									className="quiet-action compact-action"
-									type="button"
-									onClick={() => setConfirmingClear(false)}
-								>
-									Cancel
-								</button>
-								<button
-									className="secondary-action destructive-action compact-action"
-									type="button"
-									onClick={() => void clearConversation()}
-								>
-									Clear now
-								</button>
-							</fieldset>
 						) : (
 							<button
-								className="quiet-action compact-action"
+								className="secondary-action compact-action"
 								type="button"
-								disabled={messages.length === 0 || approval !== null}
-								onClick={() => setConfirmingClear(true)}
+								aria-expanded={conversationOpen}
+								aria-controls="conversation-library"
+								onClick={() => setConversationOpen((open) => !open)}
 							>
-								Clear conversation
+								Conversations
 							</button>
 						)}
 					</div>
 				</div>
+				{conversationOpen ? (
+					<section
+						className="conversation-library"
+						id="conversation-library"
+						aria-label="Conversations"
+					>
+						<div className="conversation-library-heading">
+							<strong>Conversations</strong>
+							<button
+								type="button"
+								className="quiet-action compact-action"
+								onClick={createConversation}
+								disabled={running || conversationBusy || approval !== null}
+								title={
+									approval ? "Resolve the pending approval first" : undefined
+								}
+							>
+								New conversation
+							</button>
+						</div>
+						{approval ? (
+							<p className="conversation-guard">
+								Resolve the pending approval before changing conversations.
+							</p>
+						) : null}
+						{conversationList ? (
+							<ul className="conversation-list">
+								{conversationList.conversations.map((conversation) => (
+									<li
+										key={conversation.id}
+										className={
+											conversation.id === conversationList.active_id
+												? "is-active"
+												: ""
+										}
+									>
+										<div className="conversation-entry">
+											<button
+												type="button"
+												className="conversation-select"
+												onClick={() => activateConversation(conversation.id)}
+												disabled={
+													running ||
+													conversationBusy ||
+													approval !== null ||
+													conversation.archived ||
+													conversation.id === conversationList.active_id
+												}
+												title={
+													conversation.archived
+														? "Restore this conversation before opening it"
+														: undefined
+												}
+												aria-current={
+													conversation.id === conversationList.active_id
+														? "true"
+														: undefined
+												}
+											>
+												{conversation.title}
+											</button>
+											<small>
+												{conversation.archived
+													? "Archived"
+													: conversation.id === conversationList.active_id
+														? "Current"
+														: "Saved"}
+											</small>
+										</div>
+										<div className="conversation-entry-actions">
+											<button
+												type="button"
+												className="quiet-action compact-action"
+												onClick={() => {
+													setRenaming(conversation.id);
+													setDraftTitle(conversation.title);
+												}}
+												disabled={running || conversationBusy}
+											>
+												Rename
+											</button>
+											<button
+												type="button"
+												className="quiet-action compact-action"
+												onClick={() =>
+													archiveConversation(
+														conversation.id,
+														!conversation.archived,
+													)
+												}
+												disabled={
+													running ||
+													conversationBusy ||
+													approval !== null ||
+													conversation.has_pending_approval ||
+													(conversation.id === conversationList.active_id &&
+														!conversation.archived)
+												}
+												title={
+													conversation.has_pending_approval
+														? "Resolve the pending approval first"
+														: conversation.id === conversationList.active_id &&
+																!conversation.archived
+															? "Open another conversation before archiving this one"
+															: undefined
+												}
+											>
+												{conversation.archived ? "Restore" : "Archive"}
+											</button>
+											<button
+												type="button"
+												className="quiet-action compact-action destructive-action"
+												onClick={() => setConfirmingDelete(conversation.id)}
+												disabled={
+													running ||
+													conversationBusy ||
+													approval !== null ||
+													conversation.has_pending_approval
+												}
+												title={
+													conversation.has_pending_approval
+														? "Resolve the pending approval first"
+														: undefined
+												}
+											>
+												Delete
+											</button>
+										</div>
+										{renaming === conversation.id ? (
+											<form
+												className="conversation-rename"
+												onSubmit={(event) => {
+													event.preventDefault();
+													renameConversation(conversation.id);
+												}}
+											>
+												<label
+													htmlFor={`conversation-title-${conversation.id}`}
+												>
+													Conversation title
+												</label>
+												<input
+													id={`conversation-title-${conversation.id}`}
+													value={draftTitle}
+													onChange={(event) =>
+														setDraftTitle(event.target.value)
+													}
+													maxLength={200}
+													required
+													ref={renameInputRef}
+												/>
+												<div className="conversation-entry-actions">
+													<button
+														type="button"
+														className="quiet-action compact-action"
+														onClick={() => setRenaming(null)}
+													>
+														Cancel
+													</button>
+													<button
+														type="submit"
+														className="secondary-action compact-action"
+														disabled={!draftTitle.trim() || conversationBusy}
+													>
+														Save title
+													</button>
+												</div>
+											</form>
+										) : null}
+										{confirmingDelete === conversation.id ? (
+											<fieldset className="conversation-confirmation">
+												<legend>
+													Delete {conversation.title} permanently?
+												</legend>
+												<button
+													type="button"
+													className="quiet-action compact-action"
+													onClick={() => setConfirmingDelete(null)}
+												>
+													Cancel
+												</button>
+												<button
+													type="button"
+													className="secondary-action destructive-action compact-action"
+													onClick={() => deleteConversation(conversation.id)}
+												>
+													Delete now
+												</button>
+											</fieldset>
+										) : null}
+									</li>
+								))}
+							</ul>
+						) : (
+							<p role="status">Loading conversations…</p>
+						)}
+						<button
+							type="button"
+							className="quiet-action compact-action"
+							onClick={previewCompaction}
+							disabled={
+								running ||
+								conversationBusy ||
+								approval !== null ||
+								messages.length === 0
+							}
+							title={
+								approval ? "Resolve the pending approval first" : undefined
+							}
+						>
+							Compact current conversation
+						</button>
+						{compaction ? (
+							<div className="compaction-preview">
+								<label htmlFor="compaction-summary">
+									Review the summary that will replace model context from{" "}
+									{compaction.source_message_count} messages
+								</label>
+								<textarea
+									id="compaction-summary"
+									value={summary}
+									onChange={(event) => setSummary(event.target.value)}
+									rows={7}
+									maxLength={4000}
+									aria-invalid={!summary.trim()}
+								/>
+								<p>The full conversation remains available in history.</p>
+								<div className="conversation-entry-actions">
+									<button
+										type="button"
+										className="quiet-action compact-action"
+										onClick={() => setCompaction(null)}
+									>
+										Cancel
+									</button>
+									<button
+										type="button"
+										className="primary-action compact-action"
+										onClick={confirmCompaction}
+										disabled={
+											!summary.trim() ||
+											conversationBusy ||
+											running ||
+											approval !== null
+										}
+									>
+										Use this summary
+									</button>
+								</div>
+							</div>
+						) : null}
+					</section>
+				) : null}
 				{selected && selectedAccount ? (
 					<p className="agent-network-disclosure" role="note">
 						When you send a message, it and any Source excerpts needed for the
-						response leave this device for <strong>{selectedAccount.name}</strong>
-						 at <strong>{selectedAccount.base_url}</strong>, using the selected
+						response leave this device for{" "}
+						<strong>{selectedAccount.name}</strong>
+						at <strong>{selectedAccount.base_url}</strong>, using the selected
 						Model Preset. Its credential stays in Course Harness&apos;s private
-						provider store. Only the credential saved for this Provider Account is
-						used.
+						provider store. Only the credential saved for this Provider Account
+						is used.
 					</p>
 				) : null}
 			</header>
@@ -745,7 +1147,7 @@ export function AgentPanel({
 										key={starter}
 										type="button"
 										onClick={() => setPrompt(starter)}
-										disabled={!selected}
+										disabled={!selected || !conversationList}
 									>
 										{starter}
 									</button>
@@ -829,7 +1231,7 @@ export function AgentPanel({
 					rows={3}
 					placeholder="Ask for a change, a review, or a new draft…"
 					maxLength={4000}
-					disabled={running || approval !== null || !selected}
+					disabled={running || approval !== null || !selected || !conversationList}
 					aria-describedby="course-agent-help"
 				/>
 				<div>
@@ -841,7 +1243,7 @@ export function AgentPanel({
 						className="primary-action compact-action"
 						type="submit"
 						disabled={
-							running || approval !== null || !selected || !prompt.trim()
+							running || approval !== null || !selected || !conversationList || !prompt.trim()
 						}
 					>
 						Send message
