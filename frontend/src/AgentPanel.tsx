@@ -423,6 +423,7 @@ export function AgentPanel({
 	const [summary, setSummary] = useState("");
 	const [conversationBusy, setConversationBusy] = useState(false);
 	const [conversationOpen, setConversationOpen] = useState(false);
+	const [localDraft, setLocalDraft] = useState(false);
 	const abortRef = useRef<AbortController | null>(null);
 	const renameInputRef = useRef<HTMLInputElement | null>(null);
 	const chatEndRef = useRef<HTMLDivElement | null>(null);
@@ -437,7 +438,9 @@ export function AgentPanel({
 
 	useEffect(() => setMessages(initialMessages), [initialMessages]);
 	useEffect(() => setApproval(initialApproval), [initialApproval]);
-	useEffect(() => { if (renaming) renameInputRef.current?.focus(); }, [renaming]);
+	useEffect(() => {
+		if (renaming) renameInputRef.current?.focus();
+	}, [renaming]);
 	useEffect(() => {
 		const controller = new AbortController();
 		void fetch("/api/conversations", { signal: controller.signal })
@@ -497,8 +500,10 @@ export function AgentPanel({
 		messagesForRun: ChatMessage[],
 		resume?: object[],
 		modeForRun: AgentMode = "autonomous",
+		conversationId?: string,
 	) {
-		if (!conversationList) return;
+		const threadId = conversationId ?? conversationList?.active_id;
+		if (!threadId) return;
 		setActivities([]);
 		setError(null);
 		setRunStatus("Course Agent is working.");
@@ -509,7 +514,7 @@ export function AgentPanel({
 		try {
 			const result = await streamAgentRun(
 				{
-					threadId: conversationList.active_id,
+					threadId,
 					runId: crypto.randomUUID(),
 					state: {},
 					messages: messagesForRun,
@@ -650,23 +655,34 @@ export function AgentPanel({
 		setPrompt("");
 		setCompaction(null);
 		setConfirmingDelete(null);
+		setLocalDraft(false);
 		onTranscriptChange(transcript.messages, transcript.approval);
 	}
 
 	function createConversation() {
-		void conversationAction(async () => {
-			await requestConversation("/api/conversations", "POST", {});
-			await loadActiveTranscript();
-			onConversationCleared();
-		});
+		if (running || conversationBusy || approval || messages.length === 0)
+			return;
+		setLocalDraft(true);
+		setMessages([]);
+		setApproval(null);
+		setActivities([]);
+		setPrompt("");
+		setCompaction(null);
+		setConfirmingDelete(null);
+		setRenaming(null);
+		setError(null);
+		setRunStatus("Course Agent is ready.");
+		onConversationCleared();
 	}
 
 	function activateConversation(id: string) {
 		void conversationAction(async () => {
-			await requestConversation(
-				`/api/conversations/${encodeURIComponent(id)}/activate`,
-				"POST",
-			);
+			if (id !== conversationList?.active_id) {
+				await requestConversation(
+					`/api/conversations/${encodeURIComponent(id)}/activate`,
+					"POST",
+				);
+			}
 			await loadActiveTranscript();
 		});
 	}
@@ -735,16 +751,50 @@ export function AgentPanel({
 		});
 	}
 
+	async function sendDraftMessage(userMessage: ChatMessage, mode: AgentMode) {
+		setConversationBusy(true);
+		setError(null);
+		try {
+			const response = await requestConversation(
+				"/api/conversations",
+				"POST",
+				{},
+			);
+			const catalog = (await response.json()) as ConversationList;
+			setConversationList(catalog);
+			setLocalDraft(false);
+			setMessages([userMessage]);
+			setPrompt("");
+			onChatContextCleared?.();
+			void run([userMessage], undefined, mode, catalog.active_id);
+		} catch (caught) {
+			setError(
+				caught instanceof Error
+					? caught.message
+					: "The conversation could not be started.",
+			);
+		} finally {
+			setConversationBusy(false);
+		}
+	}
+
 	function sendMessage(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		const content = prompt.trim();
-		if (!content || running || !conversationList) return;
+		if (!content || running || conversationBusy || !conversationList) return;
 		const contextPrefix = chatContext ? `[Context: ${chatContext}]\n\n` : "";
 		const userMessage: ChatMessage = {
 			id: crypto.randomUUID(),
 			role: "user",
 			content: contextPrefix + content,
 		};
+		if (localDraft) {
+			void sendDraftMessage(
+				userMessage,
+				reconciliationDriftId ? "guided" : "autonomous",
+			);
+			return;
+		}
 		setMessages((current) => [...current, userMessage]);
 		setPrompt("");
 		setApproval(null);
@@ -869,7 +919,10 @@ export function AgentPanel({
 								className="quiet-action compact-action"
 								onClick={createConversation}
 								disabled={
-									running || conversationBusy || approval !== null || messages.length === 0
+									running ||
+									conversationBusy ||
+									approval !== null ||
+									messages.length === 0
 								}
 								title={
 									approval
@@ -887,13 +940,19 @@ export function AgentPanel({
 								Resolve the pending approval before changing conversations.
 							</p>
 						) : null}
+						{localDraft ? (
+							<p className="conversation-guard" role="status">
+								Send a message to save this new conversation.
+							</p>
+						) : null}
 						{conversationList ? (
 							<ul className="conversation-list">
 								{conversationList.conversations.map((conversation) => (
 									<li
 										key={conversation.id}
 										className={
-											conversation.id === conversationList.active_id
+											conversation.id === conversationList.active_id &&
+											!localDraft
 												? "is-active"
 												: ""
 										}
@@ -908,7 +967,8 @@ export function AgentPanel({
 													conversationBusy ||
 													approval !== null ||
 													conversation.archived ||
-													conversation.id === conversationList.active_id
+													(conversation.id === conversationList.active_id &&
+														!localDraft)
 												}
 												title={
 													conversation.archived
@@ -916,7 +976,8 @@ export function AgentPanel({
 														: undefined
 												}
 												aria-current={
-													conversation.id === conversationList.active_id
+													conversation.id === conversationList.active_id &&
+													!localDraft
 														? "true"
 														: undefined
 												}
@@ -926,7 +987,8 @@ export function AgentPanel({
 											<small>
 												{conversation.archived
 													? "Archived"
-													: conversation.id === conversationList.active_id
+													: conversation.id === conversationList.active_id &&
+															!localDraft
 														? "Current"
 														: "Saved"}
 											</small>
@@ -1237,7 +1299,13 @@ export function AgentPanel({
 					rows={3}
 					placeholder="Ask for a change, a review, or a new draft…"
 					maxLength={4000}
-					disabled={running || approval !== null || !selected || !conversationList}
+					disabled={
+						running ||
+						conversationBusy ||
+						approval !== null ||
+						!selected ||
+						!conversationList
+					}
 					aria-describedby="course-agent-help"
 				/>
 				<div>
@@ -1249,7 +1317,12 @@ export function AgentPanel({
 						className="primary-action compact-action"
 						type="submit"
 						disabled={
-							running || approval !== null || !selected || !conversationList || !prompt.trim()
+							running ||
+							conversationBusy ||
+							approval !== null ||
+							!selected ||
+							!conversationList ||
+							!prompt.trim()
 						}
 					>
 						Send message

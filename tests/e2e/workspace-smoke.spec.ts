@@ -83,10 +83,33 @@ test("Course Author creates a Course through chat and revises its Syllabus", asy
 		.getByRole("button", { name: "Conversations", exact: true })
 		.click();
 	await page.getByRole("button", { name: "New conversation" }).click();
-	await expect(page.getByRole("button", { name: "New conversation" })).toBeDisabled();
-	await expect(page.locator(".conversation-list li")).toHaveCount(2);
+	await expect(
+		page.getByRole("button", { name: "New conversation" }),
+	).toBeDisabled();
+	await expect(page.locator(".conversation-list li")).toHaveCount(1);
+	await expect(
+		page.getByText("Send a message to save this new conversation."),
+	).toBeVisible();
 	await expect(
 		page.getByRole("heading", { name: "What should we work on?" }),
+	).toBeVisible();
+	await page.reload();
+	await page.getByRole("button", { name: "Authoring", exact: true }).click();
+	await page
+		.getByRole("button", { name: "Conversations", exact: true })
+		.click();
+	await expect(page.locator(".conversation-list li")).toHaveCount(1);
+	await expect(
+		page.getByText("I created a two-Lecture Course Plan."),
+	).toBeVisible();
+	await page.getByRole("button", { name: "New conversation" }).click();
+	await page
+		.getByLabel("Message the Course Agent")
+		.fill("Review the lecture sequence.");
+	await page.getByRole("button", { name: "Send message" }).click();
+	await expect(page.locator(".conversation-list li")).toHaveCount(2);
+	await expect(
+		page.getByText("The lecture sequence is ready for review."),
 	).toBeVisible();
 	await page
 		.locator(".conversation-list li:not(.is-active) .conversation-select")
@@ -114,6 +137,14 @@ test("Course Author creates a Course through chat and revises its Syllabus", asy
 	await page.getByRole("button", { name: "Use this summary" }).click();
 	await expect(
 		page.getByText("I created a two-Lecture Course Plan."),
+	).toBeVisible();
+	await page
+		.locator(".conversation-list li.is-active")
+		.getByRole("button", { name: "Delete", exact: true })
+		.click();
+	await page.getByRole("button", { name: "Delete now" }).click();
+	await expect(
+		page.getByText("The lecture sequence is ready for review."),
 	).toBeVisible();
 	await page
 		.locator(".conversation-list li.is-active")

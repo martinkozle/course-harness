@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import uvicorn
-from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
+from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from course_harness.app import create_app
@@ -32,6 +32,16 @@ async def verified_account(_request: object) -> None:
 async def course_planning_model(
     messages: list[ModelMessage], _info: AgentInfo
 ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+    if any(
+        isinstance(part, UserPromptPart)
+        and isinstance(part.content, str)
+        and "Review the lecture sequence." in part.content
+        for message in messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+    ):
+        yield "The lecture sequence is ready for review."
+        return
     returned_tools = {
         part.tool_name
         for message in messages

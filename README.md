@@ -46,8 +46,9 @@ exact runtime locations, and available capabilities.
 
 Each Workspace can keep multiple Conversations in that private application state. Use
 **Conversations** in the Course Agent panel to start or reopen one, rename it, archive it, or delete
-it. Starting a new Conversation reuses an existing empty draft, so blank Conversations do not
-accumulate. **Compact current conversation** shows an editable summary for review before using it as the
+it. A new Conversation stays an unsaved draft until you send its first message. The server also
+reuses an existing empty draft, so blank Conversations do not accumulate. **Compact current
+conversation** shows an editable summary for review before using it as the
 earlier context for future model runs. The full transcript remains visible. Resolve any pending
 agent approval before compacting, archiving, or deleting its Conversation. An existing single
 transcript is migrated automatically when that Workspace's Conversations are first opened.
