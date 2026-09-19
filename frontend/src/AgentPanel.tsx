@@ -868,9 +868,15 @@ export function AgentPanel({
 								type="button"
 								className="quiet-action compact-action"
 								onClick={createConversation}
-								disabled={running || conversationBusy || approval !== null}
+								disabled={
+									running || conversationBusy || approval !== null || messages.length === 0
+								}
 								title={
-									approval ? "Resolve the pending approval first" : undefined
+									approval
+										? "Resolve the pending approval first"
+										: messages.length === 0
+											? "This conversation is already empty"
+											: undefined
 								}
 							>
 								New conversation

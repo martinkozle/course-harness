@@ -23,6 +23,39 @@ from course_harness.chat_history import (
 
 
 @pytest.mark.anyio
+async def test_new_conversation_reuses_one_empty_draft(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    store = tmp_path / "chat"
+    app = create_app(workspace, chat_store_path=store)
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        first = (await client.get("/api/conversations")).json()["active_id"]
+        for _ in range(3):
+            catalog = (await client.post("/api/conversations", json={})).json()
+            assert catalog["active_id"] == first
+            assert len(catalog["conversations"]) == 1
+        named = (await client.post("/api/conversations", json={"title": "Named draft"})).json()
+        assert named["active_id"] == first
+        assert named["conversations"][0]["title"] == "Named draft"
+
+        save_chat_history(
+            store,
+            workspace,
+            [ModelRequest(parts=[UserPromptPart(content="Plan the first lecture")])],
+            first,
+        )
+        second = (await client.post("/api/conversations", json={})).json()["active_id"]
+        assert second != first
+        assert (await client.post("/api/conversations", json={})).json()["active_id"] == second
+        await client.post(f"/api/conversations/{first}/activate")
+        reused = (await client.post("/api/conversations", json={})).json()
+        assert reused["active_id"] == second
+        assert len(reused["conversations"]) == 2
+
+
+@pytest.mark.anyio
 async def test_course_author_can_keep_and_reopen_conversations(tmp_path: Path) -> None:
     workspace = tmp_path / "course"
     workspace.mkdir()

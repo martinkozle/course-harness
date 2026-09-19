@@ -83,6 +83,8 @@ test("Course Author creates a Course through chat and revises its Syllabus", asy
 		.getByRole("button", { name: "Conversations", exact: true })
 		.click();
 	await page.getByRole("button", { name: "New conversation" }).click();
+	await expect(page.getByRole("button", { name: "New conversation" })).toBeDisabled();
+	await expect(page.locator(".conversation-list li")).toHaveCount(2);
 	await expect(
 		page.getByRole("heading", { name: "What should we work on?" }),
 	).toBeVisible();

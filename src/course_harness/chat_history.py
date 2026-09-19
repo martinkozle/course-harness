@@ -194,6 +194,22 @@ def create_conversation(
     store_path: Path, workspace: Path, title: str | None = None
 ) -> ConversationCatalog:
     index = _catalog(store_path, workspace)
+    for item in _summaries(index):
+        if item.archived:
+            continue
+        thread = _read_thread(store_path, workspace, item.id)
+        if not thread["messages"] and not thread["history"] and not thread.get("summary"):
+            if title is not None:
+                label = title.strip()
+                if not label:
+                    raise ValueError("Conversation title cannot be empty")
+                item.title = label
+                item.updated_at = _now()
+                _update_metadata(index, item)
+            if index["active_id"] != item.id or title is not None:
+                index["active_id"] = item.id
+                _atomic_write(_index_path(store_path, workspace), index)
+            return list_conversations(store_path, workspace)
     conversation_id = uuid4().hex
     timestamp = _now()
     label = title.strip() if title else f"Conversation {len(_summaries(index)) + 1}"
