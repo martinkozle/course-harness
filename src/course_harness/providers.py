@@ -423,7 +423,65 @@ async def _validate_provider_capabilities(
             raise ProviderValidationError(
                 "The OpenAI-compatible endpoint did not report the selected model."
             )
-        return _capabilities_from_metadata(metadata)
+        capabilities = _capabilities_from_metadata(metadata)
+        if capabilities.tool_calling:
+            return capabilities
+        tool_response = await client.post(
+            f"{request.base_url.rstrip('/')}/chat/completions",
+            headers=headers,
+            json={
+                "model": request.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Call add_numbers with a=1 and b=2. Return only the tool call.",
+                    }
+                ],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "add_numbers",
+                            "description": "Add two integers.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "a": {"type": "integer"},
+                                    "b": {"type": "integer"},
+                                },
+                                "required": ["a", "b"],
+                            },
+                        },
+                    }
+                ],
+                "tool_choice": "required",
+                "max_tokens": 256,
+                "stream": False,
+            },
+        )
+        if tool_response.status_code >= 400:
+            raise ProviderValidationError(
+                "The OpenAI-compatible endpoint did not accept a tool-call verification request."
+            )
+        result = tool_response.json()
+        choices = result.get("choices", []) if isinstance(result, dict) else []
+        message = (
+            choices[0].get("message", {})
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict)
+            else {}
+        )
+        tool_calls = message.get("tool_calls", []) if isinstance(message, dict) else []
+        if not isinstance(tool_calls, list) or not any(
+            isinstance(call, dict)
+            and isinstance(call.get("function"), dict)
+            and call["function"].get("name") == "add_numbers"
+            for call in tool_calls
+        ):
+            raise ProviderValidationError(
+                "The selected model did not return a tool call; "
+                "Course planning requires tool calling."
+            )
+        return capabilities.model_copy(update={"tool_calling": True})
     except ProviderValidationError:
         raise
     except (httpx2.HTTPError, KeyError, TypeError, ValueError) as error:
@@ -446,7 +504,16 @@ def _capabilities_from_metadata(metadata: object) -> ProviderCapabilities:
         parameters = []
     if not isinstance(capabilities, dict):
         capabilities = {}
-    context_window = metadata.get("context_length") or metadata.get("context_window") or 0
+    meta = metadata.get("meta", {})
+    context_window = (
+        metadata.get("context_length")
+        or metadata.get("context_window")
+        or (meta.get("n_ctx") if isinstance(meta, dict) else None)
+    )
+    if not isinstance(context_window, int) or context_window < 1:
+        raise ProviderValidationError(
+            "The provider did not report a usable context window for the selected model."
+        )
     return ProviderCapabilities(
         tool_calling="tools" in parameters or capabilities.get("tools") is True,
         structured_output=(
@@ -455,7 +522,7 @@ def _capabilities_from_metadata(metadata: object) -> ProviderCapabilities:
             or capabilities.get("structured_output") is True
         ),
         streaming=capabilities.get("streaming", True) is True,
-        context_window=context_window if isinstance(context_window, int) else 0,
+        context_window=context_window,
         vision="image" in modalities or capabilities.get("vision") is True,
     )
 

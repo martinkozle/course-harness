@@ -751,6 +751,88 @@ async def test_openrouter_configuration_rejects_an_unauthenticated_key() -> None
 
 
 @pytest.mark.anyio
+async def test_llamacpp_model_metadata_and_tool_call_are_verified() -> None:
+    calls: list[str] = []
+
+    def local_provider(request: httpx2.Request) -> httpx2.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/v1/models":
+            return httpx2.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "qwen3.8-27b",
+                            "owned_by": "llamacpp",
+                            "meta": {"n_ctx": 140_032},
+                        }
+                    ]
+                },
+            )
+        assert request.url.path == "/v1/chat/completions"
+        return httpx2.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "type": "function",
+                                    "function": {
+                                        "name": "add_numbers",
+                                        "arguments": '{"a":1,"b":2}',
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+        )
+
+    request = ProviderConfigurationRequest.model_validate(
+        {
+            "kind": "openai-compatible",
+            "model": "qwen3.8-27b",
+            "api_key": "local-secret",
+            "base_url": "http://127.0.0.1:8081/v1",
+        }
+    )
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(local_provider)) as client:
+        capabilities = await validate_provider_capabilities(request, http_client=client)
+
+    assert calls == ["/v1/models", "/v1/chat/completions"]
+    assert capabilities.tool_calling is True
+    assert capabilities.context_window == 140_032
+
+
+@pytest.mark.anyio
+async def test_local_model_without_tool_call_is_rejected() -> None:
+    def local_provider(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/v1/models":
+            return httpx2.Response(
+                200,
+                json={"data": [{"id": "plain-model", "meta": {"n_ctx": 32_768}}]},
+            )
+        return httpx2.Response(
+            200, json={"choices": [{"message": {"content": "I cannot call tools."}}]}
+        )
+
+    request = ProviderConfigurationRequest.model_validate(
+        {
+            "kind": "openai-compatible",
+            "model": "plain-model",
+            "api_key": "local-secret",
+            "base_url": "http://127.0.0.1:8081/v1",
+        }
+    )
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(local_provider)) as client:
+        with pytest.raises(ProviderValidationError, match="did not return a tool call"):
+            await validate_provider_capabilities(request, http_client=client)
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     ("kind", "base_url", "expected_url"),
     [
