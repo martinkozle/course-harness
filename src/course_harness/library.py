@@ -1,4 +1,3 @@
-import asyncio
 from pathlib import Path
 
 import httpx2
@@ -11,7 +10,6 @@ from course_harness.resources import (
     ResourceRegistrationRequest,
     ResourceState,
     Snapshot,
-    content_hash,
     create_snapshot,
     pin_remote_url,
     process_snapshot,
@@ -75,6 +73,40 @@ def register_and_snapshot(
             snapshot=snapshot,
         ),
     )
+
+
+def register_remote_reference(
+    data_dir: Path, url: str, media_type: str | None = None
+) -> ResourceState:
+    """Make a remote Resource visible before its content has been fetched."""
+    resource = register_resource(
+        registry_path(data_dir),
+        ResourceRegistrationRequest(
+            kind="remote",
+            location=url,
+            media_type=media_type or "application/octet-stream",
+        ),
+    )
+    return ResourceState(
+        resource_id=resource.id,
+        kind=resource.kind,
+        location=resource.location,
+        status="unprocessed",
+    )
+
+
+def save_remote_snapshot(
+    data_dir: Path, resource_id: str, content: bytes, media_type: str
+) -> Snapshot | None:
+    """Attach fetched content to a Resource that still exists."""
+    registry = registry_path(data_dir)
+    index = read_library_index(registry)
+    if not any(resource.id == resource_id for resource in index.resources):
+        return None
+    snapshot = create_snapshot(snapshots_dir(data_dir), resource_id, content)
+    if update_resource_snapshot(registry, resource_id, snapshot.content_hash, media_type) is None:
+        return None
+    return snapshot
 
 
 def _index_if_ready(cache_dir: Path, content_hash: str) -> bool:
@@ -360,72 +392,3 @@ async def _fetch_remote_resource(
                 content.extend(chunk)
             return bytes(content), resolved_type
     raise AssertionError("Remote redirect loop did not return or raise")
-
-
-async def register_remote_resource(
-    data_dir: Path,
-    cache_dir: Path,
-    url: str,
-    media_type: str | None = None,
-    *,
-    host_resolver: RemoteHostResolver | None = None,
-) -> ResourceState:
-    content, resolved_type = await fetch_remote_resource(
-        url,
-        media_type,
-        host_resolver=host_resolver,
-    )
-    request = ResourceRegistrationRequest(
-        kind="remote",
-        location=url,
-        media_type=resolved_type,
-    )
-    _, _, state = await asyncio.to_thread(
-        register_and_snapshot, data_dir, cache_dir, request, content
-    )
-    return state
-
-
-async def refresh_remote_resource(
-    data_dir: Path,
-    cache_dir: Path,
-    resource_id: str,
-    *,
-    host_resolver: RemoteHostResolver | None = None,
-) -> ResourceState:
-    index = read_library_index(registry_path(data_dir))
-    resource = next((r for r in index.resources if r.id == resource_id), None)
-    if resource is None:
-        raise ValueError(f"Resource {resource_id} was not found in the Library.")
-    if resource.kind != "remote":
-        raise ValueError("Only remote resources can be refreshed.")
-
-    content, _ = await fetch_remote_resource(
-        resource.location,
-        resource.media_type,
-        host_resolver=host_resolver,
-    )
-    new_hash = content_hash(content)
-
-    if new_hash == resource.snapshot_hash:
-        state = get_resource_state(data_dir, cache_dir, resource_id)
-        assert state is not None
-        return state
-
-    snapshot = create_snapshot(snapshots_dir(data_dir), resource.id, content)
-    state = await asyncio.to_thread(
-        process_snapshot, cache_dir, snapshot.content_hash, resource.media_type, content
-    )
-    update_resource_snapshot(registry_path(data_dir), resource.id, snapshot.content_hash)
-    indexed = (
-        _index_if_ready(cache_dir, snapshot.content_hash) if state.status == "ready" else False
-    )
-    return ResourceState(
-        resource_id=resource.id,
-        kind=resource.kind,
-        location=resource.location,
-        status=state.status,
-        indexed=indexed,
-        error=state.error,
-        snapshot=snapshot,
-    )

@@ -66,7 +66,9 @@ export function LibraryView({
 	const [uploading, setUploading] = useState(false);
 	const [pendingModelAction, setPendingModelAction] =
 		useState<PendingModelAction | null>(null);
-	const [modelStatus, setModelStatus] = useState<ModelDownloadStatus | null>(null);
+	const [modelStatus, setModelStatus] = useState<ModelDownloadStatus | null>(
+		null,
+	);
 	const [downloadBusy, setDownloadBusy] = useState(false);
 	const [modelError, setModelError] = useState<string | null>(null);
 	const [uploadError, setUploadError] = useState<string | null>(null);
@@ -155,6 +157,9 @@ export function LibraryView({
 		[],
 	);
 	const [addingRemote, setAddingRemote] = useState<Set<string>>(new Set());
+	const [remoteErrors, setRemoteErrors] = useState<Map<string, string>>(
+		new Map(),
+	);
 	const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
 	const [adopting, setAdopting] = useState<Set<string>>(new Set());
 	const [removing, setRemoving] = useState<Set<string>>(new Set());
@@ -170,6 +175,30 @@ export function LibraryView({
 		},
 		{} as Record<string, number>,
 	);
+	const hasRemoteProcessing = resources.some(
+		(resource) =>
+			resource.kind === "remote" && resource.status === "processing",
+	);
+
+	useEffect(() => {
+		if (!hasRemoteProcessing) return;
+		let active = true;
+		const timer = window.setInterval(() => {
+			void fetch("/api/resources")
+				.then(async (response) => {
+					if (!response.ok) throw new Error(await responseError(response));
+					const latest = (await response.json()) as ResourceState[];
+					if (active) onResourcesChange(latest);
+				})
+				.catch(() => {
+					// The next poll can recover from a transient request failure.
+				});
+		}, 1000);
+		return () => {
+			active = false;
+			window.clearInterval(timer);
+		};
+	}, [hasRemoteProcessing, onResourcesChange]);
 
 	useEffect(() => {
 		if (pendingModelAction && !modelDialog.current?.open)
@@ -218,7 +247,9 @@ export function LibraryView({
 			if (!updated.ok) throw new Error(await responseError(updated));
 			onResourcesChange((await updated.json()) as ResourceState[]);
 		} catch (caught) {
-			setUploadError(caught instanceof Error ? caught.message : "Upload failed.");
+			setUploadError(
+				caught instanceof Error ? caught.message : "Upload failed.",
+			);
 		} finally {
 			setUploading(false);
 		}
@@ -241,7 +272,9 @@ export function LibraryView({
 				}
 			} catch (caught) {
 				setUploadError(
-					caught instanceof Error ? caught.message : "Parser status could not be checked.",
+					caught instanceof Error
+						? caught.message
+						: "Parser status could not be checked.",
 				);
 				return;
 			}
@@ -255,7 +288,9 @@ export function LibraryView({
 		setDownloadBusy(true);
 		setModelError(null);
 		try {
-			const response = await fetch("/api/resources/parser-models", { method: "POST" });
+			const response = await fetch("/api/resources/parser-models", {
+				method: "POST",
+			});
 			if (!response.ok) throw new Error(await responseError(response));
 			setModelStatus((await response.json()) as ModelDownloadStatus);
 			setPendingModelAction(null);
@@ -264,7 +299,9 @@ export function LibraryView({
 			if (action.kind === "process") await handleProcess(action.resourceId);
 		} catch (caught) {
 			setModelError(
-				caught instanceof Error ? caught.message : "Models could not be downloaded.",
+				caught instanceof Error
+					? caught.message
+					: "Models could not be downloaded.",
 			);
 		} finally {
 			setDownloadBusy(false);
@@ -410,6 +447,11 @@ export function LibraryView({
 
 	async function handleAddRemote(candidate: Candidate) {
 		setAddingRemote((current) => new Set(current).add(candidate.url));
+		setRemoteErrors((current) => {
+			const next = new Map(current);
+			next.delete(candidate.url);
+			return next;
+		});
 		try {
 			const response = await fetch("/api/resources/remote", {
 				method: "POST",
@@ -420,6 +462,15 @@ export function LibraryView({
 			const updated = await fetch("/api/resources");
 			if (!updated.ok) throw new Error(await responseError(updated));
 			onResourcesChange((await updated.json()) as ResourceState[]);
+		} catch (error) {
+			setRemoteErrors((current) =>
+				new Map(current).set(
+					candidate.url,
+					error instanceof Error
+						? error.message
+						: "Could not add this Resource.",
+				),
+			);
 		} finally {
 			setAddingRemote((current) => {
 				const next = new Set(current);
@@ -431,6 +482,11 @@ export function LibraryView({
 
 	async function handleRefresh(resourceId: string) {
 		setRefreshing((current) => new Set(current).add(resourceId));
+		setReprocessErrors((current) => {
+			const next = new Map(current);
+			next.delete(resourceId);
+			return next;
+		});
 		try {
 			const response = await fetch(
 				`/api/resources/${encodeURIComponent(resourceId)}/refresh`,
@@ -440,6 +496,15 @@ export function LibraryView({
 			const updated = await fetch("/api/resources");
 			if (!updated.ok) throw new Error(await responseError(updated));
 			onResourcesChange((await updated.json()) as ResourceState[]);
+		} catch (error) {
+			setReprocessErrors((current) =>
+				new Map(current).set(
+					resourceId,
+					error instanceof Error
+						? error.message
+						: "Could not refresh this Resource.",
+				),
+			);
 		} finally {
 			setRefreshing((current) => {
 				const next = new Set(current);
@@ -558,7 +623,7 @@ export function LibraryView({
 					Files, uploads, and attachments available to the Course Agent for
 					research and grounding.
 				</p>
-		</header>
+			</header>
 
 			<dialog
 				ref={modelDialog}
@@ -569,15 +634,19 @@ export function LibraryView({
 					else setPendingModelAction(null);
 				}}
 			>
-				<h2 id="model-download-heading">Download document processing models?</h2>
+				<h2 id="model-download-heading">
+					Download document processing models?
+				</h2>
 				<p>
 					PDF processing uses local layout, table, and text recognition models.
 					The models use several hundred megabytes of storage. They will be
-					downloaded once to this device and kept outside your Course
-					Workspace. Your document stays on this device.
+					downloaded once to this device and kept outside your Course Workspace.
+					Your document stays on this device.
 				</p>
 				{pendingModelAction?.kind === "upload" ? (
-					<p>Cancel leaves the file unuploaded. You can select it again later.</p>
+					<p>
+						Cancel leaves the file unuploaded. You can select it again later.
+					</p>
 				) : pendingModelAction?.kind === "reprocess" ||
 					pendingModelAction?.kind === "process" ? (
 					<p>Cancel keeps the existing resource unchanged.</p>
@@ -593,8 +662,8 @@ export function LibraryView({
 							value={modelStatus?.completed_steps ?? 0}
 						/>
 						<p>
-							{modelStatus?.completed_steps ?? 0} of {modelStatus?.total_steps ?? 3}{" "}
-							stages complete
+							{modelStatus?.completed_steps ?? 0} of{" "}
+							{modelStatus?.total_steps ?? 3} stages complete
 						</p>
 					</div>
 				) : null}
@@ -618,7 +687,7 @@ export function LibraryView({
 							: pendingModelAction?.kind === "upload"
 								? "Download and upload"
 								: pendingModelAction?.kind === "reprocess" ||
-									pendingModelAction?.kind === "process"
+										pendingModelAction?.kind === "process"
 									? "Download and process"
 									: "Download models"}
 					</button>
@@ -702,7 +771,9 @@ export function LibraryView({
 					</div>
 					<div className="section-actions">
 						{modelStatus?.ready ? (
-							<span className="status-badge status-ready">PDF models ready</span>
+							<span className="status-badge status-ready">
+								PDF models ready
+							</span>
 						) : (
 							<button
 								className="quiet-action"
@@ -742,6 +813,9 @@ export function LibraryView({
 						{statusCounts.unprocessed
 							? ` · ${statusCounts.unprocessed} unprocessed`
 							: ""}
+						{statusCounts.processing
+							? ` · ${statusCounts.processing} processing`
+							: ""}
 						{statusCounts.failed ? ` · ${statusCounts.failed} failed` : ""}
 						{resources.filter((r) => r.indexed).length > 0
 							? ` · ${resources.filter((r) => r.indexed).length} indexed`
@@ -768,7 +842,13 @@ export function LibraryView({
 										<strong
 											className={`status-badge status-${resource.status}`}
 										>
-											{statusBadge(resource.status)}
+											{resource.kind === "remote" && !resource.snapshot
+												? resource.status === "processing"
+													? "Fetching…"
+													: resource.status === "unprocessed"
+														? "Awaiting download"
+														: statusBadge(resource.status)
+												: statusBadge(resource.status)}
 										</strong>
 										{resource.status === "ready" && resource.indexed ? (
 											<strong className="status-badge status-indexed">
@@ -784,7 +864,8 @@ export function LibraryView({
 												<strong className="status-badge status-ready">
 													Admitted
 												</strong>
-												{resource.snapshot &&
+												{resource.status === "ready" &&
+												resource.snapshot &&
 												admitted.source_version_id !==
 													resource.snapshot.content_hash ? (
 													<>
@@ -837,6 +918,7 @@ export function LibraryView({
 									) : null}
 									<div className="resource-actions">
 										{!resource.snapshot &&
+										resource.kind === "local-file" &&
 										(resource.status === "unprocessed" ||
 											resource.status === "failed") ? (
 											<button
@@ -850,7 +932,7 @@ export function LibraryView({
 													: "Make searchable"}
 											</button>
 										) : null}
-										{resource.snapshot ? (
+										{resource.snapshot && resource.status !== "processing" ? (
 											<button
 												className="compact-action secondary-action"
 												type="button"
@@ -881,11 +963,16 @@ export function LibraryView({
 												className="compact-action secondary-action"
 												type="button"
 												onClick={() => void handleRefresh(resource.resource_id)}
-												disabled={refreshing.has(resource.resource_id)}
+												disabled={
+													refreshing.has(resource.resource_id) ||
+													resource.status === "processing"
+												}
 											>
 												{refreshing.has(resource.resource_id)
-													? "Refreshing…"
-													: "Refresh"}
+													? "Fetching…"
+													: !resource.snapshot
+														? "Retry fetch"
+														: "Refresh"}
 											</button>
 										) : null}
 										{!admitted ? (
@@ -927,10 +1014,10 @@ export function LibraryView({
 					</div>
 				</div>
 				<p className="network-disclosure" role="note">
-					Searching sends only your query to the listed public discovery services.
-					Adding a result sends its URL to that result&apos;s host so Course Harness
-					can capture a Snapshot. These connectors use no Provider Account or
-					unrelated environment credentials.
+					Searching sends only your query to the listed public discovery
+					services. Adding a result sends its URL to that result&apos;s host so
+					Course Harness can capture a Snapshot. These connectors use no
+					Provider Account or unrelated environment credentials.
 				</p>
 
 				<form className="search-form" onSubmit={handleDiscoverySearch}>
@@ -991,16 +1078,32 @@ export function LibraryView({
 														{candidate.summary.length > 500 ? "…" : ""}
 													</p>
 												) : null}
+												{remoteErrors.get(candidate.url) ? (
+													<p className="library-error" role="alert">
+														{remoteErrors.get(candidate.url)}
+													</p>
+												) : null}
 												<div className="resource-actions">
 													<button
 														className="compact-action secondary-action"
 														type="button"
 														onClick={() => void handleAddRemote(candidate)}
-														disabled={addingRemote.has(candidate.url)}
+														disabled={
+															addingRemote.has(candidate.url) ||
+															resources.some(
+																(resource) =>
+																	resource.location === candidate.url,
+															)
+														}
 													>
 														{addingRemote.has(candidate.url)
 															? "Adding…"
-															: "Add to Library"}
+															: resources.some(
+																		(resource) =>
+																			resource.location === candidate.url,
+																	)
+																? "In Library"
+																: "Add to Library"}
 													</button>
 												</div>
 											</li>

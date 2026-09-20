@@ -285,7 +285,10 @@ def register_resource(registry_path: Path, request: ResourceRegistrationRequest)
 
 
 def update_resource_snapshot(
-    registry_path: Path, resource_id: str, snapshot_hash: str
+    registry_path: Path,
+    resource_id: str,
+    snapshot_hash: str,
+    media_type: str | None = None,
 ) -> Resource | None:
     index = read_library_index(registry_path)
     for idx, resource in enumerate(index.resources):
@@ -295,7 +298,11 @@ def update_resource_snapshot(
             if old_hash is not None and old_hash != snapshot_hash and old_hash not in history:
                 history.append(old_hash)
             updated = resource.model_copy(
-                update={"snapshot_hash": snapshot_hash, "snapshot_history": history}
+                update={
+                    "snapshot_hash": snapshot_hash,
+                    "snapshot_history": history,
+                    "media_type": media_type or resource.media_type,
+                }
             )
             index.resources[idx] = updated
             write_library_index(registry_path, index)

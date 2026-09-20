@@ -158,6 +158,7 @@ def serialize_sources_index(index: SourcesIndex) -> bytes:
 def admit_source(
     workspace: Path,
     data_dir: Path,
+    cache_dir: Path,
     resource_id: str,
     label: str | None = None,
     *,
@@ -170,7 +171,10 @@ def admit_source(
     if resource is None:
         raise ValueError(f"Resource {resource_id} was not found in the Library.")
 
-    if resource.snapshot_hash is None:
+    from course_harness.library import get_resource_state  # noqa: PLC0415
+
+    state = get_resource_state(data_dir, cache_dir, resource_id)
+    if resource.snapshot_hash is None or state is None or state.status != "ready":
         raise ValueError(
             f"Resource {resource_id} has not been processed. Process it in the Library first."
         )
@@ -199,6 +203,7 @@ def _generate_source_id() -> str:
 def adopt_source_version(
     workspace: Path,
     data_dir: Path,
+    cache_dir: Path,
     source_id: str,
     *,
     expected: CanonicalFile | None = None,
@@ -220,6 +225,12 @@ def adopt_source_version(
 
     if resource.snapshot_hash == source.source_version_id:
         raise ValueError("Source is already at the latest version.")
+
+    from course_harness.library import get_resource_state  # noqa: PLC0415
+
+    state = get_resource_state(data_dir, cache_dir, resource.id)
+    if state is None or state.status != "ready":
+        raise ValueError("Latest Resource version has not been processed yet.")
 
     updated_source = source.model_copy(update={"source_version_id": resource.snapshot_hash})
     existing_index.sources = [

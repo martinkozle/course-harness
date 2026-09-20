@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import json
 import os
@@ -12,11 +13,25 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from course_harness import resources as res
 from course_harness.app import create_app
-from course_harness.library import register_and_snapshot
+from course_harness.library import (
+    register_and_snapshot,
+    register_remote_reference,
+    reprocess_resource,
+    save_remote_snapshot,
+)
 from course_harness.providers import ProviderCapabilities
 from course_harness.search import rebuild_index, search_db_path, search_raw
 
 SEARCH_FIXTURES = Path(__file__).with_name("fixtures") / "search"
+
+
+async def _wait_for_remote_ready(client: httpx2.AsyncClient, resource_id: str) -> None:
+    async with asyncio.timeout(5):
+        while True:
+            state = (await client.get(f"/api/resources/{resource_id}")).json()
+            if state["status"] == "ready":
+                return
+            await asyncio.sleep(0.01)
 
 
 async def _verified_capabilities(_request: object) -> ProviderCapabilities:
@@ -72,6 +87,44 @@ async def test_admit_source_requires_processed_resource(tmp_path: Path) -> None:
         )
     assert response.status_code == 422
     assert "not found in the Library" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_snapshot_cannot_be_admitted_before_processing(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    data_dir = tmp_path / "data"
+    cache_dir = tmp_path / "cache"
+    resource = register_remote_reference(data_dir, "https://example.com/doc.md")
+    save_remote_snapshot(data_dir, resource.resource_id, b"# Pending", "text/markdown")
+
+    transport = httpx2.ASGITransport(app=_app(workspace, data_dir=data_dir, cache_dir=cache_dir))
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/api/sources", json={"resource_id": resource.resource_id})
+
+    assert response.status_code == 422
+    assert "not been processed" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_source_cannot_adopt_unprocessed_snapshot(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    data_dir = tmp_path / "data"
+    cache_dir = tmp_path / "cache"
+    resource = register_remote_reference(data_dir, "https://example.com/doc.md")
+    save_remote_snapshot(data_dir, resource.resource_id, b"# First", "text/markdown")
+    assert reprocess_resource(data_dir, cache_dir, resource.resource_id) is not None
+
+    transport = httpx2.ASGITransport(app=_app(workspace, data_dir=data_dir, cache_dir=cache_dir))
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        admitted = await client.post("/api/sources", json={"resource_id": resource.resource_id})
+        assert admitted.status_code == 201
+        save_remote_snapshot(data_dir, resource.resource_id, b"# Second", "text/markdown")
+        response = await client.post(f"/api/sources/{admitted.json()['id']}/adopt-version")
+
+    assert response.status_code == 422
+    assert "not been processed" in response.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -878,6 +931,7 @@ async def test_adopt_version_updates_source(tmp_path: Path) -> None:
                 json={"url": "https://example.com/source.md"},
             )
             assert create_r.status_code == 201
+            await _wait_for_remote_ready(client, create_r.json()["resource_id"])
 
         resource_body = (await client.get("/api/resources")).json()
         resource_id = resource_body[0]["resource_id"]
@@ -896,6 +950,7 @@ async def test_adopt_version_updates_source(tmp_path: Path) -> None:
         ):
             refresh_r = await client.post(f"/api/resources/{resource_id}/refresh")
             assert refresh_r.status_code == 200
+            await _wait_for_remote_ready(client, resource_id)
 
         adopt_r = await client.post(f"/api/sources/{source_id}/adopt-version")
         assert adopt_r.status_code == 200
@@ -925,6 +980,7 @@ async def test_adopt_version_already_latest(tmp_path: Path) -> None:
                 json={"url": "https://example.com/stable.md"},
             )
             assert create_r.status_code == 201
+            await _wait_for_remote_ready(client, create_r.json()["resource_id"])
 
         resource_body = (await client.get("/api/resources")).json()
         resource_id = resource_body[0]["resource_id"]

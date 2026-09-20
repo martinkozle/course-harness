@@ -2232,6 +2232,7 @@ def create_app(
                 source = sources_module.admit_source(
                     active,
                     data_dir,
+                    cache_dir,
                     request.resource_id,
                     label=request.label,
                     expected=expected_sources,
@@ -2370,15 +2371,67 @@ def create_app(
     @app.delete("/api/resources/{resource_id}", status_code=204)
     async def remove_resource(resource_id: str) -> Response:
         require_workspace()
-        removed = library.remove_resource(data_dir, cache_dir, resource_id)
+        async with resource_registry_lock:
+            removed = library.remove_resource(data_dir, cache_dir, resource_id)
         if not removed:
             raise HTTPException(status_code=404, detail="Resource was not found")
+        remote_job_states.pop(resource_id, None)
         return Response(status_code=204)
+
+    resource_registry_lock = asyncio.Lock()
+    remote_job_states: dict[str, tuple[res.ProcessingStatus, str | None]] = {}
+    remote_jobs: dict[str, asyncio.Task[None]] = {}
+
+    def with_remote_job_state(state: res.ResourceState) -> res.ResourceState:
+        job_state = remote_job_states.get(state.resource_id)
+        if job_state is None:
+            return state
+        status, error = job_state
+        return state.model_copy(update={"status": status, "error": error})
+
+    def schedule_remote_capture(resource_id: str, url: str, media_type: str | None) -> None:
+        remote_job_states[resource_id] = ("processing", None)
+
+        async def capture_and_process() -> None:
+            try:
+                content, resolved_type = await library.fetch_remote_resource(
+                    url, media_type, host_resolver=remote_host_resolver
+                )
+                async with resource_registry_lock:
+                    snapshot = await asyncio.to_thread(
+                        library.save_remote_snapshot,
+                        data_dir,
+                        resource_id,
+                        content,
+                        resolved_type,
+                    )
+                if snapshot is None:
+                    return
+                result = await asyncio.to_thread(
+                    library.reprocess_resource, data_dir, cache_dir, resource_id
+                )
+                if library.get_resource_state(data_dir, cache_dir, resource_id) is None:
+                    remote_job_states.pop(resource_id, None)
+                elif result is not None and result.status != "ready":
+                    remote_job_states[resource_id] = (result.status, result.error)
+                else:
+                    remote_job_states.pop(resource_id, None)
+            except Exception as error:
+                logger.warning("Remote Resource %s could not be prepared: %s", resource_id, error)
+                if library.get_resource_state(data_dir, cache_dir, resource_id) is not None:
+                    remote_job_states[resource_id] = ("failed", str(error))
+            finally:
+                remote_jobs.pop(resource_id, None)
+
+        remote_jobs[resource_id] = asyncio.create_task(capture_and_process())
 
     @app.get("/api/resources", response_model=list[res.ResourceState])
     async def list_resources() -> list[res.ResourceState]:
         require_workspace()
-        return library.list_resources_with_state(data_dir, cache_dir)
+        return [
+            with_remote_job_state(state)
+            for state in library.list_resources_with_state(data_dir, cache_dir)
+        ]
 
     model_download_lock = asyncio.Lock()
     model_download_status = docling_parser.ModelDownloadStatus(
@@ -2439,13 +2492,14 @@ def create_app(
         state = library.get_resource_state(data_dir, cache_dir, resource_id)
         if state is None:
             raise HTTPException(status_code=404, detail="Resource was not found")
-        return state
+        return with_remote_job_state(state)
 
     @app.post("/api/resources", response_model=res.Resource, status_code=201)
     async def register_resource_route(request: res.ResourceRegistrationRequest) -> res.Resource:
         require_workspace()
         registry = library.registry_path(data_dir)
-        return res.register_resource(registry, request)
+        async with resource_registry_lock:
+            return res.register_resource(registry, request)
 
     @app.post("/api/resources/{resource_id}/process", response_model=res.ResourceState)
     async def process_resource(resource_id: str) -> res.ResourceState:
@@ -2472,9 +2526,10 @@ def create_app(
                 detail="Uploaded Resources must be processed with their content payload.",
             )
 
-        result = await asyncio.to_thread(
-            library.process_existing_resource, data_dir, cache_dir, resource_id, content
-        )
+        async with resource_registry_lock:
+            result = await asyncio.to_thread(
+                library.process_existing_resource, data_dir, cache_dir, resource_id, content
+            )
         if result is None:
             raise HTTPException(status_code=404, detail="Resource was not found")
         if result.status != "ready":
@@ -2484,6 +2539,8 @@ def create_app(
     @app.post("/api/resources/{resource_id}/reprocess", response_model=res.ResourceState)
     async def reprocess_resource(resource_id: str) -> res.ResourceState:
         require_workspace()
+        if resource_id in remote_jobs:
+            raise HTTPException(status_code=409, detail="This Resource is already processing.")
         index = res.read_library_index(library.registry_path(data_dir))
         resource = next((r for r in index.resources if r.id == resource_id), None)
         if resource is not None:
@@ -2497,6 +2554,7 @@ def create_app(
             )
         if result.status != "ready":
             raise HTTPException(status_code=422, detail=result.error or "Reprocessing failed.")
+        remote_job_states.pop(resource_id, None)
         return result
 
     @app.post("/api/resources/upload", response_model=res.ResourceState, status_code=201)
@@ -2529,9 +2587,10 @@ def create_app(
             location=str(filename),
             media_type=media_type,
         )
-        _, _, state = await asyncio.to_thread(
-            library.register_and_snapshot, data_dir, cache_dir, record, content
-        )
+        async with resource_registry_lock:
+            _, _, state = await asyncio.to_thread(
+                library.register_and_snapshot, data_dir, cache_dir, record, content
+            )
         return state
 
     @app.get("/api/resources/{resource_id}/content")
@@ -2573,28 +2632,34 @@ def create_app(
         require_workspace()
         try:
             await res.validate_remote_url(request.url, host_resolver=remote_host_resolver)
-            return await library.register_remote_resource(
-                data_dir,
-                cache_dir,
-                request.url,
-                request.media_type,
-                host_resolver=remote_host_resolver,
-            )
+            async with resource_registry_lock:
+                state = library.register_remote_reference(data_dir, request.url, request.media_type)
+            schedule_remote_capture(state.resource_id, request.url, request.media_type)
+            return with_remote_job_state(state)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
     @app.post("/api/resources/{resource_id}/refresh", response_model=res.ResourceState)
     async def refresh_resource(resource_id: str) -> res.ResourceState:
         require_workspace()
-        try:
-            return await library.refresh_remote_resource(
-                data_dir,
-                cache_dir,
-                resource_id,
-                host_resolver=remote_host_resolver,
-            )
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+        state = library.get_resource_state(data_dir, cache_dir, resource_id)
+        if state is None:
+            raise HTTPException(status_code=422, detail="Resource was not found in the Library.")
+        if state.kind != "remote":
+            raise HTTPException(status_code=422, detail="Only remote resources can be refreshed.")
+        if resource_id in remote_jobs:
+            return with_remote_job_state(state)
+        index = res.read_library_index(library.registry_path(data_dir))
+        resource = next(
+            (resource for resource in index.resources if resource.id == resource_id), None
+        )
+        if resource is None:
+            raise HTTPException(status_code=422, detail="Resource was not found in the Library.")
+        media_type = (
+            resource.media_type if resource.media_type != "application/octet-stream" else None
+        )
+        schedule_remote_capture(resource_id, resource.location, media_type)
+        return with_remote_job_state(state)
 
     @app.post("/api/sources/{source_id}/adopt-version", response_model=sources_module.Source)
     async def adopt_source_version(source_id: str) -> sources_module.Source:
@@ -2605,7 +2670,7 @@ def create_app(
                 before_index = sources_module.read_sources_index(active)
                 provenance_permitted = require_canonical_authoring(active)
                 source = sources_module.adopt_source_version(
-                    active, data_dir, source_id, expected=expected_sources
+                    active, data_dir, cache_dir, source_id, expected=expected_sources
                 )
                 if before_index is None:
                     raise ValueError("No Sources exist in this Workspace.")

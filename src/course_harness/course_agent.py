@@ -674,6 +674,7 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             source = admit_source(
                 ctx.deps.workspace,
                 ctx.deps.data_dir,
+                ctx.deps.cache_dir,
                 resource_id,
                 label=label,
                 expected=_agent_precondition(ctx.deps, "sources.yaml"),

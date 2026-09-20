@@ -32,6 +32,18 @@ def _app(workspace: Path, data_dir: Path, cache_dir: Path):
     )
 
 
+async def _wait_for_resource_status(
+    client: httpx2.AsyncClient, resource_id: str, expected: str
+) -> dict:
+    async with asyncio.timeout(5):
+        while True:
+            response = await client.get(f"/api/resources/{resource_id}")
+            state = response.json()
+            if state["status"] == expected:
+                return state
+            await asyncio.sleep(0.01)
+
+
 @pytest.mark.anyio
 async def test_model_download_reports_progress_while_running(tmp_path: Path) -> None:
     workspace = tmp_path / "resource-course"
@@ -649,13 +661,6 @@ async def test_register_remote_resource(tmp_path: Path) -> None:
     app = _app(workspace, data_dir, cache_dir)
     transport = httpx2.ASGITransport(app=app)
 
-    def mock_http(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(
-            200,
-            headers={"content-type": "text/markdown"},
-            text="# Remote content",
-        )
-
     with patch(
         "course_harness.library.fetch_remote_resource",
         AsyncMock(return_value=(b"# Remote content", "text/markdown")),
@@ -665,13 +670,95 @@ async def test_register_remote_resource(tmp_path: Path) -> None:
                 "/api/resources/remote",
                 json={"url": "https://example.com/doc.md"},
             )
+            ready = await _wait_for_resource_status(client, response.json()["resource_id"], "ready")
 
     assert response.status_code == 201
     body = response.json()
     assert body["kind"] == "remote"
     assert body["location"] == "https://example.com/doc.md"
-    assert body["status"] == "ready"
-    assert body["indexed"] is True
+    assert body["status"] == "processing"
+    assert ready["indexed"] is True
+
+
+@pytest.mark.anyio
+async def test_remote_add_returns_while_processing_continues(tmp_path: Path) -> None:
+    workspace = tmp_path / "remote-course"
+    workspace.mkdir()
+    started = threading.Event()
+    release = threading.Event()
+    original_process = res.process_snapshot
+
+    def slow_process(cache_dir: Path, content_hash: str, media_type: str, content: bytes):
+        started.set()
+        assert release.wait(timeout=5)
+        return original_process(cache_dir, content_hash, media_type, content)
+
+    app = _app(workspace, tmp_path / "library-data", tmp_path / "library-cache")
+    transport = httpx2.ASGITransport(app=app)
+    with (
+        patch(
+            "course_harness.library.fetch_remote_resource",
+            AsyncMock(return_value=(b"# Remote content", "text/markdown")),
+        ),
+        patch("course_harness.library.process_snapshot", side_effect=slow_process),
+    ):
+        async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+            adding = asyncio.create_task(
+                client.post("/api/resources/remote", json={"url": "https://example.com/doc.md"})
+            )
+            try:
+                assert await asyncio.to_thread(started.wait, 5)
+                await asyncio.sleep(0.05)
+                assert adding.done(), "Adding should finish before document processing"
+                response = await adding
+                assert response.status_code == 201
+                listed = await client.get("/api/resources")
+                assert listed.json()[0]["status"] == "processing"
+            finally:
+                release.set()
+            await _wait_for_resource_status(client, response.json()["resource_id"], "ready")
+
+
+@pytest.mark.anyio
+async def test_remote_add_returns_before_download_and_failed_download_can_retry(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "remote-course"
+    workspace.mkdir()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def delayed_failure(*_args: object, **_kwargs: object) -> tuple[bytes, str]:
+        started.set()
+        await release.wait()
+        raise ValueError("Remote host did not respond")
+
+    app = _app(workspace, tmp_path / "library-data", tmp_path / "library-cache")
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        with patch("course_harness.library.fetch_remote_resource", side_effect=delayed_failure):
+            response = await client.post(
+                "/api/resources/remote", json={"url": "https://example.com/doc.md"}
+            )
+            resource_id = response.json()["resource_id"]
+            assert response.status_code == 201
+            assert response.json()["status"] == "processing"
+            await started.wait()
+            listed = await client.get("/api/resources")
+            assert listed.json()[0]["status"] == "processing"
+            assert listed.json()[0]["snapshot"] is None
+            release.set()
+            failed = await _wait_for_resource_status(client, resource_id, "failed")
+            assert failed["error"] == "Remote host did not respond"
+
+        with patch(
+            "course_harness.library.fetch_remote_resource",
+            AsyncMock(return_value=(b"# Recovered", "text/markdown")),
+        ):
+            retry = await client.post(f"/api/resources/{resource_id}/refresh")
+            assert retry.json()["status"] == "processing"
+            ready = await _wait_for_resource_status(client, resource_id, "ready")
+            assert ready["snapshot"] is not None
 
 
 @pytest.mark.parametrize(
@@ -865,12 +952,15 @@ async def test_snapshot_history_tracks_versions(tmp_path: Path) -> None:
             )
             assert create.status_code == 201
             resource_id = create.json()["resource_id"]
+            await _wait_for_resource_status(client, resource_id, "ready")
 
         with patch(
             "course_harness.library.fetch_remote_resource",
             AsyncMock(return_value=(content_v2, "text/markdown")),
         ):
-            await client.post(f"/api/resources/{resource_id}/refresh")
+            refresh = await client.post(f"/api/resources/{resource_id}/refresh")
+            assert refresh.json()["status"] == "processing"
+            await _wait_for_resource_status(client, resource_id, "ready")
 
         index = res.read_library_index(data_dir / "registry.json")
         resource = next((r for r in index.resources if r.id == resource_id), None)
