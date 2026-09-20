@@ -2381,26 +2381,57 @@ def create_app(
         return library.list_resources_with_state(data_dir, cache_dir)
 
     model_download_lock = asyncio.Lock()
+    model_download_status = docling_parser.ModelDownloadStatus(
+        ready=docling_parser.models_ready(cache_dir)
+    )
 
-    @app.get("/api/resources/parser-models")
-    async def parser_models_status() -> dict[str, bool]:
+    def require_pdf_models(media_type: str) -> None:
+        if media_type == docling_parser.PDF_MEDIA_TYPE and not docling_parser.models_ready(
+            cache_dir
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Download PDF processing models before processing this resource.",
+            )
+
+    @app.get("/api/resources/parser-models", response_model=docling_parser.ModelDownloadStatus)
+    async def parser_models_status() -> docling_parser.ModelDownloadStatus:
         require_workspace()
-        return {"ready": docling_parser.models_ready(cache_dir)}
+        model_download_status.ready = docling_parser.models_ready(cache_dir)
+        return model_download_status
 
-    @app.post("/api/resources/parser-models")
-    async def install_parser_models() -> dict[str, bool]:
+    @app.post("/api/resources/parser-models", response_model=docling_parser.ModelDownloadStatus)
+    async def install_parser_models() -> docling_parser.ModelDownloadStatus:
         require_workspace()
         async with model_download_lock:
             if not docling_parser.models_ready(cache_dir):
+                model_download_status.downloading = True
+                model_download_status.error = None
+                model_download_status.completed_steps = 0
+
+                def update_progress(stage: str, completed: int) -> None:
+                    model_download_status.stage = stage
+                    model_download_status.completed_steps = completed
+
                 try:
-                    await asyncio.to_thread(docling_parser.download_models, cache_dir)
+                    await asyncio.to_thread(
+                        docling_parser.download_models, cache_dir, update_progress
+                    )
                 except Exception as error:
                     logger.exception("Document model download failed")
+                    model_download_status.error = (
+                        "Document models could not be downloaded. Please retry."
+                    )
                     raise HTTPException(
                         status_code=502,
                         detail="Document models could not be downloaded. Please retry.",
                     ) from error
-        return {"ready": True}
+                finally:
+                    model_download_status.downloading = False
+            model_download_status.ready = True
+            model_download_status.stage = "Ready"
+            model_download_status.completed_steps = model_download_status.total_steps
+        return model_download_status
 
     @app.get("/api/resources/{resource_id}", response_model=res.ResourceState)
     async def resource_detail(resource_id: str) -> res.ResourceState:
@@ -2423,6 +2454,7 @@ def create_app(
         resource = next((r for r in index.resources if r.id == resource_id), None)
         if resource is None:
             raise HTTPException(status_code=404, detail="Resource was not found")
+        require_pdf_models(resource.media_type)
 
         from pathlib import Path as _Path
 
@@ -2452,6 +2484,10 @@ def create_app(
     @app.post("/api/resources/{resource_id}/reprocess", response_model=res.ResourceState)
     async def reprocess_resource(resource_id: str) -> res.ResourceState:
         require_workspace()
+        index = res.read_library_index(library.registry_path(data_dir))
+        resource = next((r for r in index.resources if r.id == resource_id), None)
+        if resource is not None:
+            require_pdf_models(resource.media_type)
         result = await asyncio.to_thread(
             library.reprocess_resource, data_dir, cache_dir, resource_id
         )
@@ -2486,13 +2522,7 @@ def create_app(
         ):
             media_type = res.identify_media_type(str(filename), content)
 
-        if media_type == docling_parser.PDF_MEDIA_TYPE and not docling_parser.models_ready(
-            cache_dir
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="Download document processing models before uploading a PDF.",
-            )
+        require_pdf_models(media_type)
 
         record = res.ResourceRegistrationRequest(
             kind="upload",

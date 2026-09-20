@@ -5694,3 +5694,9 @@ button.authoritative-content-slot:focus-visible {
 	justify-content: flex-end;
 	margin-top: 1.5rem;
 }
+
+.model-download-progress progress {
+	width: 100%;
+	height: 0.75rem;
+	accent-color: #245d95;
+}

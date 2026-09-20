@@ -1,7 +1,10 @@
 """Local document conversion and model provisioning for the Library."""
 
 import io
+from collections.abc import Callable
 from pathlib import Path
+
+from pydantic import BaseModel
 
 PDF_MEDIA_TYPE = "application/pdf"
 OFFICE_MEDIA_TYPES = {
@@ -14,17 +17,42 @@ def models_ready(cache_dir: Path) -> bool:
     return (cache_dir / "docling-models.ready").is_file()
 
 
-def download_models(cache_dir: Path) -> None:
+ModelProgress = Callable[[str, int], None]
+
+
+class ModelDownloadStatus(BaseModel):
+    ready: bool
+    downloading: bool = False
+    stage: str | None = None
+    completed_steps: int = 0
+    total_steps: int = 3
+    error: str | None = None
+
+
+def download_models(cache_dir: Path, on_progress: ModelProgress | None = None) -> None:
     """Prefetch only the layout, table, and OCR models used for PDF conversion."""
     from docling.utils.model_downloader import download_models as docling_download_models
 
     models_dir = cache_dir / "docling-models"
-    docling_download_models(
-        output_dir=models_dir,
-        with_code_formula=False,
-        with_picture_classifier=False,
+    stages = (
+        "Downloading layout models",
+        "Downloading table model",
+        "Downloading text recognition models",
     )
+    for completed, stage in enumerate(stages):
+        if on_progress is not None:
+            on_progress(stage, completed)
+        docling_download_models(
+            output_dir=models_dir,
+            with_layout=completed == 0,
+            with_tableformer=completed == 1,
+            with_rapidocr=completed == 2,
+            with_code_formula=False,
+            with_picture_classifier=False,
+        )
     (cache_dir / "docling-models.ready").write_text("ready\n", encoding="utf-8")
+    if on_progress is not None:
+        on_progress("Ready", len(stages))
 
 
 def convert_document(media_type: str, content: bytes, cache_dir: Path) -> tuple[str, str]:

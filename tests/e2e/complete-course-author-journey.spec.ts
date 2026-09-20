@@ -145,8 +145,39 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 			/Searching sends only your query to the listed public discovery services/,
 		),
 	).toBeVisible();
+	let modelDownloadStarted = false;
+	let modelDownloadCompleted = false;
 	await page.route("**/api/resources/parser-models", async (route) => {
-		await route.fulfill({ json: { ready: false } });
+		if (route.request().method() === "POST") {
+			modelDownloadStarted = true;
+			await new Promise((resolve) => setTimeout(resolve, 1200));
+			modelDownloadCompleted = true;
+			await route.fulfill({
+				json: {
+					ready: true,
+					downloading: false,
+					stage: "Ready",
+					completed_steps: 3,
+					total_steps: 3,
+					error: null,
+				},
+			});
+			return;
+		}
+		await route.fulfill({
+			json: {
+				ready: modelDownloadCompleted,
+				downloading: modelDownloadStarted && !modelDownloadCompleted,
+				stage: modelDownloadCompleted
+					? "Ready"
+					: modelDownloadStarted
+						? "Downloading layout models"
+						: null,
+				completed_steps: modelDownloadCompleted ? 3 : 0,
+				total_steps: 3,
+				error: null,
+			},
+		});
 	});
 	await page
 		.locator('input[type="file"]')
@@ -157,6 +188,13 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	).toBeVisible();
 	await page.getByRole("button", { name: "Cancel" }).click();
 	await expect(page.getByRole("dialog")).toBeHidden();
+	await page.getByRole("button", { name: "Download PDF models" }).click();
+	await page.getByRole("button", { name: "Download models" }).click();
+	await expect(
+		page.getByRole("progressbar", { name: "Model download stages completed" }),
+	).toBeVisible();
+	await expect(page.getByText("Downloading layout models")).toBeVisible();
+	await expect(page.getByText("PDF models ready")).toBeVisible();
 	await page.unroute("**/api/resources/parser-models");
 	await page
 		.locator('input[type="file"]')

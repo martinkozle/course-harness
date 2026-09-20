@@ -50,6 +50,10 @@ On the first PDF upload, the Library asks before downloading layout, table, and 
 the application cache outside the Course Workspace. Conversion runs locally and stores a
 structured Docling result alongside the searchable Markdown. Reprocess existing Snapshots in the
 Library to make them searchable. The original files remain immutable Snapshots.
+The Library also has a **Download PDF models** control. If models are missing when you process or
+reprocess an existing PDF, the same prompt appears. Cancel leaves the Resource unchanged. The
+download shows progress across its layout, table, and OCR stages; stage progress is not a byte
+percentage.
 
 Each Workspace can keep multiple Conversations in that private application state. Use
 **Conversations** in the Course Agent panel to start or reopen one, rename it, archive it, or delete

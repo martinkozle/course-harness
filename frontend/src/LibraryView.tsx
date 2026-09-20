@@ -19,6 +19,21 @@ type LibraryViewProps = {
 	onEvidenceTargetClose: () => void;
 };
 
+type ModelDownloadStatus = {
+	ready: boolean;
+	downloading: boolean;
+	stage: string | null;
+	completed_steps: number;
+	total_steps: number;
+	error: string | null;
+};
+
+type PendingModelAction =
+	| { kind: "upload"; file: File }
+	| { kind: "reprocess"; resourceId: string }
+	| { kind: "process"; resourceId: string }
+	| { kind: "manual" };
+
 function formatBytes(bytes: number): string {
 	if (bytes === 0) return "0 B";
 	const units = ["B", "KB", "MB"];
@@ -49,7 +64,11 @@ export function LibraryView({
 	onEvidenceTargetClose,
 }: LibraryViewProps) {
 	const [uploading, setUploading] = useState(false);
-	const [pendingPdf, setPendingPdf] = useState<File | null>(null);
+	const [pendingModelAction, setPendingModelAction] =
+		useState<PendingModelAction | null>(null);
+	const [modelStatus, setModelStatus] = useState<ModelDownloadStatus | null>(null);
+	const [downloadBusy, setDownloadBusy] = useState(false);
+	const [modelError, setModelError] = useState<string | null>(null);
 	const [uploadError, setUploadError] = useState<string | null>(null);
 	const modelDialog = useRef<HTMLDialogElement>(null);
 	const [processing, setProcessing] = useState<Set<string>>(new Set());
@@ -153,9 +172,36 @@ export function LibraryView({
 	);
 
 	useEffect(() => {
-		if (pendingPdf && !modelDialog.current?.open) modelDialog.current?.showModal();
-		if (!pendingPdf && modelDialog.current?.open) modelDialog.current.close();
-	}, [pendingPdf]);
+		if (pendingModelAction && !modelDialog.current?.open)
+			modelDialog.current?.showModal();
+		if (!pendingModelAction && modelDialog.current?.open)
+			modelDialog.current.close();
+	}, [pendingModelAction]);
+
+	useEffect(() => {
+		let active = true;
+		async function refresh() {
+			try {
+				const response = await fetch("/api/resources/parser-models");
+				if (!response.ok) return;
+				const status = (await response.json()) as ModelDownloadStatus;
+				if (active) setModelStatus(status);
+			} catch {
+				// The manual action reports a request error when selected.
+			}
+		}
+		void refresh();
+		if (downloadBusy) {
+			const timer = window.setInterval(() => void refresh(), 500);
+			return () => {
+				active = false;
+				window.clearInterval(timer);
+			};
+		}
+		return () => {
+			active = false;
+		};
+	}, [downloadBusy]);
 
 	async function uploadFile(file: File) {
 		setUploading(true);
@@ -186,9 +232,11 @@ export function LibraryView({
 			try {
 				const response = await fetch("/api/resources/parser-models");
 				if (!response.ok) throw new Error(await responseError(response));
-				const status = (await response.json()) as { ready: boolean };
+				const status = (await response.json()) as ModelDownloadStatus;
+				setModelStatus(status);
 				if (!status.ready) {
-					setPendingPdf(file);
+					setModelError(null);
+					setPendingModelAction({ kind: "upload", file });
 					return;
 				}
 			} catch (caught) {
@@ -202,21 +250,24 @@ export function LibraryView({
 	}
 
 	async function confirmModelDownload() {
-		if (!pendingPdf) return;
-		const file = pendingPdf;
-		setUploading(true);
-		setUploadError(null);
+		if (!pendingModelAction) return;
+		const action = pendingModelAction;
+		setDownloadBusy(true);
+		setModelError(null);
 		try {
 			const response = await fetch("/api/resources/parser-models", { method: "POST" });
 			if (!response.ok) throw new Error(await responseError(response));
-			setPendingPdf(null);
-			await uploadFile(file);
+			setModelStatus((await response.json()) as ModelDownloadStatus);
+			setPendingModelAction(null);
+			if (action.kind === "upload") await uploadFile(action.file);
+			if (action.kind === "reprocess") await handleReprocess(action.resourceId);
+			if (action.kind === "process") await handleProcess(action.resourceId);
 		} catch (caught) {
-			setUploadError(
+			setModelError(
 				caught instanceof Error ? caught.message : "Models could not be downloaded.",
 			);
 		} finally {
-			setUploading(false);
+			setDownloadBusy(false);
 		}
 	}
 
@@ -227,6 +278,11 @@ export function LibraryView({
 				`/api/resources/${encodeURIComponent(resourceId)}/process`,
 				{ method: "POST" },
 			);
+			if (response.status === 409) {
+				setModelError(null);
+				setPendingModelAction({ kind: "process", resourceId });
+				return;
+			}
 			if (!response.ok) throw new Error(await responseError(response));
 			const updated = await fetch("/api/resources");
 			if (!updated.ok) throw new Error(await responseError(updated));
@@ -252,6 +308,11 @@ export function LibraryView({
 				`/api/resources/${encodeURIComponent(resourceId)}/reprocess`,
 				{ method: "POST" },
 			);
+			if (response.status === 409) {
+				setModelError(null);
+				setPendingModelAction({ kind: "reprocess", resourceId });
+				return;
+			}
 			if (!response.ok) throw new Error(await responseError(response));
 			const updated = await fetch("/api/resources");
 			if (!updated.ok) throw new Error(await responseError(updated));
@@ -504,8 +565,8 @@ export function LibraryView({
 				className="model-download-dialog"
 				aria-labelledby="model-download-heading"
 				onCancel={(event) => {
-					if (uploading) event.preventDefault();
-					else setPendingPdf(null);
+					if (downloadBusy) event.preventDefault();
+					else setPendingModelAction(null);
 				}}
 			>
 				<h2 id="model-download-heading">Download document processing models?</h2>
@@ -515,25 +576,58 @@ export function LibraryView({
 					downloaded once to this device and kept outside your Course
 					Workspace. Your document stays on this device.
 				</p>
-				{uploadError ? <p role="alert">{uploadError}</p> : null}
+				{pendingModelAction?.kind === "upload" ? (
+					<p>Cancel leaves the file unuploaded. You can select it again later.</p>
+				) : pendingModelAction?.kind === "reprocess" ||
+					pendingModelAction?.kind === "process" ? (
+					<p>Cancel keeps the existing resource unchanged.</p>
+				) : pendingModelAction?.kind === "manual" ? (
+					<p>After the download, select Reprocess on any existing PDF.</p>
+				) : null}
+				{downloadBusy ? (
+					<div className="model-download-progress" role="status">
+						<p>{modelStatus?.stage ?? "Starting model download…"}</p>
+						<progress
+							aria-label="Model download stages completed"
+							max={modelStatus?.total_steps ?? 3}
+							value={modelStatus?.completed_steps ?? 0}
+						/>
+						<p>
+							{modelStatus?.completed_steps ?? 0} of {modelStatus?.total_steps ?? 3}{" "}
+							stages complete
+						</p>
+					</div>
+				) : null}
+				{modelError ? <p role="alert">{modelError}</p> : null}
 				<div className="section-actions">
-					<button type="button" onClick={() => setPendingPdf(null)} disabled={uploading}>
+					<button
+						type="button"
+						onClick={() => setPendingModelAction(null)}
+						disabled={downloadBusy}
+					>
 						Cancel
 					</button>
 					<button
 						type="button"
 						className="primary-action"
 						onClick={() => void confirmModelDownload()}
-						disabled={uploading}
+						disabled={downloadBusy}
 					>
-						{uploading ? "Downloading models…" : "Download and upload"}
+						{downloadBusy
+							? "Downloading models…"
+							: pendingModelAction?.kind === "upload"
+								? "Download and upload"
+								: pendingModelAction?.kind === "reprocess" ||
+									pendingModelAction?.kind === "process"
+									? "Download and process"
+									: "Download models"}
 					</button>
 				</div>
 			</dialog>
-			{uploading && !pendingPdf ? (
+			{uploading ? (
 				<p role="status">Uploading and processing your document…</p>
 			) : null}
-			{uploadError && !pendingPdf ? <p role="alert">{uploadError}</p> : null}
+			{uploadError ? <p role="alert">{uploadError}</p> : null}
 
 			{supportingEvidenceTarget ? (
 				<section
@@ -607,6 +701,20 @@ export function LibraryView({
 						<h2>Registered resources</h2>
 					</div>
 					<div className="section-actions">
+						{modelStatus?.ready ? (
+							<span className="status-badge status-ready">PDF models ready</span>
+						) : (
+							<button
+								className="quiet-action"
+								type="button"
+								onClick={() => {
+									setModelError(null);
+									setPendingModelAction({ kind: "manual" });
+								}}
+							>
+								Download PDF models
+							</button>
+						)}
 						<button
 							className="quiet-action"
 							type="button"
