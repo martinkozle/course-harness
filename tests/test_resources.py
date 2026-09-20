@@ -637,6 +637,80 @@ async def test_resource_content_endpoint(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_resource_preview_uses_snapshot_and_safe_media_type(tmp_path: Path) -> None:
+    workspace = tmp_path / "resource-course"
+    workspace.mkdir()
+    data_dir = tmp_path / "library-data"
+    cache_dir = tmp_path / "library-cache"
+    fixture = tmp_path / "hello.md"
+    fixture.write_bytes((FIXTURES / "hello.md").read_bytes())
+    original = fixture.read_bytes()
+    transport = httpx2.ASGITransport(app=_app(workspace, data_dir, cache_dir))
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        missing = await client.get("/api/resources/missing/preview")
+        create = await client.post(
+            "/api/resources",
+            json={"kind": "local-file", "location": str(fixture), "media_type": "text/markdown"},
+        )
+        resource_id = create.json()["id"]
+        no_snapshot = await client.get(f"/api/resources/{resource_id}/preview")
+        await client.post(f"/api/resources/{resource_id}/process")
+        fixture.write_bytes(b"changed after registration")
+        preview = await client.get(f"/api/resources/{resource_id}/preview")
+        fixture.write_bytes(original)
+
+    assert missing.status_code == 404
+    assert no_snapshot.status_code == 404
+    assert preview.status_code == 200
+    assert preview.headers["content-type"].startswith("text/plain")
+    assert preview.content == original
+
+
+@pytest.mark.anyio
+async def test_resource_preview_pdf_and_extracted_office_text(tmp_path: Path) -> None:
+    workspace = tmp_path / "resource-course"
+    workspace.mkdir()
+    data_dir = tmp_path / "library-data"
+    cache_dir = tmp_path / "library-cache"
+    registry = data_dir / "registry.json"
+    pdf = res.register_resource(
+        registry,
+        res.ResourceRegistrationRequest(
+            kind="local-file", location="notes.pdf", media_type="application/pdf"
+        ),
+    )
+    pdf_snapshot = res.create_snapshot(data_dir / "snapshots", pdf.id, b"%PDF-1.4\npreview")
+    res.update_resource_snapshot(registry, pdf.id, pdf_snapshot.content_hash)
+    office = res.register_resource(
+        registry,
+        res.ResourceRegistrationRequest(
+            kind="local-file",
+            location="notes.docx",
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+    )
+    office_snapshot = res.create_snapshot(data_dir / "snapshots", office.id, b"office source bytes")
+    res.update_resource_snapshot(registry, office.id, office_snapshot.content_hash)
+    transport = httpx2.ASGITransport(app=_app(workspace, data_dir, cache_dir))
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        pdf_preview = await client.get(f"/api/resources/{pdf.id}/preview")
+        before_processing = await client.get(f"/api/resources/{office.id}/preview")
+        extracted = cache_dir / "derived" / office_snapshot.content_hash / "extracted.md"
+        extracted.parent.mkdir(parents=True)
+        extracted.write_text("Extracted office content", encoding="utf-8")
+        office_preview = await client.get(f"/api/resources/{office.id}/preview")
+
+    assert pdf_preview.status_code == 200
+    assert pdf_preview.headers["content-type"] == "application/pdf"
+    assert pdf_preview.content == b"%PDF-1.4\npreview"
+    assert before_processing.status_code == 404
+    assert office_preview.status_code == 200
+    assert office_preview.text == "Extracted office content"
+
+
+@pytest.mark.anyio
 async def test_missing_resource_returns_404(tmp_path: Path) -> None:
     workspace = tmp_path / "resource-course"
     workspace.mkdir()

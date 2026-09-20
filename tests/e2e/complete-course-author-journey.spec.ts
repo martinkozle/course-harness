@@ -205,6 +205,13 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	).toBeVisible();
 	await expect(page.getByText("Ready", { exact: true })).toBeVisible();
 	await expect(page.getByText("Indexed", { exact: true })).toBeVisible();
+	await page.getByRole("button", { name: "Preview", exact: true }).click();
+	const resourcePreview = page.getByRole("dialog", { name: "Preview" });
+	await expect(resourcePreview).toBeVisible();
+	await expect(resourcePreview.getByText("chapter_causal.md")).toBeVisible();
+	await expect(resourcePreview.getByText(/counterfactual/i)).toBeVisible();
+	await page.keyboard.press("Escape");
+	await expect(resourcePreview).toBeHidden();
 	await page.getByRole("button", { name: "Use as course material" }).click();
 	await expect(page.getByText("Admitted", { exact: true })).toBeVisible();
 

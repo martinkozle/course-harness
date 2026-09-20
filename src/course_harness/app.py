@@ -2610,6 +2610,42 @@ def create_app(
             media_type=resource.media_type,
         )
 
+    @app.get("/api/resources/{resource_id}/preview")
+    async def resource_preview(resource_id: str) -> StarletteResponse:
+        require_workspace()
+        index = res.read_library_index(library.registry_path(data_dir))
+        resource = next((r for r in index.resources if r.id == resource_id), None)
+        if resource is None or resource.snapshot_hash is None:
+            raise HTTPException(status_code=404, detail="Resource preview is not available.")
+
+        snapshot_path = library.snapshots_dir(data_dir) / resource.snapshot_hash
+        if not snapshot_path.is_file():
+            raise HTTPException(status_code=404, detail="Snapshot content is missing.")
+
+        if resource.media_type == "application/pdf":
+            return StarletteResponse(
+                content=snapshot_path.read_bytes(), media_type="application/pdf"
+            )
+
+        processor = res.resolve_processor(resource.media_type)
+        if processor in {"text", "code"} or resource.media_type.startswith("text/"):
+            content = snapshot_path.read_bytes()
+        elif processor == "docling":
+            extracted_path = (
+                library.derived_dir(cache_dir) / resource.snapshot_hash / "extracted.md"
+            )
+            if not extracted_path.is_file():
+                raise HTTPException(
+                    status_code=404, detail="Process this resource to preview its text."
+                )
+            content = extracted_path.read_bytes()
+        else:
+            raise HTTPException(
+                status_code=415, detail="A preview is not available for this file type."
+            )
+
+        return StarletteResponse(content=content, media_type="text/plain; charset=utf-8")
+
     @app.post("/api/discovery/search", response_model=list[res.DiscoveryResult])
     async def discover_remote(request: res.DiscoveryRequest) -> list[res.DiscoveryResult]:
         require_workspace()

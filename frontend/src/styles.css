@@ -4121,6 +4121,39 @@ h1 {
 	overflow-y: auto;
 }
 
+.resource-preview-dialog {
+	width: min(60rem, calc(100vw - 2rem));
+	max-height: calc(100vh - 2rem);
+	padding: 1.25rem;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	background: var(--paper);
+	color: var(--ink);
+	box-shadow: var(--shadow);
+}
+
+.resource-preview-dialog::backdrop {
+	background: #15243b99;
+}
+
+.resource-preview-name {
+	max-width: 48rem;
+	margin: 0.25rem 0 0;
+	overflow-wrap: anywhere;
+	color: var(--muted);
+	font-size: 0.8rem;
+}
+
+.resource-preview-text {
+	max-height: min(70vh, 48rem);
+}
+
+.resource-preview-pdf {
+	width: 100%;
+	height: min(70vh, 48rem);
+	border: 1px solid var(--line);
+}
+
 .supporting-evidence-panel {
 	margin: 0 0 1.5rem;
 	padding: 1.25rem;

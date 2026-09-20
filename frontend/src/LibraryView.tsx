@@ -55,6 +55,100 @@ function statusBadge(status: string): string {
 	return lookup[status] ?? status;
 }
 
+function ResourcePreview({
+	resource,
+	onClose,
+}: {
+	resource: ResourceState;
+	onClose: () => void;
+}) {
+	const dialog = useRef<HTMLDialogElement>(null);
+	const [preview, setPreview] = useState<
+		| { kind: "loading" }
+		| { kind: "text"; content: string }
+		| { kind: "pdf"; url: string }
+		| { kind: "error"; message: string }
+	>({ kind: "loading" });
+
+	useEffect(() => {
+		const controller = new AbortController();
+		let objectUrl: string | null = null;
+		dialog.current?.showModal();
+		void fetch(
+			`/api/resources/${encodeURIComponent(resource.resource_id)}/preview`,
+			{ signal: controller.signal },
+		)
+			.then(async (response) => {
+				if (!response.ok) throw new Error(await responseError(response));
+				if (
+					response.headers.get("content-type")?.startsWith("application/pdf")
+				) {
+					objectUrl = URL.createObjectURL(await response.blob());
+					if (!controller.signal.aborted)
+						setPreview({ kind: "pdf", url: objectUrl });
+				} else {
+					const content = await response.text();
+					if (!controller.signal.aborted) setPreview({ kind: "text", content });
+				}
+			})
+			.catch((error) => {
+				if (!controller.signal.aborted)
+					setPreview({
+						kind: "error",
+						message:
+							error instanceof Error
+								? error.message
+								: "Could not load preview.",
+					});
+			});
+		return () => {
+			controller.abort();
+			if (objectUrl) URL.revokeObjectURL(objectUrl);
+		};
+	}, [resource.resource_id]);
+
+	return (
+		<dialog
+			ref={dialog}
+			className="resource-preview-dialog"
+			aria-labelledby="resource-preview-heading"
+			onClose={onClose}
+		>
+			<div className="content-section-heading">
+				<div>
+					<p className="section-kicker">Registered resource</p>
+					<h2 id="resource-preview-heading">Preview</h2>
+					<p className="resource-preview-name">
+						{resource.location ?? resource.resource_id}
+					</p>
+				</div>
+				<button
+					type="button"
+					className="quiet-action"
+					onClick={() => dialog.current?.close()}
+				>
+					Close preview
+				</button>
+			</div>
+			{preview.kind === "loading" ? (
+				<p role="status">Loading preview…</p>
+			) : preview.kind === "error" ? (
+				<p role="alert">{preview.message}</p>
+			) : preview.kind === "pdf" ? (
+				<iframe
+					className="resource-preview-pdf"
+					src={preview.url}
+					title={`PDF preview of ${resource.location ?? resource.resource_id}`}
+				/>
+			) : (
+				<pre className="source-content-body resource-preview-text">
+					{preview.content}
+				</pre>
+			)}
+		</dialog>
+	);
+}
+
 export function LibraryView({
 	resources,
 	sources,
@@ -163,6 +257,9 @@ export function LibraryView({
 	const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
 	const [adopting, setAdopting] = useState<Set<string>>(new Set());
 	const [removing, setRemoving] = useState<Set<string>>(new Set());
+	const [previewResource, setPreviewResource] = useState<ResourceState | null>(
+		null,
+	);
 
 	const sourceByResource = Object.fromEntries(
 		sources.map((s) => [s.resource_id, s]),
@@ -624,6 +721,12 @@ export function LibraryView({
 					research and grounding.
 				</p>
 			</header>
+			{previewResource ? (
+				<ResourcePreview
+					resource={previewResource}
+					onClose={() => setPreviewResource(null)}
+				/>
+			) : null}
 
 			<dialog
 				ref={modelDialog}
@@ -917,6 +1020,15 @@ export function LibraryView({
 										</p>
 									) : null}
 									<div className="resource-actions">
+										{resource.snapshot ? (
+											<button
+												className="compact-action secondary-action"
+												type="button"
+												onClick={() => setPreviewResource(resource)}
+											>
+												Preview
+											</button>
+										) : null}
 										{!resource.snapshot &&
 										resource.kind === "local-file" &&
 										(resource.status === "unprocessed" ||
