@@ -31,3 +31,10 @@ lint/typechecking/build, and the Playwright smoke journey.
 Run development commands inside the pinned Nix shell. When `IN_NIX_SHELL` is absent, prefix a
 command with `nix develop -c`. Add system-facing tools to `flake.nix`; keep Python and frontend
 application dependencies in `pyproject.toml`/`uv.lock` and `package.json`/`bun.lock` respectively.
+
+## Git handoff
+
+Commits are the unit of completed work in this repository. After the required checks, commit the
+files changed for the task before handing it back, and report the commit ID. Keep unrelated
+pre-existing changes out of the commit. If a commit cannot be created, explain why and do not
+describe the work as finished.
