@@ -97,6 +97,18 @@
             PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
             UV_PYTHON = "${pkgs.python314}/bin/python3.14";
             UV_PYTHON_DOWNLOADS = "never";
+            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+              pkgs.stdenv.cc.cc.lib
+              pkgs.zlib
+              pkgs.glib
+              pkgs.libGL
+              pkgs.libx11
+              pkgs.libxcb
+              pkgs.libxext
+              pkgs.libxrender
+              pkgs.libsm
+              pkgs.libice
+            ];
 
             shellHook = ''
               ${developmentPreCommitCheck.shellHook}

@@ -44,6 +44,13 @@ Workspaces. Provider credentials use a safe operating-system keyring when one is
 private application file otherwise; the in-app runtime diagnostics show the active storage mode,
 exact runtime locations, and available capabilities.
 
+The Library accepts PDF, `.pptx`, and `.docx` Resources. Docling extracts text, tables, and
+document structure for search and Source use, including text recognition for scanned PDFs.
+On the first PDF upload, the Library asks before downloading layout, table, and OCR models to
+the application cache outside the Course Workspace. Conversion runs locally and stores a
+structured Docling result alongside the searchable Markdown. Reprocess existing Snapshots in the
+Library to make them searchable. The original files remain immutable Snapshots.
+
 Each Workspace can keep multiple Conversations in that private application state. Use
 **Conversations** in the Course Agent panel to start or reopen one, rename it, archive it, or delete
 it. A new Conversation stays an unsaved draft until you send its first message. The server also

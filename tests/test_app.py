@@ -87,6 +87,11 @@ async def test_runtime_diagnostics_are_available_unbound_and_read_only(tmp_path:
         "text/plain",
         "text/x-markdown",
     ]
+    assert body["parser"]["processors"]["docling"] == [
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ]
     assert body["parser"]["remediation"].startswith("Text, Markdown, CSV")
     assert body["renderer"]["name"] == "LibreOffice"
     assert not paths.state.exists()

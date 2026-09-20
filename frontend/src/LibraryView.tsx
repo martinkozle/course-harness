@@ -49,6 +49,9 @@ export function LibraryView({
 	onEvidenceTargetClose,
 }: LibraryViewProps) {
 	const [uploading, setUploading] = useState(false);
+	const [pendingPdf, setPendingPdf] = useState<File | null>(null);
+	const [uploadError, setUploadError] = useState<string | null>(null);
+	const modelDialog = useRef<HTMLDialogElement>(null);
 	const [processing, setProcessing] = useState<Set<string>>(new Set());
 	const [reprocessing, setReprocessing] = useState<Set<string>>(new Set());
 	const [reprocessErrors, setReprocessErrors] = useState<Map<string, string>>(
@@ -149,10 +152,14 @@ export function LibraryView({
 		{} as Record<string, number>,
 	);
 
-	async function handleUpload(event: React.ChangeEvent<HTMLInputElement>) {
-		const file = event.target.files?.[0];
-		if (!file) return;
+	useEffect(() => {
+		if (pendingPdf && !modelDialog.current?.open) modelDialog.current?.showModal();
+		if (!pendingPdf && modelDialog.current?.open) modelDialog.current.close();
+	}, [pendingPdf]);
+
+	async function uploadFile(file: File) {
 		setUploading(true);
+		setUploadError(null);
 		try {
 			const formData = new FormData();
 			formData.append("file", file);
@@ -164,9 +171,52 @@ export function LibraryView({
 			const updated = await fetch("/api/resources");
 			if (!updated.ok) throw new Error(await responseError(updated));
 			onResourcesChange((await updated.json()) as ResourceState[]);
+		} catch (caught) {
+			setUploadError(caught instanceof Error ? caught.message : "Upload failed.");
 		} finally {
 			setUploading(false);
-			event.target.value = "";
+		}
+	}
+
+	async function handleUpload(event: React.ChangeEvent<HTMLInputElement>) {
+		const file = event.target.files?.[0];
+		event.target.value = "";
+		if (!file) return;
+		if (file.name.toLowerCase().endsWith(".pdf")) {
+			try {
+				const response = await fetch("/api/resources/parser-models");
+				if (!response.ok) throw new Error(await responseError(response));
+				const status = (await response.json()) as { ready: boolean };
+				if (!status.ready) {
+					setPendingPdf(file);
+					return;
+				}
+			} catch (caught) {
+				setUploadError(
+					caught instanceof Error ? caught.message : "Parser status could not be checked.",
+				);
+				return;
+			}
+		}
+		await uploadFile(file);
+	}
+
+	async function confirmModelDownload() {
+		if (!pendingPdf) return;
+		const file = pendingPdf;
+		setUploading(true);
+		setUploadError(null);
+		try {
+			const response = await fetch("/api/resources/parser-models", { method: "POST" });
+			if (!response.ok) throw new Error(await responseError(response));
+			setPendingPdf(null);
+			await uploadFile(file);
+		} catch (caught) {
+			setUploadError(
+				caught instanceof Error ? caught.message : "Models could not be downloaded.",
+			);
+		} finally {
+			setUploading(false);
 		}
 	}
 
@@ -447,7 +497,43 @@ export function LibraryView({
 					Files, uploads, and attachments available to the Course Agent for
 					research and grounding.
 				</p>
-			</header>
+		</header>
+
+			<dialog
+				ref={modelDialog}
+				className="model-download-dialog"
+				aria-labelledby="model-download-heading"
+				onCancel={(event) => {
+					if (uploading) event.preventDefault();
+					else setPendingPdf(null);
+				}}
+			>
+				<h2 id="model-download-heading">Download document processing models?</h2>
+				<p>
+					PDF processing uses local layout, table, and text recognition models.
+					The models use several hundred megabytes of storage. They will be
+					downloaded once to this device and kept outside your Course
+					Workspace. Your document stays on this device.
+				</p>
+				{uploadError ? <p role="alert">{uploadError}</p> : null}
+				<div className="section-actions">
+					<button type="button" onClick={() => setPendingPdf(null)} disabled={uploading}>
+						Cancel
+					</button>
+					<button
+						type="button"
+						className="primary-action"
+						onClick={() => void confirmModelDownload()}
+						disabled={uploading}
+					>
+						{uploading ? "Downloading models…" : "Download and upload"}
+					</button>
+				</div>
+			</dialog>
+			{uploading && !pendingPdf ? (
+				<p role="status">Uploading and processing your document…</p>
+			) : null}
+			{uploadError && !pendingPdf ? <p role="alert">{uploadError}</p> : null}
 
 			{supportingEvidenceTarget ? (
 				<section
@@ -642,8 +728,9 @@ export function LibraryView({
 										</p>
 									) : null}
 									<div className="resource-actions">
-										{resource.status === "unprocessed" ||
-										resource.status === "failed" ? (
+										{!resource.snapshot &&
+										(resource.status === "unprocessed" ||
+											resource.status === "failed") ? (
 											<button
 												className="compact-action secondary-action"
 												type="button"
@@ -655,7 +742,7 @@ export function LibraryView({
 													: "Make searchable"}
 											</button>
 										) : null}
-										{resource.status === "ready" ? (
+										{resource.snapshot ? (
 											<button
 												className="compact-action secondary-action"
 												type="button"

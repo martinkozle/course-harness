@@ -22,7 +22,7 @@ from starlette.responses import Response as StarletteResponse
 from starlette.responses import StreamingResponse
 from starlette.staticfiles import StaticFiles
 
-from course_harness import library
+from course_harness import docling_parser, library
 from course_harness import resources as res
 from course_harness import search as search_module
 from course_harness import sources as sources_module
@@ -2380,6 +2380,28 @@ def create_app(
         require_workspace()
         return library.list_resources_with_state(data_dir, cache_dir)
 
+    model_download_lock = asyncio.Lock()
+
+    @app.get("/api/resources/parser-models")
+    async def parser_models_status() -> dict[str, bool]:
+        require_workspace()
+        return {"ready": docling_parser.models_ready(cache_dir)}
+
+    @app.post("/api/resources/parser-models")
+    async def install_parser_models() -> dict[str, bool]:
+        require_workspace()
+        async with model_download_lock:
+            if not docling_parser.models_ready(cache_dir):
+                try:
+                    await asyncio.to_thread(docling_parser.download_models, cache_dir)
+                except Exception as error:
+                    logger.exception("Document model download failed")
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Document models could not be downloaded. Please retry.",
+                    ) from error
+        return {"ready": True}
+
     @app.get("/api/resources/{resource_id}", response_model=res.ResourceState)
     async def resource_detail(resource_id: str) -> res.ResourceState:
         require_workspace()
@@ -2418,7 +2440,9 @@ def create_app(
                 detail="Uploaded Resources must be processed with their content payload.",
             )
 
-        result = library.process_existing_resource(data_dir, cache_dir, resource_id, content)
+        result = await asyncio.to_thread(
+            library.process_existing_resource, data_dir, cache_dir, resource_id, content
+        )
         if result is None:
             raise HTTPException(status_code=404, detail="Resource was not found")
         if result.status != "ready":
@@ -2428,7 +2452,9 @@ def create_app(
     @app.post("/api/resources/{resource_id}/reprocess", response_model=res.ResourceState)
     async def reprocess_resource(resource_id: str) -> res.ResourceState:
         require_workspace()
-        result = library.reprocess_resource(data_dir, cache_dir, resource_id)
+        result = await asyncio.to_thread(
+            library.reprocess_resource, data_dir, cache_dir, resource_id
+        )
         if result is None:
             raise HTTPException(
                 status_code=404, detail="Resource was not found or has no Snapshot."
@@ -2453,15 +2479,29 @@ def create_app(
         content = await _read_bounded_upload(uploaded_file)
 
         media_type = getattr(uploaded_file, "content_type", None)
-        if not isinstance(media_type, str) or not media_type:
+        if (
+            not isinstance(media_type, str)
+            or not media_type
+            or media_type == "application/octet-stream"
+        ):
             media_type = res.identify_media_type(str(filename), content)
+
+        if media_type == docling_parser.PDF_MEDIA_TYPE and not docling_parser.models_ready(
+            cache_dir
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Download document processing models before uploading a PDF.",
+            )
 
         record = res.ResourceRegistrationRequest(
             kind="upload",
             location=str(filename),
             media_type=media_type,
         )
-        _, _, state = library.register_and_snapshot(data_dir, cache_dir, record, content)
+        _, _, state = await asyncio.to_thread(
+            library.register_and_snapshot, data_dir, cache_dir, record, content
+        )
         return state
 
     @app.get("/api/resources/{resource_id}/content")

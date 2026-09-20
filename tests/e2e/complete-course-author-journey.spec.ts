@@ -145,6 +145,19 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 			/Searching sends only your query to the listed public discovery services/,
 		),
 	).toBeVisible();
+	await page.route("**/api/resources/parser-models", async (route) => {
+		await route.fulfill({ json: { ready: false } });
+	});
+	await page
+		.locator('input[type="file"]')
+		.first()
+		.setInputFiles(resolve("tests/fixtures/resources/teaching.pdf"));
+	await expect(
+		page.getByRole("dialog", { name: "Download document processing models?" }),
+	).toBeVisible();
+	await page.getByRole("button", { name: "Cancel" }).click();
+	await expect(page.getByRole("dialog")).toBeHidden();
+	await page.unroute("**/api/resources/parser-models");
 	await page
 		.locator('input[type="file"]')
 		.first()

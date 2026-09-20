@@ -1,13 +1,17 @@
+import io
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx2
 import pytest
+from pptx import Presentation as PPTXPresentation
+from pypdf import PdfWriter
 
 from course_harness import app as app_module
 from course_harness import resources as res
 from course_harness.app import create_app
 from course_harness.library import fetch_remote_resource
+from course_harness.search import search_raw
 
 FIXTURES = Path(__file__).with_name("fixtures") / "resources"
 
@@ -298,7 +302,83 @@ async def test_process_code_resource(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_process_pdf_fallback(tmp_path: Path) -> None:
+async def test_process_pdf_requires_models_then_indexes_docling_result(tmp_path: Path) -> None:
+    workspace = tmp_path / "resource-course"
+    workspace.mkdir()
+    data_dir = tmp_path / "library-data"
+    cache_dir = tmp_path / "library-cache"
+    fixture = FIXTURES / "teaching.pdf"
+    transport = httpx2.ASGITransport(app=_app(workspace, data_dir, cache_dir))
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        missing = await client.post(
+            "/api/resources/upload",
+            files={"file": ("teaching.pdf", fixture.read_bytes(), "application/pdf")},
+        )
+        assert missing.status_code == 409
+        cache_dir.mkdir(exist_ok=True)
+        with patch(
+            "course_harness.docling_parser.download_models",
+            side_effect=lambda cache: (cache / "docling-models.ready").write_text("ready\n"),
+        ):
+            installed = await client.post("/api/resources/parser-models")
+        assert installed.json() == {"ready": True}
+        with patch.object(
+            res, "convert_document", return_value=("# Page 1\n\nPDF teaching evidence\n", "{}")
+        ):
+            response = await client.post(
+                "/api/resources/upload",
+                files={"file": ("teaching.pdf", fixture.read_bytes(), "application/pdf")},
+            )
+            resource_id = response.json()["resource_id"]
+            reprocessed = await client.post(f"/api/resources/{resource_id}/reprocess")
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "ready"
+    assert response.json()["indexed"] is True
+    assert reprocessed.status_code == 200
+    extracted = cache_dir / "derived" / response.json()["snapshot"]["content_hash"] / "extracted.md"
+    assert extracted.read_text(encoding="utf-8") == "# Page 1\n\nPDF teaching evidence\n"
+    assert (extracted.parent / "docling.json").is_file()
+    assert search_raw(cache_dir, "teaching")
+
+
+@pytest.mark.anyio
+async def test_process_powerpoint_extracts_slides_tables_and_notes(tmp_path: Path) -> None:
+    workspace = tmp_path / "resource-course"
+    workspace.mkdir()
+    data_dir = tmp_path / "library-data"
+    cache_dir = tmp_path / "library-cache"
+    presentation = PPTXPresentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[5])
+    slide.shapes.title.text = "PPTX teaching evidence"
+    table = slide.shapes.add_table(1, 2, 0, 0, 2_000_000, 500_000).table
+    table.cell(0, 0).text = "Concept"
+    table.cell(0, 1).text = "Example"
+    slide.notes_slide.notes_text_frame.text = "Explain the example"
+    stream = io.BytesIO()
+    presentation.save(stream)
+    transport = httpx2.ASGITransport(app=_app(workspace, data_dir, cache_dir))
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/resources/upload",
+            files={"file": ("teaching.pptx", stream.getvalue(), "application/octet-stream")},
+        )
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "ready"
+    assert response.json()["indexed"] is True
+    extracted = cache_dir / "derived" / response.json()["snapshot"]["content_hash"] / "extracted.md"
+    assert "PPTX teaching evidence" in extracted.read_text(encoding="utf-8")
+    assert "Concept" in extracted.read_text(encoding="utf-8")
+    assert "Notes: Explain the example" in extracted.read_text(encoding="utf-8")
+    assert (extracted.parent / "docling.json").is_file()
+    assert search_raw(cache_dir, "Explain")
+
+
+@pytest.mark.anyio
+async def test_local_pdf_reports_missing_models(tmp_path: Path) -> None:
     workspace = tmp_path / "resource-course"
     workspace.mkdir()
     data_dir = tmp_path / "library-data"
@@ -319,9 +399,39 @@ async def test_process_pdf_fallback(tmp_path: Path) -> None:
         resource_id = create.json()["id"]
 
         process = await client.post(f"/api/resources/{resource_id}/process")
+        detail = await client.get(f"/api/resources/{resource_id}")
 
     assert process.status_code == 422
-    assert "No processor" in process.json()["detail"]
+    assert "models have not been downloaded" in process.json()["detail"]
+    assert detail.json()["status"] == "unprocessed"
+
+
+@pytest.mark.anyio
+async def test_blank_pdf_is_not_ready(tmp_path: Path) -> None:
+    workspace = tmp_path / "resource-course"
+    workspace.mkdir()
+    data_dir = tmp_path / "library-data"
+    cache_dir = tmp_path / "library-cache"
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    stream = io.BytesIO()
+    writer.write(stream)
+    cache_dir.mkdir()
+    (cache_dir / "docling-models.ready").write_text("ready\n")
+    transport = httpx2.ASGITransport(app=_app(workspace, data_dir, cache_dir))
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        with patch.object(res, "convert_document", return_value=("", "{}")):
+            response = await client.post(
+                "/api/resources/upload",
+                files={"file": ("blank.pdf", stream.getvalue(), "application/pdf")},
+            )
+        resources = await client.get("/api/resources")
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "failed"
+    assert "No readable content" in response.json()["error"]
+    assert resources.json()[0]["status"] == "unprocessed"
 
 
 @pytest.mark.anyio

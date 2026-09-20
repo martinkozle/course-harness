@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 import httpx2
@@ -146,7 +147,11 @@ def list_resources_with_state(data_dir: Path, cache_dir: Path) -> list[ResourceS
             resource_id=resource.id,
             kind=resource.kind,
             location=resource.location,
-            status="ready" if snapshot is not None else "unprocessed",
+            status=(
+                "ready"
+                if snapshot is not None and _has_representation(cache_dir, resource.snapshot_hash)
+                else "unprocessed"
+            ),
             indexed=indexed,
             snapshot=snapshot,
         )
@@ -165,7 +170,11 @@ def get_resource_state(data_dir: Path, cache_dir: Path, resource_id: str) -> Res
         resource_id=resource.id,
         kind=resource.kind,
         location=resource.location,
-        status="ready" if snapshot is not None else "unprocessed",
+        status=(
+            "ready"
+            if snapshot is not None and _has_representation(cache_dir, resource.snapshot_hash)
+            else "unprocessed"
+        ),
         indexed=indexed,
         snapshot=snapshot,
     )
@@ -196,6 +205,13 @@ def _read_snapshot(snapshots_base: Path, resource: Resource) -> Snapshot | None:
         content_hash=resource.snapshot_hash,
         byte_count=snapshot_path.stat().st_size,
         captured_at=resource.registered_at,
+    )
+
+
+def _has_representation(cache_dir: Path, content_hash: str | None) -> bool:
+    return (
+        content_hash is not None
+        and (derived_dir(cache_dir) / content_hash / "extracted.md").is_file()
     )
 
 
@@ -364,7 +380,9 @@ async def register_remote_resource(
         location=url,
         media_type=resolved_type,
     )
-    _, _, state = register_and_snapshot(data_dir, cache_dir, request, content)
+    _, _, state = await asyncio.to_thread(
+        register_and_snapshot, data_dir, cache_dir, request, content
+    )
     return state
 
 
@@ -395,7 +413,9 @@ async def refresh_remote_resource(
         return state
 
     snapshot = create_snapshot(snapshots_dir(data_dir), resource.id, content)
-    state = process_snapshot(cache_dir, snapshot.content_hash, resource.media_type, content)
+    state = await asyncio.to_thread(
+        process_snapshot, cache_dir, snapshot.content_hash, resource.media_type, content
+    )
     update_resource_snapshot(registry_path(data_dir), resource.id, snapshot.content_hash)
     indexed = (
         _index_if_ready(cache_dir, snapshot.content_hash) if state.status == "ready" else False

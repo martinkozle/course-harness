@@ -61,9 +61,9 @@ def runtime_diagnostics(
         parser=ParserCapability(
             processors=processors,
             remediation=(
-                "Text, Markdown, CSV, and supported code files are searchable. Convert other "
-                "documents to one of those formats before upload; the original file remains "
-                "available as an immutable Snapshot."
+                "Text, Markdown, CSV, supported code, PDF, PowerPoint, and Word documents "
+                "are searchable. PDF processing downloads local models with your permission; "
+                "the original file remains available as an immutable Snapshot."
             ),
         ),
         renderer=RendererDiagnostic(

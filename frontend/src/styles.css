@@ -5671,3 +5671,26 @@ button.authoritative-content-slot:focus-visible {
 		display: block;
 	}
 }
+.model-download-dialog {
+	width: min(32rem, calc(100vw - 2rem));
+	max-height: calc(100vh - 2rem);
+	padding: 1.5rem;
+	border: 1px solid #c8d2df;
+	border-radius: 0.75rem;
+	background: #fff;
+	color: #263348;
+	box-shadow: 0 1.5rem 4rem #15243b38;
+}
+
+.model-download-dialog::backdrop {
+	background: #15243b99;
+}
+
+.model-download-dialog h2 {
+	margin-top: 0;
+}
+
+.model-download-dialog .section-actions {
+	justify-content: flex-end;
+	margin-top: 1.5rem;
+}

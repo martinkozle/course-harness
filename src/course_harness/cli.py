@@ -7,7 +7,6 @@ from typing import Annotated, NoReturn
 import typer
 import uvicorn
 
-from course_harness.app import create_app
 from course_harness.workspaces import (
     WorkspaceSelectionError,
     default_recent_store_path,
@@ -61,6 +60,8 @@ def launch(
 
     if not no_browser:
         threading.Timer(0.75, webbrowser.open, args=(url,)).start()
+
+    from course_harness.app import create_app  # noqa: PLC0415
 
     uvicorn.run(create_app(workspace, recent_store_path=recent_store_path), host=host, port=port)
 

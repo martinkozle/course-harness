@@ -13,6 +13,8 @@ from uuid import uuid4
 import httpx2
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from course_harness.docling_parser import OFFICE_MEDIA_TYPES, PDF_MEDIA_TYPE, convert_document
+
 ResourceKind = Literal["local-file", "upload", "remote"]
 ProcessingStatus = Literal["unprocessed", "processing", "ready", "failed", "retrying"]
 MAX_REMOTE_REDIRECTS = 5
@@ -217,6 +219,8 @@ def redirect_target(current_url: str, location: str | None) -> str:
 
 
 MEDIA_TYPE_PROCESSORS: dict[str, str] = {
+    PDF_MEDIA_TYPE: "docling",
+    **dict.fromkeys(OFFICE_MEDIA_TYPES, "docling"),
     "text/plain": "text",
     "text/markdown": "text",
     "text/x-markdown": "text",
@@ -337,6 +341,25 @@ def process_snapshot(
             resource_id="",
             status="ready",
         )
+
+    if processor_name == "docling":
+        try:
+            extracted, structured = convert_document(media_type, content, cache_dir)
+        except Exception as error:
+            return ResourceState(
+                resource_id="",
+                status="failed",
+                error=f"Could not process the document: {error}",
+            )
+        if not extracted.strip():
+            return ResourceState(
+                resource_id="",
+                status="failed",
+                error="No readable content was found in the document.",
+            )
+        (derived_dir / "extracted.md").write_text(extracted, encoding="utf-8")
+        (derived_dir / "docling.json").write_text(structured, encoding="utf-8")
+        return ResourceState(resource_id="", status="ready")
 
     return ResourceState(
         resource_id="",
