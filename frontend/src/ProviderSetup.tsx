@@ -13,6 +13,7 @@ export function ModelsView({
 	const [providerName, setProviderName] = useState("My OpenRouter");
 	const [kind, setKind] = useState<ProviderKind>("openrouter");
 	const [baseUrl, setBaseUrl] = useState("");
+	const [allowInsecureHttp, setAllowInsecureHttp] = useState(false);
 	const [apiKey, setApiKey] = useState("");
 	const [presetName, setPresetName] = useState("");
 	const [model, setModel] = useState("");
@@ -66,6 +67,8 @@ export function ModelsView({
 					kind,
 					api_key: apiKey,
 					base_url: kind === "openai-compatible" ? baseUrl.trim() : null,
+					allow_insecure_http:
+						kind === "openai-compatible" && allowInsecureHttp,
 				}),
 			});
 			if (!response.ok) throw new Error(await responseError(response));
@@ -73,6 +76,7 @@ export function ModelsView({
 			const next = await reloadCatalog();
 			setProviderId(account.id);
 			setApiKey("");
+			setAllowInsecureHttp(false);
 			if (next.provider_accounts.length === 1) setPresetName("Course planning");
 		} catch (caught) {
 			setError(
@@ -349,16 +353,31 @@ export function ModelsView({
 							</select>
 						</div>
 						{kind === "openai-compatible" ? (
-							<div className="field">
-								<label htmlFor="provider-url">API base URL</label>
-								<input
-									id="provider-url"
-									type="url"
-									value={baseUrl}
-									onChange={(event) => setBaseUrl(event.target.value)}
-									required
-								/>
-							</div>
+							<>
+								<div className="field">
+									<label htmlFor="provider-url">API base URL</label>
+									<input
+										id="provider-url"
+										type="url"
+										value={baseUrl}
+										onChange={(event) => setBaseUrl(event.target.value)}
+										required
+									/>
+								</div>
+								{baseUrl.trim().toLowerCase().startsWith("http://") ? (
+									<label className="consent-control">
+										<input
+											type="checkbox"
+											checked={allowInsecureHttp}
+											onChange={(event) =>
+												setAllowInsecureHttp(event.target.checked)
+											}
+										/>
+										Allow HTTP to another host. Your API key and Course requests
+										will be sent without encryption.
+									</label>
+								) : null}
+							</>
 						) : null}
 						<div className="field">
 							<label htmlFor="provider-key">API key</label>

@@ -320,6 +320,51 @@ async def test_provider_configuration_is_kept_outside_the_course_workspace(
 
 
 @pytest.mark.anyio
+async def test_remote_http_provider_requires_explicit_opt_in(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    transport = httpx2.ASGITransport(
+        app=create_app(
+            workspace,
+            provider_store_path=tmp_path / "provider",
+            provider_validator=_verified_capabilities,
+            provider_account_validator=_verified_account,
+        )
+    )
+    request = {
+        "name": "Blaze",
+        "kind": "openai-compatible",
+        "api_key": "local-secret",
+        "base_url": "http://blaze.home:8081/v1",
+    }
+
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        rejected = await client.post("/api/provider-accounts", json=request)
+        accepted = await client.post(
+            "/api/provider-accounts", json={**request, "allow_insecure_http": True}
+        )
+        rotated = await client.patch(
+            f"/api/provider-accounts/{accepted.json()['id']}/credential",
+            json={"api_key": "new-local-secret"},
+        )
+        preset = await client.post(
+            "/api/models",
+            json={
+                "name": "Local model",
+                "provider_account_id": accepted.json()["id"],
+                "model": "local-model",
+            },
+        )
+
+    assert rejected.status_code == 422
+    assert "HTTP" in rejected.text
+    assert accepted.status_code == 201
+    assert accepted.json()["base_url"] == request["base_url"]
+    assert rotated.status_code == 200
+    assert preset.status_code == 201
+
+
+@pytest.mark.anyio
 async def test_one_provider_account_can_back_multiple_selectable_model_presets(
     tmp_path: Path,
 ) -> None:

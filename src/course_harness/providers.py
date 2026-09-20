@@ -45,6 +45,7 @@ class ProviderConfigurationRequest(BaseModel):
     model: str = Field(min_length=1, max_length=300)
     api_key: SecretStr = Field(min_length=1)
     base_url: str | None = None
+    allow_insecure_http: bool = False
 
     @model_validator(mode="after")
     def endpoint_matches_provider(self) -> ProviderConfigurationRequest:
@@ -55,7 +56,7 @@ class ProviderConfigurationRequest(BaseModel):
         if self.kind == "openai-compatible" and self.base_url is None:
             raise ValueError("An OpenAI-compatible provider requires base_url")
         if self.base_url is not None:
-            validate_provider_url(self.base_url)
+            validate_provider_url(self.base_url, allow_insecure_http=self.allow_insecure_http)
         return self
 
     def configuration(self, capabilities: ProviderCapabilities) -> ProviderConfiguration:
@@ -81,6 +82,7 @@ class ProviderAccountRequest(BaseModel):
     kind: ProviderKind
     api_key: SecretStr = Field(min_length=1)
     base_url: str | None = None
+    allow_insecure_http: bool = False
 
     @model_validator(mode="after")
     def endpoint_matches_provider(self) -> ProviderAccountRequest:
@@ -89,7 +91,7 @@ class ProviderAccountRequest(BaseModel):
         if self.kind == "openai-compatible" and self.base_url is None:
             raise ValueError("An OpenAI-compatible provider requires base_url")
         if self.base_url is not None:
-            validate_provider_url(self.base_url)
+            validate_provider_url(self.base_url, allow_insecure_http=self.allow_insecure_http)
         return self
 
     def resolved_base_url(self) -> str:
@@ -187,15 +189,22 @@ ProviderCapabilityValidator = Callable[
 ProviderAccountValidator = Callable[[ProviderAccountRequest], Awaitable[None]]
 
 
-def validate_provider_url(value: str) -> None:
+def validate_provider_url(value: str, *, allow_insecure_http: bool = False) -> None:
     parsed = urlsplit(value)
     if parsed.username is not None or parsed.password is not None:
         raise ValueError("Provider base_url cannot contain credentials")
     if parsed.scheme == "https" and parsed.hostname:
         return
-    if parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}:
+    if (
+        parsed.scheme == "http"
+        and parsed.hostname
+        and (parsed.hostname in {"127.0.0.1", "localhost", "::1"} or allow_insecure_http)
+    ):
         return
-    raise ValueError("Provider base_url must use HTTPS, or HTTP on a loopback address")
+    raise ValueError(
+        "Provider base_url must use HTTPS, or HTTP on a loopback address; "
+        "set allow_insecure_http to use HTTP on another host"
+    )
 
 
 def _capability_findings(capabilities: ProviderCapabilities) -> list[tuple[str, bool]]:
@@ -517,6 +526,7 @@ def provider_request_for_credential_rotation(
         kind=account.kind,
         api_key=request.api_key,
         base_url=account.base_url if account.kind == "openai-compatible" else None,
+        allow_insecure_http=account.base_url.startswith("http://"),
     )
 
 
@@ -651,6 +661,7 @@ def provider_request_for_model(
         model=request.model,
         api_key=SecretStr(api_key),
         base_url=account.base_url if account.kind == "openai-compatible" else None,
+        allow_insecure_http=account.base_url.startswith("http://"),
     )
 
 
