@@ -1716,7 +1716,7 @@ async def test_cancelling_an_active_agent_run_preserves_partial_state(
 
 
 @pytest.mark.anyio
-async def test_uncancellable_stream_keeps_run_boundary_and_workspace_locked(
+async def test_late_stream_termination_releases_run_boundary_and_workspace_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "uncancellable-course"
@@ -1778,20 +1778,30 @@ async def test_uncancellable_stream_keeps_run_boundary_and_workspace_locked(
         assert created.status_code == 201
         running = asyncio.create_task(_post_stream(app, "/api/agent", run_input))
         await stream_started.wait()
-        cancel_response = await client.post("/api/agent/cancel")
+        cancelling = asyncio.create_task(client.post("/api/agent/cancel"))
         stream_status, _ = await asyncio.wait_for(running, timeout=2)
         assert cancellation_suppressed.is_set()
+        assert not cancelling.done()
         competing = await client.patch(
             f"/api/course/lectures/{created.json()['lectures'][0]['id']}",
             json={"title": "Blocked while the stream is unconfirmed"},
         )
         release_stream.set()
-        await asyncio.sleep(0)
+        cancel_response = await asyncio.wait_for(cancelling, timeout=2)
+        for _ in range(20):
+            after_termination = await client.patch(
+                f"/api/course/lectures/{created.json()['lectures'][0]['id']}",
+                json={"title": "Allowed after the stream terminates"},
+            )
+            if after_termination.status_code != 409:
+                break
+            await asyncio.sleep(0.05)
 
     assert cancel_response.status_code == 204
     assert stream_status == 200
     assert competing.status_code == 409
-    assert (workspace / ".git" / history.RUN_BOUNDARY_FILE).is_file()
+    assert after_termination.status_code == 200
+    assert not (workspace / ".git" / history.RUN_BOUNDARY_FILE).exists()
 
 
 @pytest.mark.anyio

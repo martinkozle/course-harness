@@ -408,6 +408,7 @@ export function AgentPanel({
 		initialApproval,
 	);
 	const [running, setRunning] = useState(false);
+	const [stopping, setStopping] = useState(false);
 	const [runStatus, setRunStatus] = useState(() =>
 		catalog.selected_model_id
 			? "Course Agent is ready."
@@ -425,6 +426,8 @@ export function AgentPanel({
 	const [conversationOpen, setConversationOpen] = useState(false);
 	const [localDraft, setLocalDraft] = useState(false);
 	const abortRef = useRef<AbortController | null>(null);
+	const cancelRequestedRef = useRef(false);
+	const conversationsButtonRef = useRef<HTMLButtonElement | null>(null);
 	const renameInputRef = useRef<HTMLInputElement | null>(null);
 	const chatEndRef = useRef<HTMLDivElement | null>(null);
 	const statusModelIdRef = useRef(catalog.selected_model_id);
@@ -459,7 +462,10 @@ export function AgentPanel({
 			});
 		return () => controller.abort();
 	}, []);
-	useEffect(() => onRunningChange(running), [onRunningChange, running]);
+	useEffect(
+		() => onRunningChange(running || stopping),
+		[onRunningChange, running, stopping],
+	);
 	useEffect(() => {
 		const selectedModelId = selected?.id ?? null;
 		if (!running && statusModelIdRef.current !== selectedModelId) {
@@ -483,6 +489,7 @@ export function AgentPanel({
 	);
 
 	async function selectModel(modelId: string) {
+		if (stopping) return;
 		setError(null);
 		const response = await fetch("/api/models/selected", {
 			method: "PUT",
@@ -507,7 +514,9 @@ export function AgentPanel({
 		setActivities([]);
 		setError(null);
 		setRunStatus("Course Agent is working.");
+		setConversationOpen(false);
 		setRunning(true);
+		cancelRequestedRef.current = false;
 		let assistantId: string | null = null;
 		const controller = new AbortController();
 		abortRef.current = controller;
@@ -557,7 +566,7 @@ export function AgentPanel({
 				},
 				controller.signal,
 			);
-			if (result.cancelled) {
+			if (result.cancelled || cancelRequestedRef.current) {
 				setRunStatus("Course Agent stopped.");
 				return;
 			}
@@ -590,16 +599,30 @@ export function AgentPanel({
 					: "The Course Agent run failed.",
 			);
 		} finally {
+			if (abortRef.current === controller) abortRef.current = null;
 			setRunning(false);
 		}
 	}
 
 	async function cancelRun() {
-		abortRef.current?.abort();
+		if (stopping) return;
+		cancelRequestedRef.current = true;
+		setStopping(true);
+		setRunStatus("Course Agent is stopping.");
 		try {
-			await fetch("/api/agent/cancel", { method: "POST" });
-		} catch {
-			// Best-effort; the abort already stops the frontend stream
+			const response = await fetch("/api/agent/cancel", { method: "POST" });
+			if (!response.ok) throw new Error(await responseError(response));
+			abortRef.current?.abort();
+			setRunStatus("Course Agent stopped.");
+		} catch (caught) {
+			setRunStatus("Course Agent could not be stopped.");
+			setError(
+				caught instanceof Error
+					? caught.message
+					: "The Course Agent could not be stopped.",
+			);
+		} finally {
+			setStopping(false);
 		}
 	}
 
@@ -610,7 +633,7 @@ export function AgentPanel({
 	}
 
 	async function conversationAction(action: () => Promise<void>) {
-		if (running || conversationBusy) return;
+		if (running || stopping || conversationBusy) return;
 		setConversationBusy(true);
 		setError(null);
 		try {
@@ -660,7 +683,13 @@ export function AgentPanel({
 	}
 
 	function createConversation() {
-		if (running || conversationBusy || approval || messages.length === 0)
+		if (
+			running ||
+			stopping ||
+			conversationBusy ||
+			approval ||
+			messages.length === 0
+		)
 			return;
 		setLocalDraft(true);
 		setMessages([]);
@@ -672,7 +701,13 @@ export function AgentPanel({
 		setRenaming(null);
 		setError(null);
 		setRunStatus("Course Agent is ready.");
+		setConversationOpen(false);
 		onConversationCleared();
+	}
+
+	function closeConversations() {
+		setConversationOpen(false);
+		requestAnimationFrame(() => conversationsButtonRef.current?.focus());
 	}
 
 	function activateConversation(id: string) {
@@ -781,7 +816,14 @@ export function AgentPanel({
 	function sendMessage(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		const content = prompt.trim();
-		if (!content || running || conversationBusy || !conversationList) return;
+		if (
+			!content ||
+			running ||
+			stopping ||
+			conversationBusy ||
+			!conversationList
+		)
+			return;
 		const contextPrefix = chatContext ? `[Context: ${chatContext}]\n\n` : "";
 		const userMessage: ChatMessage = {
 			id: crypto.randomUUID(),
@@ -807,7 +849,7 @@ export function AgentPanel({
 	}
 
 	function resolveApproval(approved: boolean) {
-		if (!approval || running || !conversationList) return;
+		if (!approval || running || stopping || !conversationList) return;
 		const pending = approval;
 		setApproval(null);
 		void run(
@@ -858,7 +900,7 @@ export function AgentPanel({
 							<select
 								id="agent-model"
 								value={selected.id}
-								disabled={running}
+								disabled={running || stopping}
 								onChange={(event) => void selectModel(event.target.value)}
 							>
 								{catalog.model_presets.map((preset) => (
@@ -885,25 +927,26 @@ export function AgentPanel({
 					)}
 
 					<div className="conversation-actions">
-						{running ? (
+						<button
+							ref={conversationsButtonRef}
+							className="secondary-action compact-action"
+							type="button"
+							aria-expanded={conversationOpen}
+							aria-controls="conversation-library"
+							onClick={() => setConversationOpen((open) => !open)}
+						>
+							Conversations
+						</button>
+						{running || stopping ? (
 							<button
-								className="secondary-action compact-action"
+								className="secondary-action compact-action stop-response-action"
 								type="button"
 								onClick={cancelRun}
+								disabled={stopping}
 							>
-								Stop
+								{stopping ? "Stopping response…" : "Stop response"}
 							</button>
-						) : (
-							<button
-								className="secondary-action compact-action"
-								type="button"
-								aria-expanded={conversationOpen}
-								aria-controls="conversation-library"
-								onClick={() => setConversationOpen((open) => !open)}
-							>
-								Conversations
-							</button>
-						)}
+						) : null}
 					</div>
 				</div>
 				{conversationOpen ? (
@@ -911,29 +954,42 @@ export function AgentPanel({
 						className="conversation-library"
 						id="conversation-library"
 						aria-label="Conversations"
+						onKeyDown={(event) => {
+							if (event.key === "Escape") closeConversations();
+						}}
 					>
 						<div className="conversation-library-heading">
 							<strong>Conversations</strong>
-							<button
-								type="button"
-								className="quiet-action compact-action"
-								onClick={createConversation}
-								disabled={
-									running ||
-									conversationBusy ||
-									approval !== null ||
-									messages.length === 0
-								}
-								title={
-									approval
-										? "Resolve the pending approval first"
-										: messages.length === 0
-											? "This conversation is already empty"
-											: undefined
-								}
-							>
-								New conversation
-							</button>
+							<div className="conversation-library-heading-actions">
+								<button
+									type="button"
+									className="quiet-action compact-action"
+									onClick={closeConversations}
+								>
+									Close conversations
+								</button>
+								<button
+									type="button"
+									className="quiet-action compact-action"
+									onClick={createConversation}
+									disabled={
+										running ||
+										stopping ||
+										conversationBusy ||
+										approval !== null ||
+										messages.length === 0
+									}
+									title={
+										approval
+											? "Resolve the pending approval first"
+											: messages.length === 0
+												? "This conversation is already empty"
+												: undefined
+									}
+								>
+									New conversation
+								</button>
+							</div>
 						</div>
 						{approval ? (
 							<p className="conversation-guard">
@@ -964,6 +1020,7 @@ export function AgentPanel({
 												onClick={() => activateConversation(conversation.id)}
 												disabled={
 													running ||
+													stopping ||
 													conversationBusy ||
 													approval !== null ||
 													conversation.archived ||
@@ -1001,7 +1058,7 @@ export function AgentPanel({
 													setRenaming(conversation.id);
 													setDraftTitle(conversation.title);
 												}}
-												disabled={running || conversationBusy}
+												disabled={running || stopping || conversationBusy}
 											>
 												Rename
 											</button>
@@ -1016,6 +1073,7 @@ export function AgentPanel({
 												}
 												disabled={
 													running ||
+													stopping ||
 													conversationBusy ||
 													approval !== null ||
 													conversation.has_pending_approval ||
@@ -1039,6 +1097,7 @@ export function AgentPanel({
 												onClick={() => setConfirmingDelete(conversation.id)}
 												disabled={
 													running ||
+													stopping ||
 													conversationBusy ||
 													approval !== null ||
 													conversation.has_pending_approval
@@ -1086,7 +1145,9 @@ export function AgentPanel({
 													<button
 														type="submit"
 														className="secondary-action compact-action"
-														disabled={!draftTitle.trim() || conversationBusy}
+														disabled={
+															!draftTitle.trim() || stopping || conversationBusy
+														}
 													>
 														Save title
 													</button>
@@ -1109,6 +1170,7 @@ export function AgentPanel({
 													type="button"
 													className="secondary-action destructive-action compact-action"
 													onClick={() => deleteConversation(conversation.id)}
+													disabled={stopping || conversationBusy}
 												>
 													Delete now
 												</button>
@@ -1126,6 +1188,7 @@ export function AgentPanel({
 							onClick={previewCompaction}
 							disabled={
 								running ||
+								stopping ||
 								conversationBusy ||
 								approval !== null ||
 								messages.length === 0
@@ -1167,6 +1230,7 @@ export function AgentPanel({
 											!summary.trim() ||
 											conversationBusy ||
 											running ||
+											stopping ||
 											approval !== null
 										}
 									>
@@ -1267,7 +1331,7 @@ export function AgentPanel({
 			<form
 				className="chat-composer"
 				onSubmit={sendMessage}
-				aria-busy={running}
+				aria-busy={running || stopping}
 			>
 				{chatContext ? (
 					<div className="chat-context-indicator">
@@ -1301,6 +1365,7 @@ export function AgentPanel({
 					maxLength={4000}
 					disabled={
 						running ||
+						stopping ||
 						conversationBusy ||
 						approval !== null ||
 						!selected ||
@@ -1318,6 +1383,7 @@ export function AgentPanel({
 						type="submit"
 						disabled={
 							running ||
+							stopping ||
 							conversationBusy ||
 							approval !== null ||
 							!selected ||

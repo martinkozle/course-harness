@@ -84,14 +84,17 @@ test("Course Author creates a Course through chat and revises its Syllabus", asy
 		.click();
 	await page.getByRole("button", { name: "New conversation" }).click();
 	await expect(
-		page.getByRole("button", { name: "New conversation" }),
-	).toBeDisabled();
+		page.getByRole("region", { name: "Conversations" }),
+	).toBeHidden();
+	await expect(
+		page.getByRole("heading", { name: "What should we work on?" }),
+	).toBeVisible();
+	await page
+		.getByRole("button", { name: "Conversations", exact: true })
+		.click();
 	await expect(page.locator(".conversation-list li")).toHaveCount(1);
 	await expect(
 		page.getByText("Send a message to save this new conversation."),
-	).toBeVisible();
-	await expect(
-		page.getByRole("heading", { name: "What should we work on?" }),
 	).toBeVisible();
 	await page.reload();
 	await page.getByRole("button", { name: "Authoring", exact: true }).click();
@@ -105,12 +108,44 @@ test("Course Author creates a Course through chat and revises its Syllabus", asy
 	await page.getByRole("button", { name: "New conversation" }).click();
 	await page
 		.getByLabel("Message the Course Agent")
+		.fill("Wait until I stop you.");
+	await page.getByRole("button", { name: "Send message" }).click();
+	await expect(
+		page.getByRole("button", { name: "Conversations", exact: true }),
+	).toBeVisible();
+	await expect(
+		page.getByRole("button", { name: "Stop response", exact: true }),
+	).toBeVisible();
+	await expect(
+		page.getByRole("region", { name: "Conversations" }),
+	).toBeHidden();
+	await page
+		.getByRole("button", { name: "Conversations", exact: true })
+		.click();
+	await expect(
+		page.getByRole("region", { name: "Conversations" }),
+	).toBeVisible();
+	await page.getByRole("button", { name: "Close conversations" }).click();
+	await expect(
+		page.getByRole("region", { name: "Conversations" }),
+	).toBeHidden();
+	await page
+		.getByRole("button", { name: "Stop response", exact: true })
+		.click();
+	await expect(page.locator("#agent-run-status")).toHaveText(
+		"Course Agent stopped.",
+	);
+	await page
+		.getByLabel("Message the Course Agent")
 		.fill("Review the lecture sequence.");
 	await page.getByRole("button", { name: "Send message" }).click();
-	await expect(page.locator(".conversation-list li")).toHaveCount(2);
 	await expect(
 		page.getByText("The lecture sequence is ready for review."),
 	).toBeVisible();
+	await page
+		.getByRole("button", { name: "Conversations", exact: true })
+		.click();
+	await expect(page.locator(".conversation-list li")).toHaveCount(2);
 	await page
 		.locator(".conversation-list li:not(.is-active) .conversation-select")
 		.first()

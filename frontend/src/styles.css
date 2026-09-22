@@ -2734,6 +2734,12 @@ h1 {
 	display: flex;
 	flex: 0 0 auto;
 	justify-content: flex-end;
+	gap: 8px;
+}
+
+.stop-response-action {
+	border-color: rgba(168, 52, 58, 0.42);
+	color: var(--danger);
 }
 
 .conversation-library {
@@ -2758,6 +2764,7 @@ h1 {
 }
 
 .conversation-library-heading strong { font-size: 0.85rem; }
+.conversation-library-heading-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .conversation-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .conversation-list li { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
 .conversation-list li.is-active { border-color: #6784bd; background: #edf3ff; }

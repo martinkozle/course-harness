@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from itertools import count
@@ -32,6 +33,17 @@ async def verified_account(_request: object) -> None:
 async def course_planning_model(
     messages: list[ModelMessage], _info: AgentInfo
 ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+    if any(
+        isinstance(part, UserPromptPart)
+        and isinstance(part.content, str)
+        and "Wait until I stop you." in part.content
+        for message in messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+    ):
+        await asyncio.Event().wait()
+        yield "This response should have been stopped."
+        return
     if any(
         isinstance(part, UserPromptPart)
         and isinstance(part.content, str)

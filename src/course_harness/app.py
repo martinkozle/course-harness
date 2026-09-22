@@ -409,6 +409,7 @@ def create_app(
 
     app = FastAPI(title="Course Harness")
     background_render_tasks: set[asyncio.Task[None]] = set()
+    deferred_agent_cleanup_tasks: set[asyncio.Task[None]] = set()
 
     def finish_background_render(task: asyncio.Task[None]) -> None:
         background_render_tasks.discard(task)
@@ -416,6 +417,13 @@ def create_app(
             task.result()
         except Exception as error:
             logger.warning("Template background rendering failed: %s", error)
+
+    def finish_deferred_agent_cleanup(task: asyncio.Task[None]) -> None:
+        deferred_agent_cleanup_tasks.discard(task)
+        try:
+            task.result()
+        except BaseException as error:
+            logger.warning("Deferred Course Agent cleanup failed: %s", error)
 
     def schedule_template_background_render(
         profile: tpl.TemplateProfile,
@@ -1295,6 +1303,9 @@ def create_app(
     async def cancel_agent_run() -> Response:
         active = require_workspace()
         cancel_event(active).set()
+        lock = mutation_lock(active)
+        await lock.acquire()
+        lock.release()
         return Response(status_code=204)
 
     @app.post("/api/agent")
@@ -1560,14 +1571,15 @@ def create_app(
                 release_run_lock()
             raise
         finalized = False
+        deferred_cleanup_pending = False
 
         async def finalize_response(termination_confirmed: bool = True) -> None:
             nonlocal finalized
-            if finalized:
+            if finalized or deferred_cleanup_pending:
                 return
-            finalized = True
             if not termination_confirmed:
                 return
+            finalized = True
             try:
                 try:
                     close_run_boundary()
@@ -1582,11 +1594,13 @@ def create_app(
                 body_iterator = response.body_iterator
 
                 async def guarded_body_iterator():
+                    nonlocal deferred_cleanup_pending
                     iterator = None
                     next_chunk: asyncio.Future[object] | None = None
                     cancellation: asyncio.Task[bool] | None = None
                     iterator_closed = False
                     termination_confirmed = True
+                    deferred_cleanup_scheduled = False
 
                     async def cancel_and_wait(task: asyncio.Future[object]) -> bool:
                         def consume_late_result(completed: asyncio.Future[object]) -> None:
@@ -1608,6 +1622,25 @@ def create_app(
                         with suppress(BaseException):
                             task.result()
                         return True
+
+                    def schedule_deferred_cleanup(task: asyncio.Future[object]) -> None:
+                        nonlocal deferred_cleanup_pending, deferred_cleanup_scheduled
+                        if deferred_cleanup_scheduled:
+                            return
+                        deferred_cleanup_scheduled = True
+                        deferred_cleanup_pending = True
+
+                        async def finish_after_late_termination() -> None:
+                            nonlocal deferred_cleanup_pending
+                            with suppress(BaseException):
+                                await task
+                            await close_underlying()
+                            deferred_cleanup_pending = False
+                            await finalize_response()
+
+                        cleanup_task = asyncio.create_task(finish_after_late_termination())
+                        deferred_agent_cleanup_tasks.add(cleanup_task)
+                        cleanup_task.add_done_callback(finish_deferred_agent_cleanup)
 
                     async def close_underlying() -> bool:
                         nonlocal iterator_closed
@@ -1639,10 +1672,12 @@ def create_app(
                             except BaseException:
                                 if not await cancel_and_wait(next_chunk):
                                     termination_confirmed = False
+                                    schedule_deferred_cleanup(next_chunk)
                                 raise
                             if cancellation in done:
                                 if not await cancel_and_wait(next_chunk):
                                     termination_confirmed = False
+                                    schedule_deferred_cleanup(next_chunk)
                                 break
                             cancellation.cancel()
                             with suppress(asyncio.CancelledError):
@@ -1664,6 +1699,7 @@ def create_app(
                             and not await cancel_and_wait(next_chunk)
                         ):
                             termination_confirmed = False
+                            schedule_deferred_cleanup(next_chunk)
                         if not await close_underlying():
                             termination_confirmed = False
                         await finalize_response(termination_confirmed)
