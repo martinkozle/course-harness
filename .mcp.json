@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "nix",
+      "args": [
+        "develop",
+        "-c",
+        "sh",
+        "-c",
+        "exec playwright-mcp --browser chromium --executable-path \"$PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH\" --headless --isolated --block-service-workers"
+      ]
+    }
+  }
+}

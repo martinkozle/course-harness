@@ -87,6 +87,7 @@
                 imagemagick
                 libreoffice
                 nodejs_24
+                playwright-mcp
                 python314
                 uv
                 zenity
