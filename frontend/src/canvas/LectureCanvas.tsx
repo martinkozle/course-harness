@@ -1,13 +1,12 @@
 import {
 	Archive,
 	ArchiveRestore,
-	ArrowLeft,
-	ArrowRight,
+	ArrowLeftToLine,
+	ArrowRightToLine,
 	ChevronLeft,
 	ChevronRight,
 	Download,
 	LayoutTemplate,
-	MoreHorizontal,
 	Pencil,
 	Sparkles,
 	Trash2,
@@ -38,7 +37,6 @@ import type {
 } from "../models";
 import {
 	ConfirmDialog,
-	Menu,
 	Notice,
 	downloadResponse,
 	errorMessage,
@@ -281,7 +279,13 @@ export function LectureCanvas({
 	const [confirmDelete, setConfirmDelete] = useState(false);
 	const [deleting, setDeleting] = useState(false);
 	const [exporting, setExporting] = useState(false);
+	const [draggingId, setDraggingId] = useState<string | null>(null);
+	const [dropIndex, setDropIndex] = useState<number | null>(null);
 	const requestRef = useRef(0);
+	const presentationRef = useRef<Presentation | null>(null);
+	presentationRef.current = presentation;
+	const pendingReorders = useRef(0);
+	const reorderChain = useRef<Promise<void>>(Promise.resolve());
 	const versionRef = useRef(presentationVersion);
 
 	const load = useCallback(async () => {
@@ -290,14 +294,14 @@ export function LectureCanvas({
 			const response = await fetch(
 				`/api/presentations/${encodeURIComponent(lecture.id)}`,
 			);
-			if (request !== requestRef.current) return;
+			if (request !== requestRef.current || pendingReorders.current > 0) return;
 			if (response.status === 404) {
 				setPresentation(null);
 				return;
 			}
 			if (!response.ok) throw new Error(await responseError(response));
 			const next = (await response.json()) as Presentation;
-			if (request !== requestRef.current) return;
+			if (request !== requestRef.current || pendingReorders.current > 0) return;
 			setPresentation(next);
 			setSelectedId((current) => {
 				const remembered = current ?? lastSelectedSlide.get(lecture.id);
@@ -472,6 +476,10 @@ export function LectureCanvas({
 		const target = event.target as HTMLElement;
 		if (target.closest("input, textarea, select, [role='menu']")) return;
 		event.preventDefault();
+		if (event.altKey) {
+			move(event.key === "ArrowLeft" ? -1 : 1);
+			return;
+		}
 		step(event.key === "ArrowLeft" ? -1 : 1);
 		requestAnimationFrame(() =>
 			document
@@ -511,28 +519,59 @@ export function LectureCanvas({
 		}
 	}
 
-	async function move(direction: -1 | 1) {
-		if (!selected || selectedIndex < 0) return;
-		const target = selectedIndex + direction;
-		if (target < 0 || target >= activeSlides.length) return;
-		const ids = activeSlides.map((slide) => slide.id);
-		[ids[selectedIndex], ids[target]] = [ids[target], ids[selectedIndex]];
+	function move(direction: -1 | 1) {
+		if (!selected || selected.archived) return;
+		const active = (presentationRef.current?.slides ?? []).filter(
+			(slide) => !slide.archived,
+		);
+		const index = active.findIndex((slide) => slide.id === selected.id);
+		reorder(selected.id, index + direction);
+	}
+
+	/** Moves one active Slide to a new position, showing the result immediately. */
+	function reorder(slideId: string, targetIndex: number) {
+		const current = presentationRef.current;
+		if (!current) return;
+		const active = current.slides.filter((slide) => !slide.archived);
+		const archived = current.slides.filter((slide) => slide.archived);
+		const from = active.findIndex((slide) => slide.id === slideId);
+		if (from < 0 || targetIndex < 0 || targetIndex >= active.length) return;
+		if (from === targetIndex) return;
+		const ordered = [...active];
+		const [moved] = ordered.splice(from, 1);
+		ordered.splice(targetIndex, 0, moved);
+		const ids = ordered.map((slide) => slide.id);
+		const optimistic = { ...current, slides: [...ordered, ...archived] };
+		presentationRef.current = optimistic;
+		setPresentation(optimistic);
 		setError(null);
-		try {
-			const response = await fetch(
-				`/api/presentations/${encodeURIComponent(lecture.id)}/slides/order`,
-				{
-					method: "PUT",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ slide_ids: ids }),
-				},
-			);
-			if (!response.ok) throw new Error(await responseError(response));
-			setPresentation((await response.json()) as Presentation);
-			await onPresentationsChange();
-		} catch (caught) {
-			setError(errorMessage(caught, "The Slides could not be reordered."));
-		}
+		// Reorders run one after another; background reloads wait until the last settles.
+		++requestRef.current;
+		pendingReorders.current += 1;
+		reorderChain.current = reorderChain.current.then(async () => {
+			try {
+				const response = await fetch(
+					`/api/presentations/${encodeURIComponent(lecture.id)}/slides/order`,
+					{
+						method: "PUT",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ slide_ids: ids }),
+					},
+				);
+				if (!response.ok) throw new Error(await responseError(response));
+				const saved = (await response.json()) as Presentation;
+				pendingReorders.current -= 1;
+				if (pendingReorders.current === 0) {
+					presentationRef.current = saved;
+					setPresentation(saved);
+					await onPresentationsChange();
+				}
+			} catch (caught) {
+				pendingReorders.current -= 1;
+				setError(errorMessage(caught, "The Slides could not be reordered."));
+				if (pendingReorders.current === 0) void load();
+			}
+		});
 	}
 
 	async function exportPowerPoint() {
@@ -715,42 +754,26 @@ export function LectureCanvas({
 									</div>
 									{!editing ? (
 										<div className="stage-actions">
-											<Menu
-												label="Slide actions"
-												trigger={<MoreHorizontal aria-hidden="true" />}
-												disabled={busy}
-												items={[
-													...(selected.archived
-														? []
-														: [
-																{
-																	label: "Move earlier",
-																	icon: <ArrowLeft aria-hidden="true" />,
-																	disabled: selectedIndex <= 0,
-																	onSelect: () => void move(-1),
-																},
-																{
-																	label: "Move later",
-																	icon: <ArrowRight aria-hidden="true" />,
-																	disabled:
-																		selectedIndex >= activeSlides.length - 1,
-																	onSelect: () => void move(1),
-																},
-																"separator" as const,
-															]),
+											<button
+												type="button"
+												className="icon-btn"
+												aria-label={
+													selected.archived ? "Restore Slide" : "Archive Slide"
+												}
+												title={
 													selected.archived
-														? {
-																label: "Restore Slide",
-																icon: <ArchiveRestore aria-hidden="true" />,
-																onSelect: () => void toggleArchive(selected),
-															}
-														: {
-																label: "Archive Slide",
-																icon: <Archive aria-hidden="true" />,
-																onSelect: () => void toggleArchive(selected),
-															},
-												]}
-											/>
+														? "Restore Slide"
+														: "Archive Slide (hide it without deleting)"
+												}
+												disabled={busy}
+												onClick={() => void toggleArchive(selected)}
+											>
+												{selected.archived ? (
+													<ArchiveRestore aria-hidden="true" />
+												) : (
+													<Archive aria-hidden="true" />
+												)}
+											</button>
 											<button
 												type="button"
 												className="btn btn-quiet"
@@ -805,10 +828,39 @@ export function LectureCanvas({
 					<nav className="filmstrip" aria-label="Slides">
 						<ol>
 							{activeSlides.map((slide, index) => (
-								<li key={slide.id}>
+								<li
+									key={slide.id}
+									className={dropIndex === index ? "is-drop-target" : undefined}
+									onDragOver={(event) => {
+										if (!draggingId) return;
+										event.preventDefault();
+										setDropIndex(index);
+									}}
+									onDragLeave={() =>
+										setDropIndex((current) =>
+											current === index ? null : current,
+										)
+									}
+									onDrop={(event) => {
+										event.preventDefault();
+										if (draggingId) reorder(draggingId, index);
+										setDraggingId(null);
+										setDropIndex(null);
+									}}
+								>
 									<button
 										type="button"
 										className="film-slide"
+										draggable={!editing && !busy}
+										onDragStart={(event) => {
+											event.dataTransfer.effectAllowed = "move";
+											event.dataTransfer.setData("text/plain", slide.id);
+											setDraggingId(slide.id);
+										}}
+										onDragEnd={() => {
+											setDraggingId(null);
+											setDropIndex(null);
+										}}
 										aria-current={slide.id === selectedId ? "true" : undefined}
 										aria-label={`Slide ${index + 1}: ${slideSummary(slide)}`}
 										disabled={editing && slide.id !== selectedId}
@@ -833,6 +885,33 @@ export function LectureCanvas({
 											</span>
 										) : null}
 									</button>
+									{slide.id === selectedId && !editing ? (
+										<div className="film-move">
+											<button
+												type="button"
+												className="icon-btn is-small"
+												aria-label="Move Slide earlier"
+												title="Move Slide earlier (Alt+←)"
+												disabled={busy || index === 0}
+												onClick={() => move(-1)}
+											>
+												<ArrowLeftToLine aria-hidden="true" />
+											</button>
+											<span className="film-move-label" aria-hidden="true">
+												Move
+											</span>
+											<button
+												type="button"
+												className="icon-btn is-small"
+												aria-label="Move Slide later"
+												title="Move Slide later (Alt+→)"
+												disabled={busy || index === activeSlides.length - 1}
+												onClick={() => move(1)}
+											>
+												<ArrowRightToLine aria-hidden="true" />
+											</button>
+										</div>
+									) : null}
 								</li>
 							))}
 						</ol>

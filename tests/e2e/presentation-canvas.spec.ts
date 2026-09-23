@@ -228,25 +228,32 @@ test("Course Author views Presentation canvas and slide outline", async ({
 		"Slide 3: The intervention question",
 	);
 
-	// Reordering lives in the Slide actions menu and moves the selected Slide.
-	await page.getByRole("button", { name: "Slide actions" }).click();
-	await page.getByRole("menuitem", { name: "Move earlier" }).click();
+	// Reordering happens on the selected thumbnail: buttons, Alt+arrow, or dragging.
+	await filmstrip.getByRole("button", { name: "Move Slide earlier" }).click();
 	await expect(page.locator(".stage-position")).toContainText("Slide 2 of 18");
 	await expect(filmSlides.nth(1)).toHaveAccessibleName(
 		"Slide 2: The intervention question",
 	);
+	await filmSlides.nth(1).focus();
+	await page.keyboard.press("Alt+ArrowRight");
+	await expect(filmSlides.nth(2)).toHaveAccessibleName(
+		"Slide 3: The intervention question",
+	);
+	await filmSlides.nth(2).dragTo(filmSlides.nth(1));
+	await expect(filmSlides.nth(1)).toHaveAccessibleName(
+		"Slide 2: The intervention question",
+	);
+	await expect(page.locator(".stage-position")).toContainText("Slide 2 of 18");
 
 	// Archiving is reversible and keeps archived Slides reachable.
-	await page.getByRole("button", { name: "Slide actions" }).click();
-	await page.getByRole("menuitem", { name: "Archive Slide" }).click();
+	await page.getByRole("button", { name: "Archive Slide" }).click();
 	await expect(filmSlides).toHaveCount(17);
 	await page.getByRole("button", { name: "Archived (1)" }).click();
 	await filmstrip
 		.getByRole("button", { name: "Archived Slide: The intervention question" })
 		.click();
 	await expect(page.locator(".stage-position")).toContainText("Archived Slide");
-	await page.getByRole("button", { name: "Slide actions" }).click();
-	await page.getByRole("menuitem", { name: "Restore Slide" }).click();
+	await page.getByRole("button", { name: "Restore Slide" }).click();
 	await expect(filmSlides).toHaveCount(18);
 
 	// Only the canvas scrolls; the composer stays anchored.
