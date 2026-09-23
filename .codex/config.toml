@@ -1,0 +1,4 @@
+# Overrides the global Playwright MCP server with the flake-pinned one.
+[mcp_servers.playwright]
+command = "nix"
+args = ["develop", "-c", "playwright-mcp"]

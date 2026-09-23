@@ -96,6 +96,11 @@
 
             PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH = "${pkgs.chromium}/bin/chromium";
             PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+            PLAYWRIGHT_MCP_BLOCK_SERVICE_WORKERS = "true";
+            PLAYWRIGHT_MCP_BROWSER = "chromium";
+            PLAYWRIGHT_MCP_EXECUTABLE_PATH = "${pkgs.chromium}/bin/chromium";
+            PLAYWRIGHT_MCP_HEADLESS = "true";
+            PLAYWRIGHT_MCP_ISOLATED = "true";
             UV_PYTHON = "${pkgs.python314}/bin/python3.14";
             UV_PYTHON_DOWNLOADS = "never";
             LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
