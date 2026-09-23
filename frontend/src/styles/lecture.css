@@ -371,7 +371,8 @@
 	align-items: flex-start;
 	gap: 10px;
 	overflow-x: auto;
-	padding: 4px 2px 6px;
+	/* Room for the drop marker before the first and after the last Slide. */
+	padding: 4px 9px 6px;
 }
 
 .film-slide {
@@ -456,16 +457,24 @@
 	cursor: grabbing;
 }
 
-/* Where a dragged Slide will land. */
-.filmstrip li.is-drop-target::before {
+/* The gap a dragged Slide will be inserted into. */
+.filmstrip li.is-drop-before::before,
+.filmstrip li.is-drop-after::after {
 	content: "";
 	position: absolute;
 	top: 0;
-	bottom: 0;
-	left: -7px;
 	width: 3px;
+	height: calc(132px * 9 / 16);
 	border-radius: 2px;
 	background: var(--accent);
+}
+
+.filmstrip li.is-drop-before::before {
+	left: -7px;
+}
+
+.filmstrip li.is-drop-after::after {
+	right: -7px;
 }
 
 .film-move {
@@ -509,4 +518,11 @@
 
 .slide-editor {
 	scroll-margin-top: 12px;
+}
+
+@media (max-width: 720px) {
+	.filmstrip li.is-drop-before::before,
+	.filmstrip li.is-drop-after::after {
+		height: calc(104px * 9 / 16);
+	}
 }

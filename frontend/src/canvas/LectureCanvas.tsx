@@ -280,7 +280,8 @@ export function LectureCanvas({
 	const [deleting, setDeleting] = useState(false);
 	const [exporting, setExporting] = useState(false);
 	const [draggingId, setDraggingId] = useState<string | null>(null);
-	const [dropIndex, setDropIndex] = useState<number | null>(null);
+	/** The gap a dragged Slide will be inserted into: 0 is before the first Slide. */
+	const [dropGap, setDropGap] = useState<number | null>(null);
 	const requestRef = useRef(0);
 	const presentationRef = useRef<Presentation | null>(null);
 	presentationRef.current = presentation;
@@ -826,26 +827,49 @@ export function LectureCanvas({
 					</section>
 
 					<nav className="filmstrip" aria-label="Slides">
-						<ol>
+						<ol
+							onDragLeave={(event) => {
+								if (!event.currentTarget.contains(event.relatedTarget as Node))
+									setDropGap(null);
+							}}
+						>
 							{activeSlides.map((slide, index) => (
 								<li
 									key={slide.id}
-									className={dropIndex === index ? "is-drop-target" : undefined}
+									className={
+										dropGap === index
+											? "is-drop-before"
+											: dropGap === activeSlides.length &&
+													index === activeSlides.length - 1
+												? "is-drop-after"
+												: undefined
+									}
 									onDragOver={(event) => {
 										if (!draggingId) return;
 										event.preventDefault();
-										setDropIndex(index);
+										const box = event.currentTarget.getBoundingClientRect();
+										const gap =
+											event.clientX < box.left + box.width / 2
+												? index
+												: index + 1;
+										const from = activeSlides.findIndex(
+											(item) => item.id === draggingId,
+										);
+										// Gaps on either side of the dragged Slide would not move it.
+										setDropGap(gap === from || gap === from + 1 ? null : gap);
 									}}
-									onDragLeave={() =>
-										setDropIndex((current) =>
-											current === index ? null : current,
-										)
-									}
 									onDrop={(event) => {
 										event.preventDefault();
-										if (draggingId) reorder(draggingId, index);
+										const from = activeSlides.findIndex(
+											(item) => item.id === draggingId,
+										);
+										if (draggingId && dropGap !== null && from >= 0)
+											reorder(
+												draggingId,
+												dropGap > from ? dropGap - 1 : dropGap,
+											);
 										setDraggingId(null);
-										setDropIndex(null);
+										setDropGap(null);
 									}}
 								>
 									<button
@@ -859,7 +883,7 @@ export function LectureCanvas({
 										}}
 										onDragEnd={() => {
 											setDraggingId(null);
-											setDropIndex(null);
+											setDropGap(null);
 										}}
 										aria-current={slide.id === selectedId ? "true" : undefined}
 										aria-label={`Slide ${index + 1}: ${slideSummary(slide)}`}

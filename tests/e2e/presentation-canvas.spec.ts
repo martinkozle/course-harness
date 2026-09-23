@@ -239,10 +239,33 @@ test("Course Author views Presentation canvas and slide outline", async ({
 	await expect(filmSlides.nth(2)).toHaveAccessibleName(
 		"Slide 3: The intervention question",
 	);
-	await filmSlides.nth(2).dragTo(filmSlides.nth(1));
+	// Dropping inserts into the gap the marker shows: left half of a thumbnail
+	// means before it, right half means after it, in either drag direction.
+	const leftEdge = { x: 12, y: 30 };
+	const rightEdge = { x: 120, y: 30 };
+	await filmSlides.nth(2).dragTo(filmSlides.nth(1), {
+		targetPosition: leftEdge,
+	});
 	await expect(filmSlides.nth(1)).toHaveAccessibleName(
 		"Slide 2: The intervention question",
 	);
+	const firstTitle = (await filmSlides.nth(0).getAttribute("aria-label"))
+		?.replace(/^Slide 1: /, "")
+		?.trim();
+	await filmSlides.nth(0).dragTo(filmSlides.nth(1), {
+		targetPosition: rightEdge,
+	});
+	await expect(filmSlides.nth(1)).toHaveAccessibleName(`Slide 2: ${firstTitle}`);
+	await expect(filmSlides.nth(0)).toHaveAccessibleName(
+		"Slide 1: The intervention question",
+	);
+	await filmSlides.nth(1).dragTo(filmSlides.nth(0), {
+		targetPosition: leftEdge,
+	});
+	await expect(filmSlides.nth(1)).toHaveAccessibleName(
+		"Slide 2: The intervention question",
+	);
+	await filmSlides.nth(1).click();
 	await expect(page.locator(".stage-position")).toContainText("Slide 2 of 18");
 
 	// Archiving is reversible and keeps archived Slides reachable.
