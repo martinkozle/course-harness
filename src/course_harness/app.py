@@ -2796,6 +2796,10 @@ def create_app(
             return StarletteResponse(
                 content=snapshot_path.read_bytes(), media_type="application/pdf"
             )
+        if resource.media_type in res.IMAGE_MEDIA_TYPES:
+            return StarletteResponse(
+                content=snapshot_path.read_bytes(), media_type=resource.media_type
+            )
 
         processor = res.resolve_processor(resource.media_type)
         if processor in {"text", "code"} or resource.media_type.startswith("text/"):

@@ -187,6 +187,7 @@ async def test_course_author_places_an_uploaded_image_on_a_slide(tmp_path: Path)
             json={"image_source_id": source["id"]},
         )
         image = await client.get(f"/api/sources/{source['id']}/image")
+        preview = await client.get(f"/api/resources/{resource_id}/preview")
         cleared = await client.patch(
             f"/api/presentations/{lecture_id}/slides/{slide_id}",
             json={"image_source_id": ""},
@@ -197,6 +198,8 @@ async def test_course_author_places_an_uploaded_image_on_a_slide(tmp_path: Path)
     assert image.status_code == 200
     assert image.headers["content-type"] == "image/png"
     assert image.content == _png()
+    assert preview.headers["content-type"] == "image/png"
+    assert preview.content == _png()
     assert cleared.json()["slides"][0]["image_source_id"] is None
 
 

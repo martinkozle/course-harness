@@ -10,6 +10,7 @@ type Content =
 	| { kind: "loading" }
 	| { kind: "text"; text: string }
 	| { kind: "pdf"; url: string }
+	| { kind: "image"; url: string }
 	| { kind: "error"; message: string };
 
 export function lineRangeLabel(
@@ -83,12 +84,14 @@ export function SourceReader({
 						{ signal: controller.signal },
 					);
 					if (!response.ok) throw new Error(await responseError(response));
-					if (
-						response.headers.get("content-type")?.startsWith("application/pdf")
-					) {
+					const type = response.headers.get("content-type") ?? "";
+					if (type.startsWith("application/pdf") || type.startsWith("image/")) {
 						objectUrl = URL.createObjectURL(await response.blob());
 						if (!controller.signal.aborted)
-							setOriginal({ kind: "pdf", url: objectUrl });
+							setOriginal({
+								kind: type.startsWith("image/") ? "image" : "pdf",
+								url: objectUrl,
+							});
 					} else {
 						setOriginal({ kind: "text", text: await response.text() });
 					}
@@ -184,6 +187,10 @@ export function SourceReader({
 				</p>
 			) : content.kind === "error" ? (
 				<Notice tone="error">{content.message}</Notice>
+			) : content.kind === "image" ? (
+				<figure className="reader-image panel">
+					<img src={content.url} alt={target.label} />
+				</figure>
 			) : content.kind === "pdf" ? (
 				<iframe
 					className="reader-pdf"
