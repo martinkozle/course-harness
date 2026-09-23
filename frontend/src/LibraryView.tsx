@@ -251,6 +251,8 @@ export function LibraryView({
 	const [discoveryResults, setDiscoveryResults] = useState<DiscoveryResult[]>(
 		[],
 	);
+	const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+	const [hasDiscovered, setHasDiscovered] = useState(false);
 	const [addingRemote, setAddingRemote] = useState<Set<string>>(new Set());
 	const [remoteErrors, setRemoteErrors] = useState<Map<string, string>>(
 		new Map(),
@@ -553,6 +555,8 @@ export function LibraryView({
 		if (!q) return;
 		setDiscovering(true);
 		setDiscoveryResults([]);
+		setDiscoveryError(null);
+		setHasDiscovered(false);
 		try {
 			const response = await fetch("/api/discovery/search", {
 				method: "POST",
@@ -561,8 +565,13 @@ export function LibraryView({
 			});
 			if (!response.ok) throw new Error(await responseError(response));
 			setDiscoveryResults((await response.json()) as DiscoveryResult[]);
-		} catch {
-			setDiscoveryResults([]);
+			setHasDiscovered(true);
+		} catch (caught) {
+			setDiscoveryError(
+				caught instanceof Error
+					? caught.message
+					: "Remote resource search could not be completed.",
+			);
 		} finally {
 			setDiscovering(false);
 		}
@@ -1177,6 +1186,14 @@ export function LibraryView({
 						{discovering ? "Searching…" : "Search"}
 					</button>
 				</form>
+				{discoveryError ? (
+					<p className="library-error" role="alert">
+						{discoveryError}
+					</p>
+				) : null}
+				{hasDiscovered && discoveryResults.length === 0 ? (
+					<p className="empty-note">No remote resources found. Try another search.</p>
+				) : null}
 
 				{discoveryResults.length > 0 ? (
 					<div className="discovery-results">

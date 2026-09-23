@@ -175,6 +175,37 @@ test("major Course Author journey surfaces meet automated and keyboard accessibi
 	);
 	await page.getByRole("button", { name: "Regenerate search index" }).click();
 	await expect(page.getByRole("alert")).toHaveCount(0);
+	const discovery = page.getByRole("region", { name: "Remote discovery" });
+	let discoveryAttempts = 0;
+	await page.route(
+		"**/api/discovery/search",
+		async (route) => {
+			discoveryAttempts += 1;
+			await route.fulfill(
+				discoveryAttempts === 1
+					? {
+						status: 503,
+						contentType: "application/json",
+						body: JSON.stringify({ detail: "Discovery is temporarily unavailable." }),
+					}
+					: { status: 200, contentType: "application/json", body: "[]" },
+			);
+		},
+		{ times: 2 },
+	);
+	await discovery.getByRole("searchbox", { name: "Search remote resources" }).fill("causal inference");
+	await discovery.getByRole("button", { name: "Search" }).click();
+	await expect(discovery.getByRole("alert")).toHaveText(
+		"Discovery is temporarily unavailable.",
+	);
+	await expect(
+		discovery.getByRole("searchbox", { name: "Search remote resources" }),
+	).toHaveValue("causal inference");
+	await discovery.getByRole("button", { name: "Search" }).click();
+	await expect(discovery.getByRole("alert")).toHaveCount(0);
+	await expect(
+		discovery.getByText("No remote resources found. Try another search."),
+	).toBeVisible();
 
 	await page.getByRole("button", { name: "Templates" }).click();
 	await expect(
