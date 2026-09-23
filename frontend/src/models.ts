@@ -371,3 +371,41 @@ export type CourseRelease = {
 	validation: ReleaseValidation;
 	artifacts: ReleaseArtifact[];
 };
+
+export type Lecture = {
+	id: string;
+	title: string;
+	group: string | null;
+	presentation_id?: string;
+};
+
+export type CoursePlan = {
+	schema_version: 1;
+	id: string;
+	title: string;
+	audience: string;
+	goals: string[];
+	outcomes: string[];
+	template_profile_id?: string | null;
+	template_profile_version?: number | null;
+	lectures: Lecture[];
+};
+
+export type Workspace = {
+	name: string;
+	path: string;
+};
+
+export type WorkspaceEntry = {
+	path: string;
+	kind: "file" | "directory";
+};
+
+/** A passage to open in the Source reader, optionally narrowed to lines. */
+export type ReaderTarget = {
+	sourceId: string | null;
+	resourceId: string | null;
+	label: string;
+	lineStart: number | null;
+	lineEnd: number | null;
+};

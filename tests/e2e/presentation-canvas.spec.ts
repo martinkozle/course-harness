@@ -1,8 +1,19 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
+
+async function openSettings(page: Page, section: string) {
+	await page.getByRole("button", { name: "Settings" }).click();
+	const settings = page.getByRole("dialog", { name: "Settings" });
+	await settings
+		.getByRole("navigation", { name: "Settings sections" })
+		.getByRole("button", { name: section })
+		.click();
+	return settings;
+}
 
 test("Course Author views Presentation canvas and slide outline", async ({
 	page,
 }) => {
+	const navigator = page.getByRole("navigation", { name: "Course" });
 	await page.request.post("/api/workspace/close");
 	await page.goto("/");
 
@@ -10,29 +21,33 @@ test("Course Author views Presentation canvas and slide outline", async ({
 		page.getByRole("heading", { name: "Your courses" }),
 	).toBeVisible();
 	await page.getByRole("button", { name: "New course" }).click();
-
 	await expect(
-		page.getByRole("heading", { name: "Give the course a clear shape." }),
+		page.getByRole("heading", { name: "Start with your material" }),
 	).toBeVisible();
-	await page.getByRole("button", { name: "Models", exact: true }).click();
-	await expect(page.getByRole("heading", { name: "Models" })).toBeVisible();
-	if (await page.getByLabel("API key").isVisible()) {
-		await page.getByLabel("API key").fill("deterministic-test-key");
-		await page.getByRole("button", { name: "Save Provider Account" }).click();
-		await expect(page.getByLabel("Preset name")).toBeVisible();
+
+	const modelSettings = await openSettings(page, "Models");
+	if (await modelSettings.getByLabel("API key").isVisible()) {
+		await modelSettings.getByLabel("API key").fill("deterministic-test-key");
+		await modelSettings
+			.getByRole("button", { name: "Save Provider Account" })
+			.click();
+		await expect(modelSettings.getByLabel("Preset name")).toBeVisible();
 	}
-	if (await page.getByLabel("Preset name").isVisible()) {
-		await page.getByLabel("Preset name").fill("Planning model");
-		await page.getByLabel("Model ID").fill("openai/gpt-oss-20b:free");
-		await page.getByRole("button", { name: "Save Model Preset" }).click();
+	if (await modelSettings.getByLabel("Preset name").isVisible()) {
+		await modelSettings.getByLabel("Preset name").fill("Planning model");
+		await modelSettings.getByLabel("Model ID").fill("openai/gpt-oss-20b:free");
+		await modelSettings
+			.getByRole("button", { name: "Save Model Preset" })
+			.click();
 	}
+	await page.keyboard.press("Escape");
+	await expect(modelSettings).toBeHidden();
 
 	await page.route("**/api/agent", async (route) => {
 		const response = await route.fetch();
 		await new Promise((resolve) => setTimeout(resolve, 350));
 		await route.fulfill({ response });
 	});
-	await page.getByRole("button", { name: "Authoring", exact: true }).click();
 	const composer = page.getByLabel("Message the Course Agent");
 	await composer.fill(
 		"Create a practical causal inference Course for applied researchers.",
@@ -46,6 +61,7 @@ test("Course Author views Presentation canvas and slide outline", async ({
 	await expect(page.locator("#agent-run-status")).toHaveText(
 		"Course Agent is working.",
 	);
+	await expect(page.getByText("Working…")).toBeVisible();
 
 	await expect(
 		page.getByText("I created a two-Lecture Course Plan."),
@@ -149,184 +165,170 @@ test("Course Author views Presentation canvas and slide outline", async ({
 		}),
 	);
 
-	// The template manager shares the page shell and exposes one built-in option.
-	await page.getByRole("button", { name: "Templates" }).click();
+	// Template management lives in Settings and always offers the built-in template.
+	const templateSettings = await openSettings(page, "Templates");
 	await expect(
-		page.getByRole("heading", { name: "Templates", level: 1 }),
-	).toBeVisible();
-	await expect(
-		page
-			.getByLabel("Inspect template")
-			.getByRole("option", { name: "Built-in default" }),
+		templateSettings
+			.getByRole("list", { name: "Templates" })
+			.getByRole("button", { name: /Built-in default/ }),
 	).toHaveCount(1);
 	await expect(
-		page.getByText("The built-in template has predefined mappings."),
+		templateSettings.getByText(
+			/The standard Office theme\. It is always available/,
+		),
 	).toBeVisible();
-
-	// The merged Author workspace keeps the Presentation and Course Agent together.
-	await page.getByRole("button", { name: "Course Plan" }).click();
-	await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-	expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
-	const authoringNav = page.getByRole("button", { name: "Authoring" });
-	await authoringNav.focus();
-	await authoringNav.press("Enter");
-	await expect(authoringNav).toHaveAttribute("aria-current", "page");
-	await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
-	await expect(
-		page.getByRole("heading", { name: "Build the Lecture" }),
-	).toBeVisible();
-	await expect(
-		page.getByRole("heading", { name: "Course Agent" }),
-	).toBeVisible();
-	await expect(
-		page.getByRole("heading", { name: "Presentation" }),
-	).toBeVisible();
-	await expect(page.locator(".slide-list > li")).toHaveCount(18);
-	await expect(page.locator(".semantic-preview")).toHaveCount(18);
-	await expect(
-		page.getByText("Updating 18 high-fidelity previews…"),
-	).toBeVisible();
-	await expect(page.locator(".preview-freshness").first()).toHaveText(
-		"Updating preview…",
-	);
-	await expect(page.locator(".slide-list > li").first()).toHaveScreenshot(
-		"presentation-preview-chrome.png",
-		{
-			mask: [page.locator(".visual-slide-preview").first()],
-			maxDiffPixelRatio: 0.01,
-		},
-	);
-	await expect(
-		page.getByText("High-fidelity thumbnails are ready."),
-	).toBeVisible();
-	expect(renderRequests).toBe(1);
-	await expect(page.locator(".preview-freshness")).toHaveCount(0);
-	const firstSlide = page.locator(".slide-card").first();
-	await firstSlide.focus();
-	await firstSlide.press("Enter");
-	const slideDetail = page.getByRole("dialog", {
-		name: "Introduction to causal inference",
-	});
-	await expect(slideDetail).toBeVisible();
-	await expect(
-		slideDetail.getByRole("heading", {
-			name: "Introduction to causal inference",
-		}),
-	).toBeFocused();
 	await page.keyboard.press("Escape");
-	await expect(slideDetail).not.toBeVisible();
-	await expect(page.locator(".slide-card").first()).toBeFocused();
+	await expect(templateSettings).toBeHidden();
 
-	await page.locator(".slide-card").first().click();
+	// Opening a Lecture shows its Slides beside the conversation.
+	const lectureNav = navigator.getByRole("button", {
+		name: new RegExp(course.lectures[0].title),
+	});
+	await lectureNav.focus();
+	await lectureNav.press("Enter");
+	await expect(lectureNav).toHaveAttribute("aria-current", "page");
 	await expect(
-		page.getByRole("button", { name: "Introduction to causal inference" }),
+		page.getByRole("heading", { name: course.lectures[0].title, level: 1 }),
 	).toBeVisible();
-	await page.getByRole("button", { name: "Close slide detail" }).click();
-	await expect(page.locator(".slide-card").first()).toBeFocused();
-	await expect(page.locator(".authoring-body")).toHaveCSS("display", "block");
-	await expect(page.locator(".context-text")).toContainText(
-		"From association to intervention",
+	await expect(page.getByText("18 Slides", { exact: true })).toBeVisible();
+	const filmstrip = page.getByRole("navigation", { name: "Slides" });
+	const filmSlides = filmstrip.getByRole("button", { name: /^Slide \d+:/ });
+	await expect(filmSlides).toHaveCount(18);
+	await expect(page.locator(".stage-position")).toContainText("Slide 1 of 18");
+	await expect(
+		page.getByText("Rendering 18 previews with LibreOffice…"),
+	).toBeVisible();
+	await expect(page.locator(".stage .slide-updating")).toHaveText("Updating…");
+	await expect(page.locator(".stage-bar")).toHaveScreenshot(
+		"presentation-preview-chrome.png",
+		{ maxDiffPixelRatio: 0.01 },
 	);
+	await expect(page.locator(".stage-note")).toHaveCount(0);
+	expect(renderRequests).toBe(1);
+	await expect(page.locator(".slide-updating")).toHaveCount(0);
+	await expect(page.locator(".slide-preview.is-rendered")).toHaveCount(19);
+
+	// Keyboard selection of a Slide updates the stage and the composer context.
+	const thirdSlide = filmSlides.nth(2);
+	await thirdSlide.focus();
+	await thirdSlide.press("Enter");
+	await expect(thirdSlide).toHaveAttribute("aria-current", "true");
+	await expect(page.locator(".stage-position")).toContainText("Slide 3 of 18");
+	await expect(page.locator(".context-chip")).toContainText(
+		"Slide 3 · The intervention question",
+	);
+
+	// Reordering moves the selected Slide.
+	await page.getByRole("button", { name: "Move Slide earlier" }).click();
+	await expect(page.locator(".stage-position")).toContainText("Slide 2 of 18");
+	await expect(filmSlides.nth(1)).toHaveAccessibleName(
+		"Slide 2: The intervention question",
+	);
+
+	// Archiving is reversible and keeps archived Slides reachable.
+	await page.getByRole("button", { name: "Archive Slide" }).click();
+	await expect(filmSlides).toHaveCount(17);
+	await page.getByRole("button", { name: "Archived (1)" }).click();
+	await filmstrip
+		.getByRole("button", { name: "Archived Slide: The intervention question" })
+		.click();
+	await expect(page.locator(".stage-position")).toContainText("Archived Slide");
+	await page.getByRole("button", { name: "Restore Slide" }).click();
+	await expect(filmSlides).toHaveCount(18);
+
+	// Only the canvas scrolls; the composer stays anchored.
 	const desktopOverflow = await page.evaluate(() => {
 		const documentScroller = document.scrollingElement;
-		const slides = document.querySelector(".slide-canvas");
+		const canvas = document.querySelector(".canvas-scroll");
 		return {
 			documentClientHeight: documentScroller?.clientHeight ?? 0,
 			documentScrollHeight: documentScroller?.scrollHeight ?? 0,
-			slideClientHeight: slides?.clientHeight ?? 0,
-			slideScrollHeight: slides?.scrollHeight ?? 0,
+			canvasClientHeight: canvas?.clientHeight ?? 0,
+			canvasScrollHeight: canvas?.scrollHeight ?? 0,
 		};
 	});
 	expect(desktopOverflow.documentScrollHeight).toBeLessThanOrEqual(
 		desktopOverflow.documentClientHeight + 1,
 	);
-	expect(desktopOverflow.slideScrollHeight).toBeGreaterThan(
-		desktopOverflow.slideClientHeight,
+	expect(desktopOverflow.canvasScrollHeight).toBeGreaterThan(
+		desktopOverflow.canvasClientHeight,
 	);
-	const desktopComposerBefore = await page
-		.locator(".chat-composer")
-		.boundingBox();
-	await page.locator(".slide-canvas").evaluate((element) => {
+	const composerBox = page.locator(".composer");
+	const desktopComposerBefore = await composerBox.boundingBox();
+	await page.locator(".canvas-scroll").evaluate((element) => {
 		element.scrollTop = element.scrollHeight;
 	});
-	const desktopComposerAfter = await page
-		.locator(".chat-composer")
-		.boundingBox();
+	const desktopComposerAfter = await composerBox.boundingBox();
 	expect(desktopComposerAfter?.y).toBe(desktopComposerBefore?.y);
 
-	const primaryPane = page.locator(".authoring-primary-pane");
-	const primaryWidthBefore = (await primaryPane.boundingBox())?.width ?? 0;
-	const separator = page.getByRole("separator", {
-		name: "Resize Presentation and Course Agent",
+	// At 1440 × 900 an idle split conversation keeps generous reading space.
+	const transcriptHeight =
+		(await page.locator(".transcript").boundingBox())?.height ?? 0;
+	expect(transcriptHeight).toBeGreaterThanOrEqual(400);
+
+	// Layout controls switch between conversation, split, and canvas focus.
+	const conversationPane = page.getByRole("region", {
+		name: "Conversation",
+		exact: true,
 	});
-	const separatorBox = await separator.boundingBox();
-	expect(separatorBox).not.toBeNull();
-	await page.mouse.move(
-		(separatorBox?.x ?? 0) + (separatorBox?.width ?? 0) / 2,
-		(separatorBox?.y ?? 0) + 120,
-	);
-	await page.mouse.down();
-	await page.mouse.move(
-		(separatorBox?.x ?? 0) - 70,
-		(separatorBox?.y ?? 0) + 120,
-	);
-	await page.mouse.up();
-	const primaryWidthAfterDrag = (await primaryPane.boundingBox())?.width ?? 0;
-	expect(primaryWidthAfterDrag).toBeLessThan(primaryWidthBefore);
-	await separator.focus();
-	await separator.press("ArrowRight");
-	const primaryWidthAfter = (await primaryPane.boundingBox())?.width ?? 0;
-	expect(primaryWidthAfter).toBeGreaterThan(primaryWidthAfterDrag);
+	const canvasPane = page.getByRole("region", { name: "Canvas", exact: true });
+	await page.getByRole("button", { name: "Canvas only" }).click();
+	await expect(conversationPane).toBeHidden();
+	await expect(canvasPane).toBeVisible();
+	await page.getByRole("button", { name: "Conversation only" }).click();
+	await expect(canvasPane).toBeHidden();
+	await expect(conversationPane).toBeVisible();
+	await expect(composer).toBeVisible();
+	await navigator.getByRole("button", { name: "Course Plan" }).click();
+	await expect(canvasPane).toBeVisible();
+	await expect(
+		page.getByRole("button", { name: "Conversation and canvas" }),
+	).toHaveAttribute("aria-pressed", "true");
+	await page.getByRole("button", { name: "Canvas only" }).click();
 	expect(
-		await page.evaluate(() =>
-			localStorage.getItem("course-harness:authoring-agent-width"),
-		),
-	).not.toBeNull();
-	await page.evaluate(() =>
-		localStorage.setItem("course-harness:authoring-agent-width", "25"),
-	);
+		await page.evaluate(() => localStorage.getItem("course-harness:layout")),
+	).toBe("canvas");
 	await page.reload();
-	await page.getByRole("button", { name: "Authoring", exact: true }).click();
+	await navigator
+		.getByRole("button", { name: new RegExp(course.lectures[0].title) })
+		.click();
+	await expect(
+		page.getByRole("button", { name: "Canvas only" }),
+	).toHaveAttribute("aria-pressed", "true");
+	await page.getByRole("button", { name: "Conversation and canvas" }).click();
 	await page.setViewportSize({ width: 1250, height: 844 });
 	await expect
-		.poll(
-			async () =>
-				(await page.locator(".authoring-secondary-pane").boundingBox())
-					?.width ?? 0,
-		)
-		.toBeGreaterThanOrEqual(339);
+		.poll(async () => (await conversationPane.boundingBox())?.width ?? 0)
+		.toBeGreaterThanOrEqual(359);
 
+	// On a phone, one surface shows at a time without horizontal scrolling.
 	await page.setViewportSize({ width: 390, height: 844 });
-	await expect(page.locator(".presentation-layout")).toHaveCSS(
-		"display",
-		"grid",
-	);
+	await expect(canvasPane).toBeVisible();
+	await expect(conversationPane).toBeHidden();
 	const hasHorizontalOverflow = await page.evaluate(
 		() =>
 			document.documentElement.scrollWidth >
 			document.documentElement.clientWidth,
 	);
 	expect(hasHorizontalOverflow).toBe(false);
-	await expect(
-		page.getByRole("button", { name: "Presentation", exact: true }),
-	).toBeVisible();
-	const agentPaneTab = page.getByRole("button", {
-		name: "Course Agent",
+	const backToConversation = page.getByRole("button", {
+		name: "Conversation",
 		exact: true,
 	});
-	await agentPaneTab.focus();
-	await agentPaneTab.press("Enter");
-	await expect(agentPaneTab).toHaveAttribute("aria-pressed", "true");
+	await backToConversation.focus();
+	await backToConversation.press("Enter");
+	await expect(conversationPane).toBeVisible();
+	await expect(canvasPane).toBeHidden();
 
-	// The agent remains in the same view and retains the active Lecture context.
-	await expect(page.locator(".chat-context-indicator")).toBeVisible();
-	await expect(page.locator(".context-text")).toContainText(
-		"From association to intervention",
+	// The conversation keeps the Slide context.
+	await expect(page.locator(".context-chip")).toBeVisible();
+	await expect(page.locator(".context-chip")).toContainText(
+		"Slide 1 · Introduction to causal inference",
 	);
 	await expect(
 		page.getByText("I created a two-Lecture Course Plan."),
 	).toBeVisible();
-	const portraitComposer = await page.locator(".chat-composer").boundingBox();
+	const portraitComposer = await composerBox.boundingBox();
 	expect(portraitComposer).not.toBeNull();
 	expect(portraitComposer?.x).toBeGreaterThanOrEqual(0);
 	expect(
@@ -337,42 +339,82 @@ test("Course Author views Presentation canvas and slide outline", async ({
 	await expect(
 		page.getByText("I created a two-Lecture Course Plan."),
 	).toBeVisible();
-	const landscapeComposer = await page.locator(".chat-composer").boundingBox();
+	const landscapeComposer = await composerBox.boundingBox();
 	expect(landscapeComposer).not.toBeNull();
 	expect(
 		(landscapeComposer?.x ?? 0) + (landscapeComposer?.width ?? 0),
 	).toBeLessThanOrEqual(844);
 	await page.setViewportSize({ width: 390, height: 844 });
 
-	// Clear the context
-	await page.getByRole("button", { name: "Remove" }).click();
-	await expect(page.locator(".chat-context-indicator")).not.toBeVisible();
-	// Lecture selection and Presentation review remain usable in the same view.
-	const lectureButtons = page.locator(
-		".lecture-selector-list .lecture-selector-row > button:first-child",
-	);
-	await page.getByRole("button", { name: "Presentation", exact: true }).click();
-	await expect(lectureButtons).toHaveCount(2);
+	// Clear the context.
+	await page.getByRole("button", { name: /^Remove context: Slide 1/ }).click();
+	await expect(page.locator(".context-chip")).toHaveCount(0);
 
-	await lectureButtons.first().click();
-	await expect(page.locator(".slide-list > li")).toHaveCount(18);
+	// Lectures remain reachable from the navigation drawer.
+	await page.getByRole("button", { name: "Open navigation" }).click();
+	await expect(
+		navigator.getByRole("list").nth(1).getByRole("button"),
+	).toHaveCount(2);
+	await navigator
+		.getByRole("button", { name: new RegExp(course.lectures[1].title) })
+		.click();
+	await expect(canvasPane).toBeVisible();
+	await expect(
+		page.getByRole("heading", { name: "No Slides yet" }),
+	).toBeVisible();
+	await backToConversation.click();
+	await page.getByRole("button", { name: "Open navigation" }).click();
+	await navigator
+		.getByRole("button", { name: new RegExp(course.lectures[0].title) })
+		.click();
+	await expect(filmSlides).toHaveCount(18);
 	expect(renderRequests).toBe(1);
 
-	// Navigate back to Course Plan
-	await page.getByRole("button", { name: "Course Plan" }).click();
+	// UX-14: deleting a Presentation keeps its Lecture.
+	await page.setViewportSize({ width: 1440, height: 900 });
+	await page.getByRole("button", { name: "Delete Presentation" }).click();
+	const deleteDialog = page.getByRole("dialog", {
+		name: "Delete this Presentation?",
+	});
+	await expect(deleteDialog).toContainText(course.lectures[0].title);
+	await deleteDialog
+		.getByRole("button", { name: "Delete Presentation" })
+		.click();
+	await expect(deleteDialog).toBeHidden();
+	await expect(
+		page.getByRole("heading", { name: "No Slides yet" }),
+	).toBeVisible();
+	await expect(
+		navigator.getByRole("button", {
+			name: new RegExp(course.lectures[0].title),
+		}),
+	).toBeVisible();
+	const afterDelete = (await (
+		await page.request.get("/api/course")
+	).json()) as {
+		lectures: { id: string }[];
+	};
+	expect(afterDelete.lectures.map((lecture) => lecture.id)).toContain(
+		lectureId,
+	);
+
+	// Navigate back to the Course Plan.
+	await navigator.getByRole("button", { name: "Course Plan" }).click();
 	await expect(
 		page.getByRole("heading", { name: "Causal Inference in Practice" }),
 	).toBeVisible();
 
-	// Go to Files and verify course.yaml exists
-	await page.getByRole("button", { name: "Files" }).click();
+	// Course files are inspectable in Workspace details.
+	const workspaceSettings = await openSettings(page, "Workspace");
 	await expect(
-		page
+		workspaceSettings
 			.getByRole("region", { name: "Course files" })
 			.getByText(/course\.yaml/),
 	).toBeVisible();
+	await page.keyboard.press("Escape");
 
-	await page.getByRole("button", { name: "All courses" }).click();
+	await page.getByRole("button", { name: "Course menu" }).click();
+	await page.getByRole("menuitem", { name: "Open another course" }).click();
 	await expect(
 		page.getByRole("heading", { name: "Your courses" }),
 	).toBeVisible();

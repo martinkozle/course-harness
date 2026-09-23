@@ -509,6 +509,79 @@ async def test_course_endpoint_does_not_adopt_an_edit_between_capture_and_drift_
 
 
 @pytest.mark.anyio
+async def test_course_details_can_be_edited_without_touching_lectures(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    transport = httpx2.ASGITransport(app=create_app(workspace))
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/api/course",
+            json={
+                "title": "Data Ethics",
+                "audience": "Data practitioners",
+                "lectures": [{"title": "Fairness"}],
+            },
+        )
+        updated = await client.patch(
+            "/api/course",
+            json={
+                "audience": "  Graduate students in data science ",
+                "goals": ["Recognize ethical risks"],
+                "outcomes": ["Review a data project"],
+            },
+        )
+        blank = await client.patch("/api/course", json={"title": "   "})
+
+    assert updated.status_code == 200
+    body = updated.json()
+    assert body["title"] == "Data Ethics"
+    assert body["audience"] == "Graduate students in data science"
+    assert body["goals"] == ["Recognize ethical risks"]
+    assert body["outcomes"] == ["Review a data project"]
+    assert body["lectures"] == created.json()["lectures"]
+    assert blank.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_lectures_can_be_added_and_removed_safely(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    transport = httpx2.ASGITransport(app=create_app(workspace))
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/api/course",
+            json={
+                "title": "Field Methods",
+                "audience": "New researchers",
+                "lectures": [{"title": "Questions"}],
+            },
+        )
+        first_id = created.json()["lectures"][0]["id"]
+        last_one = await client.delete(f"/api/course/lectures/{first_id}")
+        added = await client.post("/api/course/lectures", json={"title": "Sampling"})
+        added_id = added.json()["lectures"][1]["id"]
+        await client.post(
+            f"/api/presentations/{first_id}",
+            json={"slides": [{"layout": "title", "title": "Questions"}]},
+        )
+        with_slides = await client.delete(f"/api/course/lectures/{first_id}")
+        missing = await client.delete("/api/course/lectures/lecture-000000000000")
+        removed = await client.delete(f"/api/course/lectures/{added_id}")
+
+    assert last_one.status_code == 409
+    assert added.status_code == 201
+    assert [lecture["title"] for lecture in added.json()["lectures"]] == [
+        "Questions",
+        "Sampling",
+    ]
+    assert added_id.startswith("lecture-")
+    assert with_slides.status_code == 409
+    assert missing.status_code == 404
+    assert removed.status_code == 200
+    assert [lecture["id"] for lecture in removed.json()["lectures"]] == [first_id]
+
+
+@pytest.mark.anyio
 async def test_reordering_lectures_requires_an_exact_identity_permutation(tmp_path: Path) -> None:
     workspace = tmp_path / "course"
     workspace.mkdir()

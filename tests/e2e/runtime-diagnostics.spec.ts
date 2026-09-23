@@ -15,8 +15,11 @@ test("runtime diagnostics are available before and after selecting a Course Work
 	await expect(dialog.getByText("Runtime paths")).toBeVisible();
 	await expect(dialog.getByText("Provider Account data")).toBeVisible();
 	await expect(
-		dialog.getByText("Provider services are not contacted"),
+		dialog.getByText(/Provider services are not\s+contacted/),
 	).toBeVisible();
+	// Focus stays inside the modal: the scrollable body, then back to Close.
+	await page.keyboard.press("Tab");
+	await expect(dialog.locator(".dialog-body")).toBeFocused();
 	await page.keyboard.press("Tab");
 	await expect(dialog.getByRole("button", { name: "Close" })).toBeFocused();
 	await page.keyboard.press("Escape");
@@ -25,15 +28,19 @@ test("runtime diagnostics are available before and after selecting a Course Work
 		page.getByRole("button", { name: "Runtime diagnostics" }),
 	).toBeFocused();
 
+	// After selecting a Workspace, diagnostics live in Settings.
 	await page.getByRole("button", { name: "New course" }).click();
 	await expect(
-		page.getByRole("heading", { name: "Give the course a clear shape." }),
+		page.getByRole("heading", { name: "Start with your material" }),
 	).toBeVisible();
 	await clearSmokeModelCatalog(page);
-	await page.getByRole("button", { name: "Runtime diagnostics" }).click();
-	await expect(dialog).toBeVisible();
-	await expect(dialog.getByText("Presentation renderer")).toBeVisible();
+	await page.getByRole("button", { name: "Settings" }).click();
+	const settings = page.getByRole("dialog", { name: "Settings" });
+	await settings.getByRole("button", { name: "Diagnostics" }).click();
+	await expect(settings.getByText("Presentation renderer")).toBeVisible();
 	await expect(
-		dialog.getByText(/open Models to add a Provider Account/),
+		settings.getByText(/open Models to add a Provider Account/),
 	).toBeVisible();
+	await page.keyboard.press("Escape");
+	await expect(settings).not.toBeVisible();
 });

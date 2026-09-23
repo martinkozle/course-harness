@@ -1,11 +1,7 @@
-import {
-	type KeyboardEvent as ReactKeyboardEvent,
-	useEffect,
-	useRef,
-	useState,
-} from "react";
+import { useEffect, useState } from "react";
 
 import { responseError } from "./api";
+import { Notice } from "./ui";
 
 type RuntimeDiagnostics = {
 	paths: Record<string, string>;
@@ -14,11 +10,7 @@ type RuntimeDiagnostics = {
 		selected_model_id: string | null;
 		remediation?: string;
 		credential_storage: {
-			mode:
-				| "os-keyring"
-				| "private-json-file"
-				| "unavailable"
-				| "unconfigured";
+			mode: "os-keyring" | "private-json-file" | "unavailable" | "unconfigured";
 			location: string;
 		};
 		provider: {
@@ -56,13 +48,12 @@ const credentialStorageLabels = {
 	unconfigured: "Not configured",
 } as const;
 
-export function RuntimeDiagnosticsDialog({ onClose }: { onClose: () => void }) {
+/** Read-only local checks. Provider services are never contacted. */
+export function RuntimeDiagnosticsPanel() {
 	const [diagnostics, setDiagnostics] = useState<RuntimeDiagnostics | null>(
 		null,
 	);
 	const [error, setError] = useState<string | null>(null);
-	const closeButton = useRef<HTMLButtonElement>(null);
-	const dialog = useRef<HTMLElement>(null);
 
 	useEffect(() => {
 		const controller = new AbortController();
@@ -83,152 +74,103 @@ export function RuntimeDiagnosticsDialog({ onClose }: { onClose: () => void }) {
 				);
 			}
 		})();
-		const previouslyFocused = document.activeElement;
-		closeButton.current?.focus({ preventScroll: true });
-		return () => {
-			controller.abort();
-			if (previouslyFocused instanceof HTMLElement) {
-				previouslyFocused.focus({ preventScroll: true });
-			}
-		};
+		return () => controller.abort();
 	}, []);
 
-	useEffect(() => {
-		function closeOnEscape(event: globalThis.KeyboardEvent) {
-			if (event.key !== "Escape") return;
-			event.preventDefault();
-			onClose();
-		}
-		window.addEventListener("keydown", closeOnEscape);
-		return () => window.removeEventListener("keydown", closeOnEscape);
-	}, [onClose]);
-
-	function keepFocusInside(event: ReactKeyboardEvent<HTMLElement>) {
-		if (event.key !== "Tab") return;
-		const focusable = dialog.current?.querySelectorAll<HTMLElement>(
-			'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-		);
-		if (!focusable || focusable.length === 0) return;
-		const first = focusable[0];
-		const last = focusable[focusable.length - 1];
-		if (event.shiftKey && document.activeElement === first) {
-			event.preventDefault();
-			last.focus();
-		} else if (!event.shiftKey && document.activeElement === last) {
-			event.preventDefault();
-			first.focus();
-		}
-	}
-
 	return (
-		<div className="runtime-diagnostics-backdrop">
-			<section
-				ref={dialog}
-				className="runtime-diagnostics"
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="runtime-diagnostics-title"
-				onKeyDown={keepFocusInside}
-			>
-				<header>
-					<div>
-						<p className="eyebrow">Local checks</p>
-						<h2 id="runtime-diagnostics-title">Runtime diagnostics</h2>
-					</div>
-					<button
-						ref={closeButton}
-						className="quiet-action compact-action"
-						type="button"
-						onClick={onClose}
-					>
-						Close
-					</button>
-				</header>
-				<p className="runtime-diagnostics-intro">
-					Read-only local checks. Provider services are not contacted and
-					credential contents are never displayed.
+		<div className="settings-diagnostics">
+			<p className="meta">
+				These checks run on this computer only. Provider services are not
+				contacted and credentials are never shown.
+			</p>
+			{error ? <Notice tone="error">{error}</Notice> : null}
+			{diagnostics === null && error === null ? (
+				<p role="status" aria-live="polite" aria-busy="true">
+					Checking this computer…
 				</p>
-				{error ? (
-					<p className="notice error-notice" role="alert">
-						{error}
-					</p>
-				) : null}
-				{diagnostics === null && error === null ? (
-					<p role="status" aria-live="polite" aria-busy="true">
-						Checking this computer…
-					</p>
-				) : null}
-				{diagnostics ? (
-					<div className="runtime-diagnostics-content">
-						<section aria-labelledby="runtime-paths-heading">
-							<h3 id="runtime-paths-heading">Runtime paths</h3>
-							<dl className="runtime-path-list">
-								{Object.entries(diagnostics.paths).map(([key, path]) => (
-									<div key={key}>
-										<dt>{pathLabels[key] ?? key}</dt>
-										<dd>{path}</dd>
-									</div>
-								))}
-							</dl>
-						</section>
-						<section aria-labelledby="runtime-provider-heading">
-							<h3 id="runtime-provider-heading">Provider</h3>
-							<p className="runtime-status">
-								{diagnostics.provider.configured
-									? `Configured: ${diagnostics.provider.provider.kind} · ${diagnostics.provider.provider.model}`
-									: "No configured provider"}
+			) : null}
+			{diagnostics ? (
+				<>
+					<section
+						className="settings-block"
+						aria-labelledby="runtime-provider-heading"
+					>
+						<h3 id="runtime-provider-heading">Provider</h3>
+						<p>
+							{diagnostics.provider.configured
+								? `Configured: ${diagnostics.provider.provider.kind} · ${diagnostics.provider.provider.model}`
+								: "No configured provider"}
+						</p>
+						<p className="meta">
+							{diagnostics.provider.selected_model_id
+								? `Selected model ID: ${diagnostics.provider.selected_model_id}`
+								: "No model preset is selected."}
+						</p>
+						<p className="meta">
+							Credential storage:{" "}
+							{
+								credentialStorageLabels[
+									diagnostics.provider.credential_storage.mode
+								]
+							}
+						</p>
+						{diagnostics.provider.provider.diagnostics?.map((finding) => (
+							<p className="meta" key={finding}>
+								{finding}
 							</p>
-							<p className="runtime-detail">
-								{diagnostics.provider.selected_model_id
-									? `Selected model ID: ${diagnostics.provider.selected_model_id}`
-									: "No model preset is selected."}
+						))}
+						{diagnostics.provider.remediation ? (
+							<p className="settings-remediation">
+								{diagnostics.provider.remediation}
 							</p>
-							<p className="runtime-detail">
-								Credential storage:{" "}
-								{
-									credentialStorageLabels[
-										diagnostics.provider.credential_storage.mode
-									]
-								}
-							</p>
-							{diagnostics.provider.provider.diagnostics?.map((finding) => (
-								<p className="runtime-detail" key={finding}>
-									{finding}
+						) : null}
+					</section>
+					<section
+						className="settings-block"
+						aria-labelledby="runtime-parser-heading"
+					>
+						<h3 id="runtime-parser-heading">Resource parser</h3>
+						{Object.entries(diagnostics.parser.processors).map(
+							([processor, mediaTypes]) => (
+								<p className="meta" key={processor}>
+									{processor}: {mediaTypes.join(", ")}
 								</p>
+							),
+						)}
+						<p className="settings-remediation">
+							{diagnostics.parser.remediation}
+						</p>
+					</section>
+					<section
+						className="settings-block"
+						aria-labelledby="runtime-renderer-heading"
+					>
+						<h3 id="runtime-renderer-heading">Presentation renderer</h3>
+						<p>
+							{diagnostics.renderer.name}:{" "}
+							{diagnostics.renderer.available ? "available" : "not found"}
+						</p>
+						<p className="meta">{diagnostics.renderer.detail}</p>
+						<p className="settings-remediation">
+							{diagnostics.renderer.remediation}
+						</p>
+					</section>
+					<section
+						className="settings-block"
+						aria-labelledby="runtime-paths-heading"
+					>
+						<h3 id="runtime-paths-heading">Runtime paths</h3>
+						<dl className="settings-paths">
+							{Object.entries(diagnostics.paths).map(([key, path]) => (
+								<div key={key}>
+									<dt>{pathLabels[key] ?? key}</dt>
+									<dd className="mono">{path}</dd>
+								</div>
 							))}
-							{diagnostics.provider.remediation ? (
-								<p className="runtime-remediation">
-									{diagnostics.provider.remediation}
-								</p>
-							) : null}
-						</section>
-						<section aria-labelledby="runtime-parser-heading">
-							<h3 id="runtime-parser-heading">Resource parser</h3>
-							{Object.entries(diagnostics.parser.processors).map(
-								([processor, mediaTypes]) => (
-									<p className="runtime-detail" key={processor}>
-										{processor}: {mediaTypes.join(", ")}
-									</p>
-								),
-							)}
-							<p className="runtime-remediation">
-								{diagnostics.parser.remediation}
-							</p>
-						</section>
-						<section aria-labelledby="runtime-renderer-heading">
-							<h3 id="runtime-renderer-heading">Presentation renderer</h3>
-							<p className="runtime-status">
-								{diagnostics.renderer.name}:{" "}
-								{diagnostics.renderer.available ? "available" : "not found"}
-							</p>
-							<p className="runtime-detail">{diagnostics.renderer.detail}</p>
-							<p className="runtime-remediation">
-								{diagnostics.renderer.remediation}
-							</p>
-						</section>
-					</div>
-				) : null}
-			</section>
+						</dl>
+					</section>
+				</>
+			) : null}
 		</div>
 	);
 }

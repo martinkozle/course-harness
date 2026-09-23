@@ -1,20 +1,38 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
-test("Course Author can inspect Current State before and after creating a Course", async ({
+function navigator(page: Page) {
+	return page.getByRole("navigation", { name: "Course" });
+}
+
+/** History reads Current State when it opens; reopen it after outside edits. */
+async function reopenHistory(page: Page) {
+	await navigator(page).getByRole("button", { name: "Course Plan" }).click();
+	await navigator(page)
+		.getByRole("button", { name: /History/ })
+		.click();
+	await expect(
+		page.getByRole("heading", { name: "History", exact: true }),
+	).toBeVisible();
+	await expect(page.getByText("Reading history…")).toHaveCount(0);
+}
+
+test("Course Author can review History before and after creating a Course", async ({
 	page,
 }) => {
 	await page.request.post("/api/workspace/close");
 	await page.goto("/");
 	await page.getByRole("button", { name: "New course" }).click();
-	await page.getByRole("button", { name: "Current State" }).click();
+	await navigator(page)
+		.getByRole("button", { name: /History/ })
+		.click();
 	await expect(
-		page.getByRole("heading", { name: "Current State" }),
+		page.getByRole("heading", { name: "History", exact: true }),
 	).toBeVisible();
 	await expect(
 		page.getByRole("heading", {
-			name: "History starts when you create a Course Plan",
+			name: "History starts once the course has a Course Plan.",
 		}),
 	).toBeVisible();
 
@@ -33,52 +51,61 @@ test("Course Author can inspect Current State before and after creating a Course
 	};
 	const lectureId = createdCourse.lectures[0].id;
 	await page.reload();
-	await page.getByRole("button", { name: "Course Plan" }).click();
-	await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-	await expect
-		.poll(() => page.evaluate(() => window.scrollY))
-		.toBeGreaterThan(0);
-	await page.getByRole("button", { name: "Current State" }).click();
+
+	// The navigator shows how many changes are not yet in a Course Revision.
 	await expect(
-		page.getByRole("heading", { name: "Current State" }),
+		navigator(page).getByRole("button", { name: /History/ }),
+	).toContainText("1");
+	await reopenHistory(page);
+	await expect(
+		page.getByRole("heading", { name: "History", exact: true }),
 	).toBeInViewport();
-	await expect(page.getByRole("status")).toContainText("up to date");
-	const [refreshResponse] = await Promise.all([
-		page.waitForResponse(
-			(response) =>
-				response.url().endsWith("/api/workspace/current-state") &&
-				response.request().method() === "GET",
-		),
-		page.getByRole("button", { name: "Refresh" }).click(),
-	]);
-	expect(refreshResponse.ok()).toBe(true);
-	await expect(page.getByText("Added")).toBeVisible();
-	await expect(page.getByText("course.yaml", { exact: true })).toBeVisible();
-	await expect(page.getByText(/total lines?/)).toBeVisible();
-	await expect(page.getByText("Valid", { exact: true })).toBeVisible();
-	await expect(page.getByRole("status")).toContainText("up to date");
-	await page.getByRole("button", { name: "Revert" }).click();
+	const changes = page.locator(".history-change");
+	await expect(changes).toHaveCount(1);
+	await expect(changes.first()).toContainText("Course Plan");
+	await expect(changes.first()).toContainText("Added");
+	await changes.first().getByText("Show file changes").click();
 	await expect(
-		page.getByText("Remove this newly added file from Current State?"),
+		changes.first().getByText("course.yaml", { exact: true }),
 	).toBeVisible();
-	await page.getByRole("button", { name: "Cancel" }).click();
+	await expect(changes.first().getByText(/· \d+ lines?/)).toBeVisible();
+	await expect(page.getByText("Issues to review")).toHaveCount(0);
+
+	await page.getByRole("button", { name: "Remove the Course Plan" }).click();
+	const removeDialog = page.getByRole("dialog", {
+		name: "Remove the Course Plan?",
+	});
+	await expect(removeDialog).toContainText("added since the last revision");
+	await removeDialog.getByRole("button", { name: "Cancel" }).click();
+	await expect(removeDialog).toBeHidden();
+
 	await page.getByLabel("Revision summary").fill("Initial course");
 	await page.getByRole("button", { name: "Create Course Revision" }).click();
+	await expect(
+		page.getByRole("tab", { name: /Course Revisions/, selected: true }),
+	).toBeVisible();
 	await expect(page.getByText("Initial course")).toBeVisible();
 
 	await page.request.patch(`/api/course/lectures/${lectureId}`, {
-		data: { title: "Edited outside Current State" },
+		data: { title: "Edited outside History" },
 	});
-	await page.getByRole("button", { name: "Refresh" }).click();
-	await expect(page.getByText("Modified")).toBeVisible();
-	await page.getByRole("button", { name: "Revert" }).click();
-	await page.getByRole("button", { name: "Confirm revert" }).click();
-	await expect(page.getByText("Clean", { exact: true })).toBeVisible();
+	await reopenHistory(page);
+	await expect(changes.first()).toContainText("Changed");
+	await page
+		.getByRole("button", { name: "Undo changes to the Course Plan" })
+		.click();
+	await page
+		.getByRole("dialog", { name: "Undo changes to the Course Plan?" })
+		.getByRole("button", { name: "Undo changes" })
+		.click();
+	await expect(
+		page.getByRole("heading", { name: "No changes since the last revision." }),
+	).toBeVisible();
 
 	await page.request.patch(`/api/course/lectures/${lectureId}`, {
 		data: { title: "First revision title" },
 	});
-	await page.getByRole("button", { name: "Refresh" }).click();
+	await reopenHistory(page);
 	await page.getByLabel("Revision summary").fill("First revision");
 	await page.getByRole("button", { name: "Create Course Revision" }).click();
 	await expect(page.getByText("First revision", { exact: true })).toBeVisible();
@@ -86,7 +113,7 @@ test("Course Author can inspect Current State before and after creating a Course
 	await page.request.patch(`/api/course/lectures/${lectureId}`, {
 		data: { title: "Second revision title" },
 	});
-	await page.getByRole("button", { name: "Refresh" }).click();
+	await reopenHistory(page);
 	await page.getByLabel("Revision summary").fill("Second revision");
 	await page.getByRole("button", { name: "Create Course Revision" }).click();
 	await expect(
@@ -94,18 +121,26 @@ test("Course Author can inspect Current State before and after creating a Course
 	).toBeVisible();
 
 	const firstRevision = page
-		.locator(".revision-list > li")
+		.locator(".history-revisions > li")
 		.filter({ hasText: "First revision" });
 	await firstRevision.getByRole("button", { name: "Restore" }).click();
-	await firstRevision.getByRole("button", { name: "Confirm restore" }).click();
-	await expect(page.getByText("Current State is up to date.")).toBeVisible();
+	const restoreDialog = page.getByRole("dialog", {
+		name: "Restore this Course Revision?",
+	});
+	await expect(restoreDialog).toContainText("First revision");
+	await restoreDialog.getByRole("button", { name: "Restore revision" }).click();
+	await expect(restoreDialog).toBeHidden();
 	const restoredCourse = await page.request.get("/api/course");
 	expect((await restoredCourse.json()).lectures[0].title).toBe(
 		"First revision title",
 	);
+	// The Course Plan everywhere reflects the restored revision.
+	await expect(
+		navigator(page).getByRole("button", { name: /First revision title/ }),
+	).toBeVisible();
 });
 
-test("Course Author accepts valid Workspace Drift as a Course Revision", async ({
+test("Course Author accepts valid outside changes as a Course Revision", async ({
 	page,
 }) => {
 	await page.request.post("/api/workspace/close");
@@ -134,38 +169,47 @@ test("Course Author accepts valid Workspace Drift as a Course Revision", async (
 		"utf8",
 	);
 
-	await page.getByRole("button", { name: "Current State" }).click();
+	// Outside changes raise a persistent, actionable banner.
+	await page.reload();
 	await expect(
-		page.getByRole("heading", { name: "Workspace Drift detected" }),
+		page.getByText("Course files changed outside the app."),
 	).toBeVisible();
-	await expect(page.getByLabel("Workspace Drift paths")).toContainText(
-		"course.yaml",
-	);
+	await page.getByRole("button", { name: "Review changes" }).click();
+	const driftPanel = page.locator(".history-drift");
+	await expect(
+		driftPanel.getByRole("heading", {
+			name: "Course files changed outside the app",
+		}),
+	).toBeVisible();
+	await expect(driftPanel).toContainText("Course Plan");
 	await page
-		.getByLabel("Workspace Drift summary")
+		.getByLabel("Describe the outside changes")
 		.fill("Accept external Course title edit");
-	await page.getByRole("button", { name: "Accept Workspace Drift" }).click();
-	await expect(
-		page.getByText("Create this Course Revision from Workspace Drift?"),
-	).toBeVisible();
+	await page.getByRole("button", { name: "Accept outside changes" }).click();
+	const acceptDialog = page.getByRole("dialog", {
+		name: "Accept outside changes?",
+	});
+	await expect(acceptDialog).toContainText("Accept external Course title edit");
 	const [acceptResponse] = await Promise.all([
 		page.waitForResponse(
 			(response) =>
 				response.url().endsWith("/api/workspace/drift/accept") &&
 				response.request().method() === "POST",
 		),
-		page.getByRole("button", { name: "Confirm acceptance" }).click(),
+		acceptDialog.getByRole("button", { name: "Accept changes" }).click(),
 	]);
 	expect(acceptResponse.ok()).toBe(true);
+	await expect(driftPanel).toHaveCount(0);
+	await expect(
+		page.getByText("Course files changed outside the app."),
+	).toHaveCount(0);
+	await page.getByRole("tab", { name: /Course Revisions/ }).click();
 	await expect(
 		page.getByText("Accept external Course title edit"),
 	).toBeVisible();
-	await expect(
-		page.getByRole("heading", { name: "No Workspace Drift" }),
-	).toBeVisible();
 });
 
-test("Course Author can hand inconsistent Workspace Drift to the Course Agent", async ({
+test("Course Author can hand inconsistent outside changes to the Course Agent", async ({
 	page,
 }) => {
 	await page.request.post("/api/workspace/close");
@@ -191,18 +235,21 @@ test("Course Author can hand inconsistent Workspace Drift to the Course Agent", 
 		"utf8",
 	);
 
-	await page.getByRole("button", { name: "Current State" }).click();
+	await page.reload();
+	await page.getByRole("button", { name: "Review changes" }).click();
 	await expect(
-		page.getByRole("heading", { name: "Workspace Drift detected" }),
+		page.locator(".history-drift").getByRole("heading", {
+			name: "Course files changed outside the app",
+		}),
 	).toBeVisible();
-	await expect(
-		page.getByRole("button", { name: "Reconcile with Course Agent" }),
-	).toBeVisible();
-	await page
-		.getByRole("button", { name: "Reconcile with Course Agent" })
-		.click();
-	await expect(page.getByLabel("Message the Course Agent")).toBeVisible();
-	await expect(
-		page.getByText("Workspace Drift needs Reconciliation.", { exact: false }),
-	).toBeVisible();
+	await page.getByRole("button", { name: "Fix with the Course Agent" }).click();
+	const composer = page.getByLabel("Message the Course Agent");
+	await expect(composer).toBeVisible();
+	await expect(composer).toBeFocused();
+	await expect(composer).toHaveValue(/Course files changed outside the app/);
+	await expect(page.locator(".context-chip")).toContainText("Outside changes");
+	await expect(page.locator(".context-chip")).toHaveAttribute(
+		"title",
+		/Workspace Drift needs Reconciliation\./,
+	);
 });

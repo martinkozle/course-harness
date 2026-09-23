@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 import { clearSmokeModelCatalog } from "./smokeState";
 
@@ -17,6 +17,7 @@ async function expectNoAccessibilityViolations(page: Page, surface: string) {
 test("major Course Author journey surfaces meet automated and keyboard accessibility checks", async ({
 	page,
 }) => {
+	const navigator = page.getByRole("navigation", { name: "Course" });
 	await page.request.post("/api/workspace/close");
 	await page.goto("/");
 	await expectNoAccessibilityViolations(page, "Workspace Launcher");
@@ -25,26 +26,30 @@ test("major Course Author journey surfaces meet automated and keyboard accessibi
 	await expect(
 		page.getByRole("dialog", { name: "Runtime diagnostics" }),
 	).toBeVisible();
+	await expect(page.getByText("Runtime paths")).toBeVisible();
 	await expectNoAccessibilityViolations(page, "Runtime diagnostics");
 	await page.keyboard.press("Escape");
 
 	await page.getByRole("button", { name: "New course" }).click();
 	await expect(
-		page.getByRole("heading", { name: "Give the course a clear shape." }),
+		page.getByRole("heading", { name: "Start with your material" }),
 	).toBeVisible();
 	await clearSmokeModelCatalog(page);
-	await expectNoAccessibilityViolations(page, "Course setup");
-
-	await page.getByRole("button", { name: "Models", exact: true }).click();
-	await expect(page.getByRole("heading", { name: "Models" })).toBeVisible();
 	await expect(
-		page.getByText(
+		page.getByRole("heading", { name: "Start with your material" }),
+	).toBeVisible();
+	await expectNoAccessibilityViolations(page, "Start surface");
+
+	await page.getByRole("button", { name: "Add a model to chat" }).click();
+	const modelDialog = page.getByRole("dialog", { name: "Add a model" });
+	await expect(
+		modelDialog.getByText(
 			/Saving sends this key to https:\/\/openrouter\.ai\/api\/v1/,
 		),
 	).toBeVisible();
 	await expectNoAccessibilityViolations(page, "Provider and model setup");
 
-	await page.getByLabel("API key").fill("deterministic-test-key");
+	await modelDialog.getByLabel("API key").fill("deterministic-test-key");
 	await page.route(
 		"**/api/provider-accounts",
 		async (route) => {
@@ -58,32 +63,25 @@ test("major Course Author journey surfaces meet automated and keyboard accessibi
 		},
 		{ times: 1 },
 	);
-	await page.getByRole("button", { name: "Save Provider Account" }).click();
-	await expect(page.getByRole("alert")).toHaveText(
+	await modelDialog
+		.getByRole("button", { name: "Save Provider Account" })
+		.click();
+	await expect(modelDialog.getByRole("alert")).toHaveText(
 		"The Provider Account could not be verified.",
 	);
 	await expectNoAccessibilityViolations(page, "Provider error recovery");
 
 	// The form keeps its safe inputs and can be retried after a reported failure.
-	await page.getByRole("button", { name: "Save Provider Account" }).click();
-	await page.getByLabel("Preset name").fill("Planning model");
-	await page.getByLabel("Model ID").fill("deterministic/course-agent");
-	await page.getByRole("button", { name: "Save Model Preset" }).click();
-
-	const authoringNav = page.getByRole("button", {
-		name: "Authoring",
-		exact: true,
-	});
-	await authoringNav.focus();
-	await authoringNav.press("Enter");
-	await expect(authoringNav).toHaveAttribute("aria-current", "page");
-	await expect(
-		page.getByRole("heading", { name: "Course Agent" }),
-	).toBeVisible();
-	await expectNoAccessibilityViolations(page, "Course Agent authoring");
+	await modelDialog
+		.getByRole("button", { name: "Save Provider Account" })
+		.click();
+	await modelDialog.getByLabel("Preset name").fill("Planning model");
+	await modelDialog.getByLabel("Model ID").fill("deterministic/course-agent");
+	await modelDialog.getByRole("button", { name: "Save Model Preset" }).click();
+	await expect(modelDialog).toBeHidden();
 
 	const composer = page.getByLabel("Message the Course Agent");
-	await composer.focus();
+	await expect(composer).toBeFocused();
 	await composer.press("Shift+Enter");
 	await expect(composer).toHaveValue("\n");
 	await composer.fill("Create a practical causal inference Course.");
@@ -91,21 +89,35 @@ test("major Course Author journey surfaces meet automated and keyboard accessibi
 	await expect(page.locator("#agent-run-status")).toHaveText(
 		"Course Agent finished.",
 	);
-	const conversation = page.locator(".chat-messages");
-	await conversation.evaluate((element) => {
+	await expect(
+		page.getByRole("heading", { name: "Causal Inference in Practice" }),
+	).toBeVisible();
+	await expectNoAccessibilityViolations(
+		page,
+		"Course Plan beside conversation",
+	);
+
+	// The transcript is keyboard scrollable.
+	const transcript = page.getByRole("region", {
+		name: "Course Agent conversation",
+	});
+	await transcript.evaluate((element) => {
 		element.style.flex = "0 0 40px";
 		element.style.height = "40px";
 		element.style.maxHeight = "40px";
-		element.style.overflowY = "auto";
 		element.scrollTop = 0;
 	});
-	await conversation.focus();
-	await conversation.press("End");
+	await transcript.focus();
+	await transcript.press("End");
 	await expect
-		.poll(() => conversation.evaluate((element) => element.scrollTop))
+		.poll(() => transcript.evaluate((element) => element.scrollTop))
 		.toBeGreaterThan(0);
+	await transcript.evaluate((element) => {
+		element.removeAttribute("style");
+	});
+
 	const course = (await (await page.request.get("/api/course")).json()) as {
-		lectures: Array<{ id: string }>;
+		lectures: Array<{ id: string; title: string }>;
 	};
 	const firstLecture = course.lectures[0];
 	expect(firstLecture).toBeDefined();
@@ -124,58 +136,50 @@ test("major Course Author journey surfaces meet automated and keyboard accessibi
 		},
 	);
 	expect(createPresentation.ok()).toBe(true);
-	await page.getByRole("button", { name: "Course Plan" }).click();
-	await authoringNav.click();
+	await page.reload();
+	const lectureNav = navigator.getByRole("button", {
+		name: new RegExp(firstLecture.title),
+	});
+	await lectureNav.focus();
+	await lectureNav.press("Enter");
+	await expect(lectureNav).toHaveAttribute("aria-current", "page");
 	await expect(
-		page.getByRole("heading", { name: "Presentation" }),
+		page.getByRole("heading", { name: firstLecture.title, level: 1 }),
 	).toBeVisible();
-	await expectNoAccessibilityViolations(page, "Presentation canvas");
-	const firstSlide = page.locator(".slide-card").first();
+	await expectNoAccessibilityViolations(page, "Lecture canvas");
+
+	const firstSlide = page
+		.getByRole("navigation", { name: "Slides" })
+		.getByRole("button", { name: /^Slide 1:/ });
 	await firstSlide.focus();
 	await firstSlide.press("Enter");
-	const slideDialog = page.getByRole("dialog", {
-		name: "Introduction to causal inference",
-	});
-	await expect(slideDialog).toBeVisible();
-	await expect(
-		slideDialog.getByRole("heading", {
-			name: "Introduction to causal inference",
-		}),
-	).toBeFocused();
-	const selectionOverlay = slideDialog.locator(".preview-content-slot").first();
-	await selectionOverlay.focus();
-	await expect(selectionOverlay).toBeFocused();
-	await selectionOverlay.press("Enter");
-	await expect(page.locator(".context-text")).toContainText(
+	await expect(firstSlide).toHaveAttribute("aria-current", "true");
+	await expect(page.locator(".context-chip")).toContainText(
 		"Introduction to causal inference",
 	);
-	await expectNoAccessibilityViolations(page, "Slide detail");
-	await page.keyboard.press("Escape");
-	await expect(firstSlide).toBeFocused();
+	const editSlide = page.getByRole("button", { name: "Edit Slide" });
+	await editSlide.focus();
+	await editSlide.press("Enter");
+	await expect(page.getByLabel("Slide title")).toBeFocused();
+	await expectNoAccessibilityViolations(page, "Slide editor");
+	await page.getByRole("button", { name: "Cancel", exact: true }).click();
+	await expect(page.getByLabel("Slide title")).toHaveCount(0);
 
-	await page.getByRole("button", { name: "Library" }).click();
+	await page.getByRole("button", { name: /^Template:/ }).click();
+	await expect(page.getByRole("dialog", { name: /template/i })).toBeVisible();
+	await expectNoAccessibilityViolations(page, "Template gallery");
+	await page.keyboard.press("Escape");
+
+	// Sources: each scope passes automated checks and recovers from failures.
+	await navigator.getByRole("button", { name: /Sources/ }).click();
 	await expect(
-		page.getByRole("heading", { name: "Resources", exact: true }),
+		page.getByRole("heading", { name: "Sources", exact: true }),
 	).toBeVisible();
-	await expectNoAccessibilityViolations(page, "Source Library");
-	await page.route(
-		"**/api/resources/cache",
-		async (route) => {
-			await route.fulfill({
-				status: 503,
-				contentType: "application/json",
-				body: JSON.stringify({ detail: "Search index is temporarily unavailable." }),
-			});
-		},
-		{ times: 1 },
-	);
-	await page.getByRole("button", { name: "Regenerate search index" }).click();
-	await expect(page.getByRole("alert")).toHaveText(
-		"Search index is temporarily unavailable.",
-	);
-	await page.getByRole("button", { name: "Regenerate search index" }).click();
-	await expect(page.getByRole("alert")).toHaveCount(0);
-	const discovery = page.getByRole("region", { name: "Remote discovery" });
+	await expectNoAccessibilityViolations(page, "Sources: this course");
+	await page.getByRole("tab", { name: /Library/ }).click();
+	await expectNoAccessibilityViolations(page, "Sources: Library");
+	await page.getByRole("tab", { name: "Discover" }).click();
+	await expectNoAccessibilityViolations(page, "Sources: Discover");
 	let discoveryAttempts = 0;
 	await page.route(
 		"**/api/discovery/search",
@@ -184,42 +188,99 @@ test("major Course Author journey surfaces meet automated and keyboard accessibi
 			await route.fulfill(
 				discoveryAttempts === 1
 					? {
-						status: 503,
-						contentType: "application/json",
-						body: JSON.stringify({ detail: "Discovery is temporarily unavailable." }),
-					}
+							status: 503,
+							contentType: "application/json",
+							body: JSON.stringify({
+								detail: "Discovery is temporarily unavailable.",
+							}),
+						}
 					: { status: 200, contentType: "application/json", body: "[]" },
 			);
 		},
 		{ times: 2 },
 	);
-	await discovery.getByRole("searchbox", { name: "Search remote resources" }).fill("causal inference");
-	await discovery.getByRole("button", { name: "Search" }).click();
-	await expect(discovery.getByRole("alert")).toHaveText(
+	const discoverySearch = page.getByRole("searchbox", {
+		name: "Search for papers and repositories",
+	});
+	await discoverySearch.fill("causal inference");
+	await page.getByRole("button", { name: "Search", exact: true }).click();
+	await expect(page.getByRole("alert")).toHaveText(
 		"Discovery is temporarily unavailable.",
 	);
+	await expect(discoverySearch).toHaveValue("causal inference");
+	await page.getByRole("button", { name: "Search", exact: true }).click();
+	await expect(page.getByRole("alert")).toHaveCount(0);
 	await expect(
-		discovery.getByRole("searchbox", { name: "Search remote resources" }),
-	).toHaveValue("causal inference");
-	await discovery.getByRole("button", { name: "Search" }).click();
-	await expect(discovery.getByRole("alert")).toHaveCount(0);
+		page.getByText("Nothing found. Try broader or different words."),
+	).toBeVisible();
+	// Switching scopes never sends a query to another scope.
+	await page.getByRole("tab", { name: /This course/ }).click();
+	await page.getByRole("tab", { name: "Discover" }).click();
+	expect(discoveryAttempts).toBe(2);
+	// Each scope keeps its own query and results across switching (UX-03).
+	await expect(discoverySearch).toHaveValue("causal inference");
 	await expect(
-		discovery.getByText("No remote resources found. Try another search."),
+		page.getByText("Nothing found. Try broader or different words."),
 	).toBeVisible();
 
-	await page.getByRole("button", { name: "Templates" }).click();
+	// Settings sections, including search index recovery.
+	await page.getByRole("button", { name: "Settings" }).click();
+	const settings = page.getByRole("dialog", { name: "Settings" });
+	const sections = settings.getByRole("navigation", {
+		name: "Settings sections",
+	});
+	await expectNoAccessibilityViolations(page, "Settings: Models");
+	await sections.getByRole("button", { name: "Templates" }).click();
+	await expectNoAccessibilityViolations(page, "Settings: Templates");
+	await sections.getByRole("button", { name: "Workspace" }).click();
 	await expect(
-		page.getByRole("heading", { name: "Templates", level: 1 }),
+		settings.getByRole("region", { name: "Course files" }),
 	).toBeVisible();
-	await expectNoAccessibilityViolations(page, "Template manager");
+	await expectNoAccessibilityViolations(page, "Settings: Workspace");
+	await sections.getByRole("button", { name: "Diagnostics" }).click();
+	await expect(settings.getByText("Presentation renderer")).toBeVisible();
+	await expectNoAccessibilityViolations(page, "Settings: Diagnostics");
+	await page.route(
+		"**/api/resources/cache",
+		async (route) => {
+			await route.fulfill({
+				status: 503,
+				contentType: "application/json",
+				body: JSON.stringify({
+					detail: "Search index is temporarily unavailable.",
+				}),
+			});
+		},
+		{ times: 1 },
+	);
+	await settings.getByRole("button", { name: "Rebuild search index" }).click();
+	await expect(settings.getByRole("alert")).toHaveText(
+		"Search index is temporarily unavailable.",
+	);
+	await settings.getByRole("button", { name: "Rebuild search index" }).click();
+	await expect(settings.getByRole("alert")).toHaveCount(0);
+	await page.keyboard.press("Escape");
+	await expect(settings).toBeHidden();
 
-	await page.getByRole("button", { name: "Current State" }).click();
+	await navigator.getByRole("button", { name: /History/ }).click();
 	await expect(
-		page.getByRole("heading", { name: "Current State" }),
+		page.getByRole("heading", { name: "History", exact: true }),
 	).toBeVisible();
-	await expectNoAccessibilityViolations(page, "Current State review");
+	await expect(page.getByText("Reading history…")).toHaveCount(0);
+	await expectNoAccessibilityViolations(page, "History");
 
-	await page.getByRole("button", { name: "Releases" }).click();
-	await expect(page.getByRole("heading", { name: "Releases" })).toBeVisible();
+	await page.getByRole("button", { name: "Publish release" }).first().click();
+	await expect(
+		page.getByRole("heading", { name: "Publish a Course Release" }),
+	).toBeVisible();
 	await expectNoAccessibilityViolations(page, "Release preparation");
+
+	// The Course Plan canvas and its details dialog.
+	await navigator.getByRole("button", { name: "Course Plan" }).click();
+	await page.getByRole("button", { name: "Edit details" }).click();
+	await expect(
+		page.getByRole("dialog", { name: "Edit course details" }),
+	).toBeVisible();
+	await expectNoAccessibilityViolations(page, "Course details");
+	await page.keyboard.press("Escape");
 });

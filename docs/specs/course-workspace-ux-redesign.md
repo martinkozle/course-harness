@@ -1,6 +1,6 @@
 # Course Workspace UX redesign
 
-Status: proposed design, ready for discussion and implementation planning. No application changes in this round.
+Status: first implementation round complete (see [section 12](#12-implementation-status-round-1)). Earlier status: proposed design.
 
 Date: 2026-09-23. Companion: [browser audit](../research/course-workspace-ux-audit.md).
 
@@ -394,3 +394,31 @@ Use conversation on the left and canvas on the right; retain layout focus modes.
 Borrow the continuity of a Conversation and its adjacent output from [Claude Artifacts](https://www.anthropic.com/news/artifacts), and the organization of related chats and material from [Claude Projects](https://www.anthropic.com/news/projects) and [ChatGPT Projects](https://openai.com/academy/projects/). These official descriptions support the interaction patterns, not a claim that their current interfaces were exhaustively audited.
 
 The Course-specific adaptation is the visible Lecture sequence, explicit Source inclusion, Citation inspection, recoverable Course state, and distinction between mutable exports and immutable Releases. Gemini, Cowork, and Claude Design are owner-supplied directional references; their interfaces were not independently evaluated in this audit. A generic chat clone would not provide enough structure for Course work.
+
+## 12. Implementation status (round 1)
+
+Implemented on 2026-09-23 as a full replacement of the previous React surfaces and stylesheet.
+
+**Built as specified**
+
+- Persistent shell: navigator (course switcher, Course Plan, Sources, numbered Lecture sequence, Conversations, History, Settings), a conversation that stays mounted, and a canvas with Conversation only / Split / Canvas only modes. The navigator becomes a drawer below 1180 px; below 900 px one pane shows at a time.
+- Material-led start: when no Course Plan exists, the conversation shows the start surface (drop zone, Discover papers, Choose from Library, included Sources, "Write the plan yourself"). Files added there are uploaded and included in the Course, with per-file progress, failures, retry, and the PDF-model consent flow as a recoverable pending item.
+- Conversation: safe Markdown (no raw HTML), compact header, growing composer, model chooser in the composer, Add model dialog that returns to the draft, collapsible provider disclosure, Stop in the send position, jump to latest, context chips that follow the open Course Plan/Lecture/Slide while the draft is empty and offer "Use …" once typing has started, per-Conversation drafts, linked results ("Course Plan · Open", "Lecture 1 · 2 Slides · Open"), and an accurate note after stopping.
+- Conversation navigation in the navigator with row menus (Rename, Archive/Restore, Delete with confirmation), archived filter, and "Summarize earlier context" in the Conversation menu.
+- Course Plan canvas with in-place Lecture rename, move earlier/later, add, and remove, plus an Edit details dialog. New endpoints back this: `PATCH /api/course`, `POST /api/course/lectures`, `DELETE /api/course/lectures/{id}` (refused for a Lecture with a Presentation or the last Lecture).
+- Sources canvas with This course / Library / Discover tabs, search at the top of each scope, distinct processing vs membership states, title-as-read action, overflow menus for secondary actions, a separated trash action with scope-specific meaning, and a Source reader that highlights cited lines (the "evidence" highlighter colour is reserved for this).
+- Lecture canvas with stage preview, horizontal filmstrip, Citation count markers, full-width Slide editor for every layout field, explicit Save, evidence chips that open the reader with "Back to Slides" (the selected Slide is restored), template gallery dialog, Export PowerPoint, and a separated Delete Presentation with a confirmation that names the Lecture.
+- History canvas (Current changes in domain language, Course Revisions, Releases with immutable detail), a drift banner, and a Release canvas that includes a Lecture's PowerPoint by default and warns explicitly when no files are included.
+- Settings dialog with Models, Templates (mapping review surfaces low-confidence layouts first), Workspace (identity and read-only Course files), and Diagnostics.
+
+**Deferred or partial**
+
+- The conversation width is responsive (`clamp(360px, 36%, 520px)`) but not user-resizable yet.
+- Template gallery cards use an abstract slide mock rather than rendered thumbnails.
+- Current changes map files to domain objects (Course Plan, Slides for Lecture N, Course Sources); revert remains file-level and says so.
+- Linked results in the transcript are kept for the session only; they are not persisted with the transcript.
+- The open canvas and selected Slide are not restored after a full reload.
+- The Slide editor does not reload over an open draft when the agent changes the Presentation, but there is no compare/merge prompt yet.
+- Drift is detected when the Course loads, after agent runs, and when History opens, not continuously.
+- Sources has no batch selection yet.
+- The usability study in section 9 has not been run.

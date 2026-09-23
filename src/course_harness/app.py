@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
 from pathlib import Path
 from typing import Literal, cast
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.exceptions import RequestValidationError
@@ -65,7 +66,10 @@ from course_harness.course_agent import (
 from course_harness.course_plan import (
     CoursePlan,
     CoursePlanInput,
+    Goal,
     InvalidCoursePlan,
+    Lecture,
+    Outcome,
     create_course_plan,
     create_course_plan_file,
     initialize_workspace_history,
@@ -326,6 +330,21 @@ class LectureRename(BaseModel):
 
 class LectureOrder(BaseModel):
     lecture_ids: list[str] = Field(min_length=1)
+
+
+class CourseDetailsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    audience: str | None = Field(default=None, min_length=1, max_length=1000)
+    goals: list[Goal] | None = None
+    outcomes: list[Outcome] | None = None
+
+
+class LectureCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str = Field(min_length=1, max_length=200)
 
 
 class WorkspaceEntry(BaseModel):
@@ -1786,6 +1805,70 @@ def create_app(
             lectures_by_id = {lecture.id: lecture for lecture in plan.lectures}
             updated = plan.model_copy(
                 update={"lectures": [lectures_by_id[identity] for identity in order.lecture_ids]}
+            )
+            write_course_plan(active, updated, expected=expected_course)
+            record_canonical_mutation(
+                active, provenance_permitted, {"course.yaml": serialize_course_plan(updated)}
+            )
+            return updated
+
+    @app.patch("/api/course", response_model=CoursePlan)
+    async def update_course_details(details: CourseDetailsUpdate) -> CoursePlan:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            expected_course = capture_canonical_file(active, "course.yaml")
+            plan = read_required_course_plan(active)
+            provenance_permitted = require_canonical_authoring(active)
+            updated = plan.model_copy(update=details.model_dump(exclude_none=True))
+            write_course_plan(active, updated, expected=expected_course)
+            record_canonical_mutation(
+                active, provenance_permitted, {"course.yaml": serialize_course_plan(updated)}
+            )
+            return updated
+
+    @app.post("/api/course/lectures", response_model=CoursePlan, status_code=201)
+    async def add_lecture(lecture: LectureCreate) -> CoursePlan:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            expected_course = capture_canonical_file(active, "course.yaml")
+            plan = read_required_course_plan(active)
+            provenance_permitted = require_canonical_authoring(active)
+            updated = plan.model_copy(
+                update={
+                    "lectures": [
+                        *plan.lectures,
+                        Lecture(id=f"lecture-{uuid4().hex[:12]}", title=lecture.title),
+                    ]
+                }
+            )
+            write_course_plan(active, updated, expected=expected_course)
+            record_canonical_mutation(
+                active, provenance_permitted, {"course.yaml": serialize_course_plan(updated)}
+            )
+            return updated
+
+    @app.delete("/api/course/lectures/{lecture_id}", response_model=CoursePlan)
+    async def remove_lecture(lecture_id: str) -> CoursePlan:
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            expected_course = capture_canonical_file(active, "course.yaml")
+            plan = read_required_course_plan(active)
+            provenance_permitted = require_canonical_authoring(active)
+            if all(lecture.id != lecture_id for lecture in plan.lectures):
+                raise HTTPException(status_code=404, detail="Lecture was not found")
+            if len(plan.lectures) == 1:
+                raise HTTPException(
+                    status_code=409, detail="A Course Plan needs at least one Lecture"
+                )
+            if read_presentation_for_lecture(active, lecture_id) is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Delete this Lecture's Presentation before removing the Lecture",
+                )
+            updated = plan.model_copy(
+                update={
+                    "lectures": [lecture for lecture in plan.lectures if lecture.id != lecture_id]
+                }
             )
             write_course_plan(active, updated, expected=expected_course)
             record_canonical_mutation(

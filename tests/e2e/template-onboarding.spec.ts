@@ -215,35 +215,55 @@ test("Course Author reviews, improves, and validates template mappings", async (
 	await page.request.post("/api/workspace/close");
 	await page.goto("/");
 	await page.getByRole("button", { name: "New course" }).click();
-	await page.getByRole("button", { name: "Templates" }).click();
-	await page.getByLabel("Inspect template").selectOption(profile.id);
+	await page.getByRole("button", { name: "Settings" }).click();
+	const settings = page.getByRole("dialog", { name: "Settings" });
+	await settings
+		.getByRole("navigation", { name: "Settings sections" })
+		.getByRole("button", { name: "Templates" })
+		.click();
+	await settings
+		.getByRole("list", { name: "Templates" })
+		.getByRole("button", { name: /Institutional template/ })
+		.click();
+	await expect(
+		settings.getByRole("heading", { name: "Institutional template" }),
+	).toBeVisible();
+	await expect(settings.getByText("institutional.pptx")).toBeVisible();
 
-	const bulletsMapping = page.getByLabel("Template layout for bullets");
+	// Low-confidence mappings surface first and open for review.
+	await expect(settings.getByText(/1 layouts? needs? review/)).toBeVisible();
+	const bulletsMapping = settings.getByLabel("Template layout for bullets");
+	await expect(bulletsMapping).toBeVisible();
 	await expect(
 		bulletsMapping.getByRole("option", {
 			name: "3: Two Content — 3 placeholders",
 		}),
 	).toHaveCount(1);
 	await expect(
-		page.getByText(/Faculty OpenRouter.*Planning model/),
+		settings.getByText(/Faculty OpenRouter.*Planning model/),
 	).toBeVisible();
 	await expect(
-		page.getByText(/template metadata.*leave this device/i),
+		settings.getByText(/template metadata.*leave this device/i),
 	).toBeVisible();
 
-	const suggestButton = page.getByRole("button", {
+	const suggestButton = settings.getByRole("button", {
 		name: "Improve mappings with AI",
 	});
 	await expect(suggestButton).toBeDisabled();
-	await page.getByLabel(/I agree to send this template metadata/).check();
+	await settings.getByLabel(/I agree to send this template metadata/).check();
 	await suggestButton.click();
 	await expect(bulletsMapping).toHaveValue("3");
-	await expect(page.getByText("The model selected Two Content.")).toBeVisible();
-	await page.getByLabel("Body slot for bullets").selectOption("2");
-
-	await page.getByRole("button", { name: "Save mapping corrections" }).click();
-	await page.getByRole("button", { name: "Check mappings" }).click();
 	await expect(
-		page.getByText("Bullets may need a BODY placeholder."),
+		settings.getByText("The model selected Two Content."),
+	).toBeVisible();
+	await settings.getByLabel("Body slot for bullets").selectOption("2");
+
+	await settings
+		.getByRole("button", { name: "Save mapping corrections" })
+		.click();
+	await settings.getByRole("button", { name: "Check mappings" }).click();
+	await expect(settings.getByText("Mapping check")).toBeVisible();
+	await expect(
+		settings.getByText("Bullets may need a BODY placeholder."),
 	).toBeVisible();
 });

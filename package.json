@@ -11,8 +11,14 @@
 		"test:e2e": "biome lint frontend playwright.config.ts tests/e2e && tsc --noEmit && vite build --config frontend/vite.config.ts && playwright test"
 	},
 	"dependencies": {
+		"@fontsource-variable/newsreader": "^5.3.0",
+		"@fontsource-variable/source-sans-3": "^5.3.0",
+		"@fontsource/ibm-plex-mono": "^5.3.0",
+		"lucide-react": "^1.47.0",
 		"react": "19.2.7",
-		"react-dom": "19.2.7"
+		"react-dom": "19.2.7",
+		"react-markdown": "^10.1.0",
+		"remark-gfm": "^4.0.1"
 	},
 	"devDependencies": {
 		"@axe-core/playwright": "^4.13.0",

@@ -1,1282 +1,658 @@
-import {
-	type FormEvent,
-	useCallback,
-	useEffect,
-	useLayoutEffect,
-	useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { AgentPanel, type ChatMessage, type CoursePlan } from "./AgentPanel";
-import type { AgentInterrupt } from "./agentStream";
 import { responseError } from "./api";
-import { CurrentStateView } from "./CurrentStateView";
-import { LibraryView } from "./LibraryView";
+import { CoursePlanCanvas } from "./canvas/CoursePlanCanvas";
+import { HistoryCanvas, type HistoryTab } from "./canvas/HistoryCanvas";
+import { LectureCanvas } from "./canvas/LectureCanvas";
+import { ReleaseCanvas } from "./canvas/ReleaseCanvas";
+import { SourceReader } from "./canvas/SourceReader";
+import { SourcesCanvas, type SourcesTab } from "./canvas/SourcesCanvas";
+import { ConversationPane } from "./chat/ConversationPane";
+import {
+	ConversationDialogs,
+	type ConversationDialog,
+} from "./chat/ConversationDialogs";
+import { ModelDownloadDialog } from "./dialogs/ModelDownloadDialog";
+import { ModelSetupDialog } from "./dialogs/ModelSetupDialog";
+import { SettingsDialog, type SettingsSection } from "./dialogs/SettingsDialog";
+import { Launcher, type RecentWorkspace } from "./Launcher";
 import type {
-	EvidenceTarget,
+	CoursePlan,
+	CurrentState,
 	ModelCatalog,
 	PresentationSummary,
+	ReaderTarget,
 	ResourceState,
 	Source,
 	TemplateProfileSummary,
+	Workspace,
 } from "./models";
-import { PresentationView } from "./PresentationView";
-import { ModelsView } from "./ProviderSetup";
-import { ReleasesView } from "./ReleasesView";
-import { ResizableSplit } from "./ResizableSplit";
-import { RuntimeDiagnosticsDialog } from "./RuntimeDiagnostics";
-import { TemplatesView } from "./TemplatesView";
+import { Navigator } from "./shell/Navigator";
+import { CanvasFrame, type LayoutMode } from "./shell/CanvasFrame";
+import { DriftBanner } from "./shell/DriftBanner";
+import { errorMessage, isAbort } from "./ui";
+import {
+	type AgentContext,
+	type RunResult,
+	useCourseAgent,
+} from "./useCourseAgent";
+import { useLibrary } from "./useLibrary";
 
-type Workspace = {
-	name: string;
-	path: string;
+export type CanvasTarget =
+	| { kind: "plan" }
+	| { kind: "sources"; tab?: SourcesTab }
+	| { kind: "lecture"; lectureId: string }
+	| { kind: "reader"; target: ReaderTarget; returnTo: CanvasTarget | null }
+	| { kind: "history"; tab?: HistoryTab }
+	| { kind: "release" };
+
+const emptyCatalog: ModelCatalog = {
+	provider_accounts: [],
+	model_presets: [],
+	selected_model_id: null,
 };
 
-type RecentWorkspace = Workspace & {
-	id: string;
-};
+const LAYOUT_KEY = "course-harness:layout";
 
-type Lecture = {
-	id: string;
-	title: string;
-	group: string | null;
-};
-
-type LectureDraft = Pick<Lecture, "id" | "title">;
-
-type WorkspaceEntry = {
-	path: string;
-	kind: "file" | "directory";
-};
-
-type CourseRequest = {
-	title: string;
-	audience: string;
-	goals: string[];
-	outcomes: string[];
-	lectures: { title: string }[];
-};
-
-type WorkspaceView =
-	| "course"
-	| "author"
-	| "current-state"
-	| "files"
-	| "models"
-	| "library"
-	| "releases"
-	| "templates";
-
-type SectionLink = {
-	id: WorkspaceView;
-	label: string;
-};
-
-function splitLines(value: string): string[] {
-	return value
-		.split("\n")
-		.map((line) => line.trim())
-		.filter(Boolean);
-}
-
-function scrollToTop() {
-	window.scrollTo({ top: 0, left: 0 });
-}
-
-function Brand() {
-	return (
-		<div className="wordmark">
-			<span className="wordmark-glyph" aria-hidden="true">
-				CH
-			</span>
-			<span>Course Harness</span>
-		</div>
-	);
-}
-
-type LauncherProps = {
-	recent: RecentWorkspace[];
-	busy: boolean;
-	error: string | null;
-	onNew: () => Promise<void>;
-	onOpen: () => Promise<void>;
-	onOpenRecent: (identity: string) => Promise<void>;
-};
-
-function Launcher({
-	recent,
-	busy,
-	error,
-	onNew,
-	onOpen,
-	onOpenRecent,
-}: LauncherProps) {
-	return (
-		<main className="launcher-main">
-			<section
-				className="launcher"
-				aria-labelledby="launcher-title"
-				aria-busy={busy}
-			>
-				<div className="launcher-heading">
-					<div>
-						<p className="eyebrow">Courses</p>
-						<h1 id="launcher-title">Your courses</h1>
-						<p className="lede">
-							Start something new or return to a Course already on your
-							computer.
-						</p>
-					</div>
-
-					<div className="launcher-actions">
-						<button
-							className="primary-action"
-							type="button"
-							onClick={onNew}
-							disabled={busy}
-						>
-							New course
-						</button>
-						<button
-							className="secondary-action"
-							type="button"
-							onClick={onOpen}
-							disabled={busy}
-						>
-							Open existing
-						</button>
-						<p>Your operating system will ask you to choose a folder.</p>
-					</div>
-				</div>
-
-				{error ? (
-					<p className="notice error-notice" role="alert">
-						{error}
-					</p>
-				) : null}
-
-				<section className="recent-section" aria-labelledby="recent-heading">
-					<div className="section-heading">
-						<div>
-							<p className="section-kicker">On this computer</p>
-							<h2 id="recent-heading">Recent courses</h2>
-						</div>
-						<span className="count-badge">{recent.length}</span>
-					</div>
-					{recent.length === 0 ? (
-						<div className="empty-state">
-							<p>No recent courses yet.</p>
-							<span>
-								Courses you create or open will stay within easy reach here.
-							</span>
-						</div>
-					) : (
-						<ul className="recent-list">
-							{recent.map((item) => (
-								<li key={item.id}>
-									<button
-										type="button"
-										onClick={() => void onOpenRecent(item.id)}
-										disabled={busy}
-									>
-										<span className="recent-mark" aria-hidden="true">
-											{item.name.slice(0, 1).toUpperCase()}
-										</span>
-										<span className="recent-copy">
-											<strong>{item.name}</strong>
-											<small>{item.path}</small>
-										</span>
-										<span className="recent-arrow" aria-hidden="true">
-											→
-										</span>
-									</button>
-								</li>
-							))}
-						</ul>
-					)}
-				</section>
-			</section>
-		</main>
-	);
-}
-
-type WorkspaceShellProps = {
-	workspace: Workspace;
-	busy: boolean;
-	sections: SectionLink[];
-	activeView: WorkspaceView;
-	onNavigate: (view: WorkspaceView) => void;
-	onAllCourses: () => Promise<void>;
-	children: React.ReactNode;
-};
-
-function WorkspaceShell({
-	workspace,
-	busy,
-	sections,
-	activeView,
-	onNavigate,
-	onAllCourses,
-	children,
-}: WorkspaceShellProps) {
-	return (
-		<div className={`workspace-layout view-${activeView}`}>
-			<aside className="workspace-rail" aria-label="Course navigation">
-				<button
-					className="all-courses"
-					type="button"
-					disabled={busy}
-					onClick={() => void onAllCourses()}
-				>
-					<span aria-hidden="true">←</span>
-					All courses
-				</button>
-
-				<div className="workspace-summary">
-					<p>Current folder</p>
-					<strong>{workspace.name}</strong>
-					<small title={workspace.path}>{workspace.path}</small>
-				</div>
-
-				{sections.length > 0 ? (
-					<nav className="section-nav" aria-label="Workspace views">
-						{sections.map((section) => (
-							<button
-								key={section.id}
-								type="button"
-								aria-current={activeView === section.id ? "page" : undefined}
-								onClick={() => onNavigate(section.id)}
-							>
-								<span aria-hidden="true">
-									{section.id === "course"
-										? "CP"
-										: section.id === "author"
-											? "AG"
-											: section.id === "current-state"
-												? "CS"
-												: section.id === "files"
-													? "FL"
-													: section.id === "library"
-														? "LB"
-														: section.id === "releases"
-															? "RL"
-															: "MD"}
-								</span>
-								{section.label}
-							</button>
-						))}
-					</nav>
-				) : null}
-			</aside>
-			<div className={`workspace-stage view-${activeView}`}>{children}</div>
-		</div>
-	);
-}
-
-type CourseSetupProps = {
-	workspace: Workspace;
-	busy: boolean;
-	error: string | null;
-	onCreate: (request: CourseRequest) => Promise<void>;
-};
-
-function CourseSetup({ workspace, busy, error, onCreate }: CourseSetupProps) {
-	const [title, setTitle] = useState("");
-	const [audience, setAudience] = useState("");
-	const [goals, setGoals] = useState("");
-	const [outcomes, setOutcomes] = useState("");
-	const [lectures, setLectures] = useState("");
-
-	function submit(event: FormEvent<HTMLFormElement>) {
-		event.preventDefault();
-		void onCreate({
-			title: title.trim(),
-			audience: audience.trim(),
-			goals: splitLines(goals),
-			outcomes: splitLines(outcomes),
-			lectures: splitLines(lectures).map((lectureTitle) => ({
-				title: lectureTitle,
-			})),
-		});
+function storedLayout(): LayoutMode {
+	try {
+		const value = window.localStorage.getItem(LAYOUT_KEY);
+		return value === "conversation" || value === "canvas" ? value : "split";
+	} catch {
+		return "split";
 	}
-
-	return (
-		<main className="page-main setup-main" id="course-setup">
-			<header className="page-heading setup-heading">
-				<p className="eyebrow">New course</p>
-				<h1>Give the course a clear shape.</h1>
-				<p className="lede">
-					Capture the essentials now. Goals and outcomes can wait until they are
-					useful.
-				</p>
-			</header>
-
-			<form className="course-form" onSubmit={submit} aria-busy={busy}>
-				<section className="form-section" aria-labelledby="essentials-heading">
-					<div className="form-section-heading">
-						<span aria-hidden="true">01</span>
-						<div>
-							<h2 id="essentials-heading">Course essentials</h2>
-							<p>Name the Course and the people it is for.</p>
-						</div>
-					</div>
-
-					<div className="field">
-						<label htmlFor="course-title">Course title</label>
-						<input
-							id="course-title"
-							value={title}
-							onChange={(event) => setTitle(event.target.value)}
-							required
-							maxLength={200}
-							autoComplete="off"
-						/>
-					</div>
-					<div className="field">
-						<label htmlFor="course-audience">Audience</label>
-						<textarea
-							id="course-audience"
-							value={audience}
-							onChange={(event) => setAudience(event.target.value)}
-							required
-							rows={3}
-							maxLength={1000}
-						/>
-					</div>
-				</section>
-
-				<section
-					className="form-section"
-					aria-labelledby="lectures-setup-heading"
-				>
-					<div className="form-section-heading">
-						<span aria-hidden="true">02</span>
-						<div>
-							<h2 id="lectures-setup-heading">Lecture spine</h2>
-							<p>Put the Lectures in the order you expect to teach them.</p>
-						</div>
-					</div>
-
-					<div className="field">
-						<label htmlFor="course-lectures">Lectures in teaching order</label>
-						<textarea
-							id="course-lectures"
-							value={lectures}
-							onChange={(event) => setLectures(event.target.value)}
-							aria-describedby="lectures-help"
-							required
-							rows={6}
-						/>
-						<small id="lectures-help">One Lecture title per line.</small>
-					</div>
-				</section>
-
-				<details className="intent-disclosure">
-					<summary>
-						<span className="disclosure-icon" aria-hidden="true">
-							+
-						</span>
-						<span>
-							<strong>Add course intent</strong>
-							<small>Goals and learning outcomes · optional</small>
-						</span>
-					</summary>
-					<div className="intent-fields">
-						<div className="field">
-							<label htmlFor="course-goals">Course goals</label>
-							<textarea
-								id="course-goals"
-								value={goals}
-								onChange={(event) => setGoals(event.target.value)}
-								aria-describedby="goals-help"
-								rows={4}
-							/>
-							<small id="goals-help">
-								Broad directions for what you intend to teach.
-							</small>
-						</div>
-						<div className="field">
-							<label htmlFor="course-outcomes">Learning outcomes</label>
-							<textarea
-								id="course-outcomes"
-								value={outcomes}
-								onChange={(event) => setOutcomes(event.target.value)}
-								aria-describedby="outcomes-help"
-								rows={4}
-							/>
-							<small id="outcomes-help">
-								What learners should be able to do afterward.
-							</small>
-						</div>
-					</div>
-				</details>
-
-				{error ? (
-					<p className="notice error-notice" role="alert">
-						{error}
-					</p>
-				) : null}
-
-				<div className="form-action">
-					<p>Saved as readable files in {workspace.name}.</p>
-					<button className="primary-action" type="submit" disabled={busy}>
-						Create course
-					</button>
-				</div>
-			</form>
-		</main>
-	);
 }
-
-type CourseReadErrorProps = {
-	workspace: Workspace;
-	error: string;
-	busy: boolean;
-	onRetry: () => Promise<void>;
-};
-
-function CourseReadError({
-	workspace,
-	error,
-	busy,
-	onRetry,
-}: CourseReadErrorProps) {
-	return (
-		<main className="page-main error-page">
-			<section aria-labelledby="course-error-title">
-				<p className="eyebrow">Course state · {workspace.name}</p>
-				<h1 id="course-error-title">Course state needs attention.</h1>
-				<p className="lede">
-					Correct <code>course.yaml</code> in the Course folder, then ask Course
-					Harness to read it again.
-				</p>
-				<p className="notice error-notice" role="alert">
-					{error}
-				</p>
-				<button
-					className="primary-action"
-					type="button"
-					disabled={busy}
-					onClick={() => void onRetry()}
-				>
-					Retry reading course
-				</button>
-			</section>
-		</main>
-	);
-}
-
-type CourseViewProps = {
-	course: CoursePlan;
-	busy: boolean;
-	error: string | null;
-	onSaveLectures: (lectures: LectureDraft[]) => Promise<boolean>;
-};
-
-function CourseView({ course, busy, error, onSaveLectures }: CourseViewProps) {
-	const [editing, setEditing] = useState(false);
-	const [drafts, setDrafts] = useState<LectureDraft[]>(() =>
-		course.lectures.map(({ id, title }) => ({ id, title })),
-	);
-
-	function startEditing() {
-		setDrafts(course.lectures.map(({ id, title }) => ({ id, title })));
-		setEditing(true);
-	}
-
-	function cancelEditing() {
-		setDrafts(course.lectures.map(({ id, title }) => ({ id, title })));
-		setEditing(false);
-	}
-
-	function updateDraft(identity: string, title: string) {
-		setDrafts((current) =>
-			current.map((lecture) =>
-				lecture.id === identity ? { ...lecture, title } : lecture,
-			),
-		);
-	}
-
-	function moveDraft(index: number, direction: -1 | 1) {
-		setDrafts((current) => {
-			const next = [...current];
-			const target = index + direction;
-			[next[index], next[target]] = [next[target], next[index]];
-			return next;
-		});
-	}
-
-	const hasBlankTitle = drafts.some((draft) => !draft.title.trim());
-
-	async function saveChanges() {
-		const saved = await onSaveLectures(
-			drafts.map((draft) => ({ ...draft, title: draft.title.trim() })),
-		);
-		if (saved) {
-			setEditing(false);
-		}
-	}
-
-	return (
-		<main className="page-main course-main">
-			<header className="page-heading course-heading">
-				<p className="eyebrow">Syllabus</p>
-				<h1>{course.title}</h1>
-				<p className="audience-copy">
-					<span>For</span>
-					{course.audience}
-				</p>
-			</header>
-
-			{error ? (
-				<p className="notice error-notice" role="alert">
-					{error}
-				</p>
-			) : null}
-
-			<section
-				className="content-section syllabus-section"
-				id="syllabus"
-				aria-labelledby="lectures-heading"
-				aria-busy={busy}
-			>
-				<div className="content-section-heading">
-					<div>
-						<p className="section-kicker">Teaching order</p>
-						<h2 id="lectures-heading">Lecture spine</h2>
-					</div>
-					<div className="section-actions">
-						{editing ? (
-							<>
-								<button
-									className="quiet-action"
-									type="button"
-									onClick={cancelEditing}
-									disabled={busy}
-								>
-									Cancel
-								</button>
-								<button
-									className="primary-action compact-action"
-									type="button"
-									onClick={() => void saveChanges()}
-									disabled={busy || hasBlankTitle}
-								>
-									Save changes
-								</button>
-							</>
-						) : (
-							<button
-								className="secondary-action compact-action"
-								type="button"
-								onClick={startEditing}
-							>
-								Edit syllabus
-							</button>
-						)}
-					</div>
-				</div>
-
-				<ol className={`lecture-list${editing ? " is-editing" : ""}`}>
-					{(editing ? drafts : course.lectures).map(
-						(lecture, index, lectures) => (
-							<li className="lecture-item" key={lecture.id}>
-								<span className="lecture-index" aria-hidden="true">
-									{String(index + 1).padStart(2, "0")}
-								</span>
-								{editing ? (
-									<div className="lecture-editor">
-										<label htmlFor={`lecture-${lecture.id}`}>
-											Lecture {index + 1} title
-										</label>
-										<input
-											id={`lecture-${lecture.id}`}
-											value={lecture.title}
-											onChange={(event) =>
-												updateDraft(lecture.id, event.target.value)
-											}
-											maxLength={200}
-											aria-invalid={!lecture.title.trim()}
-											aria-describedby={
-												lecture.title.trim()
-													? undefined
-													: `lecture-${lecture.id}-error`
-											}
-										/>
-										{!lecture.title.trim() ? (
-											<small
-												className="field-error"
-												id={`lecture-${lecture.id}-error`}
-											>
-												A Lecture title cannot be empty.
-											</small>
-										) : null}
-									</div>
-								) : (
-									<div className="lecture-copy">
-										<p>Lecture {index + 1}</p>
-										<h3>{lecture.title}</h3>
-									</div>
-								)}
-								{editing ? (
-									<fieldset className="order-actions">
-										<legend>
-											Reorder {lecture.title || `Lecture ${index + 1}`}
-										</legend>
-										<button
-											type="button"
-											onClick={() => moveDraft(index, -1)}
-											disabled={busy || index === 0}
-											aria-label={`Move ${lecture.title || `Lecture ${index + 1}`} earlier`}
-										>
-											<span aria-hidden="true">↑</span>
-										</button>
-										<button
-											type="button"
-											onClick={() => moveDraft(index, 1)}
-											disabled={busy || index === lectures.length - 1}
-											aria-label={`Move ${lecture.title || `Lecture ${index + 1}`} later`}
-										>
-											<span aria-hidden="true">↓</span>
-										</button>
-									</fieldset>
-								) : null}
-							</li>
-						),
-					)}
-				</ol>
-			</section>
-
-			<section
-				className="content-section"
-				id="intent"
-				aria-labelledby="intent-heading"
-			>
-				<div className="content-section-heading">
-					<div>
-						<p className="section-kicker">Shared direction</p>
-						<h2 id="intent-heading">Course intent</h2>
-					</div>
-				</div>
-				<div className="intent-grid">
-					<section aria-labelledby="goals-heading">
-						<h3 id="goals-heading">Goals</h3>
-						{course.goals.length === 0 ? (
-							<p className="empty-note">No goals added.</p>
-						) : (
-							<ul className="intent-list">
-								{course.goals.map((goal) => (
-									<li key={goal}>{goal}</li>
-								))}
-							</ul>
-						)}
-					</section>
-					<section aria-labelledby="outcomes-heading">
-						<h3 id="outcomes-heading">Learning outcomes</h3>
-						{course.outcomes.length === 0 ? (
-							<p className="empty-note">No outcomes added.</p>
-						) : (
-							<ul className="intent-list">
-								{course.outcomes.map((outcome) => (
-									<li key={outcome}>{outcome}</li>
-								))}
-							</ul>
-						)}
-					</section>
-				</div>
-			</section>
-		</main>
-	);
-}
-
-function FilesView({
-	workspace,
-	files,
-}: {
-	workspace: Workspace;
-	files: WorkspaceEntry[];
-}) {
-	return (
-		<main className="page-main files-main" aria-labelledby="files-heading">
-			<header className="page-heading">
-				<p className="eyebrow">Course Workspace</p>
-				<h1 id="files-heading">Files</h1>
-				<p className="workspace-location">{workspace.path}</p>
-			</header>
-			<section
-				className="content-section files-section"
-				aria-label="Course files"
-			>
-				<div className="content-section-heading">
-					<div>
-						<p className="section-kicker">On disk</p>
-						<h2>Visible Course files</h2>
-					</div>
-					<span className="count-badge">{files.length}</span>
-				</div>
-				{files.length === 0 ? (
-					<p className="empty-note">
-						This Course folder has no visible files yet.
-					</p>
-				) : (
-					<ul className="file-list">
-						{files.map((entry) => (
-							<li key={entry.path}>
-								<span aria-hidden="true">
-									{entry.kind === "directory" ? "▸" : "—"}
-								</span>
-								{entry.path}
-							</li>
-						))}
-					</ul>
-				)}
-			</section>
-		</main>
-	);
-}
-
-const workspaceViews: SectionLink[] = [
-	{ id: "course", label: "Course Plan" },
-	{ id: "author", label: "Authoring" },
-	{ id: "current-state", label: "Current State" },
-	{ id: "files", label: "Files" },
-	{ id: "library", label: "Library" },
-	{ id: "releases", label: "Releases" },
-	{ id: "templates", label: "Templates" },
-	{ id: "models", label: "Models" },
-];
 
 export function App() {
 	const [workspace, setWorkspace] = useState<Workspace | null | undefined>(
 		undefined,
 	);
 	const [recent, setRecent] = useState<RecentWorkspace[]>([]);
-	const [course, setCourse] = useState<CoursePlan | null | undefined>(
-		undefined,
-	);
-	const [files, setFiles] = useState<WorkspaceEntry[]>([]);
-	const [catalog, setCatalog] = useState<ModelCatalog>({
-		provider_accounts: [],
-		model_presets: [],
-		selected_model_id: null,
-	});
-	const [resources, setResources] = useState<ResourceState[]>([]);
-	const [sources, setSources] = useState<Source[]>([]);
-	const [presentations, setPresentations] = useState<PresentationSummary[]>([]);
-	const [presentationVersion, setPresentationVersion] = useState(0);
-	const [templates, setTemplates] = useState<TemplateProfileSummary[]>([]);
-	const [activeView, setActiveView] = useState<WorkspaceView>("course");
-	const [evidenceTarget, setEvidenceTarget] = useState<EvidenceTarget | null>(
-		null,
-	);
-	const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-	const [chatApproval, setChatApproval] = useState<AgentInterrupt | null>(null);
-	const [chatContext, setChatContext] = useState<string | null>(null);
-	const [reconciliationDriftId, setReconciliationDriftId] = useState<
-		string | null
-	>(null);
-	const [agentRunning, setAgentRunning] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
-
-	useLayoutEffect(() => {
-		void activeView;
-		scrollToTop();
-	}, [activeView]);
-
-	function openAgentWithContext(context: string, driftId?: string) {
-		setChatContext(context);
-		setReconciliationDriftId(driftId ?? null);
-		setEvidenceTarget(null);
-		if (activeView !== "author") scrollToTop();
-		setActiveView("author");
-	}
-
-	function navigateTo(
-		view: WorkspaceView,
-		target: EvidenceTarget | null = null,
-	) {
-		scrollToTop();
-		setEvidenceTarget(view === "library" ? target : null);
-		setActiveView(view);
-	}
-
-	function openEvidence(target: EvidenceTarget) {
-		navigateTo("library", target);
-	}
-
-	const loadWorkspace = useCallback(
-		async (active: Workspace, signal?: AbortSignal) => {
-			scrollToTop();
-			setActiveView("course");
-			setEvidenceTarget(null);
-			setWorkspace(active);
-			setCourse(undefined);
-			const [
-				courseResponse,
-				filesResponse,
-				modelsResponse,
-				chatResponse,
-				resourcesResponse,
-				sourcesResponse,
-				presentationsResponse,
-				templatesResponse,
-			] = await Promise.all([
-				fetch("/api/course", { signal }),
-				fetch("/api/workspace/files", { signal }),
-				fetch("/api/models", { signal }),
-				fetch("/api/chat", { signal }),
-				fetch("/api/resources", { signal }),
-				fetch("/api/sources", { signal }),
-				fetch("/api/presentations", { signal }),
-				fetch("/api/templates", { signal }),
-			]);
-			if (courseResponse.status === 404) {
-				setCourse(null);
-			} else if (courseResponse.ok) {
-				setCourse((await courseResponse.json()) as CoursePlan);
-			} else {
-				throw new Error(await responseError(courseResponse));
-			}
-			if (filesResponse.ok) {
-				setFiles((await filesResponse.json()) as WorkspaceEntry[]);
-			} else {
-				throw new Error(await responseError(filesResponse));
-			}
-			if (!modelsResponse.ok) {
-				throw new Error(await responseError(modelsResponse));
-			}
-			setCatalog((await modelsResponse.json()) as ModelCatalog);
-			if (!chatResponse.ok) {
-				throw new Error(await responseError(chatResponse));
-			}
-			const transcript = (await chatResponse.json()) as {
-				messages: ChatMessage[];
-				approval: AgentInterrupt | null;
-			};
-			setChatMessages(transcript.messages);
-			setChatApproval(transcript.approval);
-			if (resourcesResponse.ok) {
-				setResources((await resourcesResponse.json()) as ResourceState[]);
-			}
-			if (sourcesResponse.ok) {
-				setSources((await sourcesResponse.json()) as Source[]);
-			}
-			if (presentationsResponse.ok) {
-				setPresentations(
-					(await presentationsResponse.json()) as PresentationSummary[],
-				);
-			}
-			if (templatesResponse.ok) {
-				setTemplates(
-					(await templatesResponse.json()) as TemplateProfileSummary[],
-				);
-			}
-		},
-		[],
-	);
 
 	useEffect(() => {
 		const controller = new AbortController();
-
-		async function initialize() {
+		void (async () => {
 			try {
-				const workspaceResponse = await fetch("/api/workspace", {
+				const response = await fetch("/api/workspace", {
 					signal: controller.signal,
 				});
-				if (workspaceResponse.status === 409) {
+				if (response.status === 409) {
 					setWorkspace(null);
-					setCourse(null);
 					const recentResponse = await fetch("/api/launcher/recent", {
 						signal: controller.signal,
 					});
-					if (recentResponse.ok) {
+					if (recentResponse.ok)
 						setRecent((await recentResponse.json()) as RecentWorkspace[]);
-					}
 					return;
 				}
-				if (!workspaceResponse.ok) {
-					throw new Error(await responseError(workspaceResponse));
-				}
-				await loadWorkspace(
-					(await workspaceResponse.json()) as Workspace,
-					controller.signal,
-				);
+				if (!response.ok) throw new Error(await responseError(response));
+				setWorkspace((await response.json()) as Workspace);
 			} catch (caught) {
-				if (!(caught instanceof DOMException && caught.name === "AbortError")) {
-					setError(
-						caught instanceof Error
-							? caught.message
-							: "Course Harness could not start.",
-					);
-				}
+				if (!isAbort(caught))
+					setError(errorMessage(caught, "Course Harness could not start."));
 			}
-		}
-
-		void initialize();
+		})();
 		return () => controller.abort();
-	}, [loadWorkspace]);
+	}, []);
 
-	async function runMutation(
-		action: () => Promise<void>,
-		fallbackMessage: string,
-	): Promise<boolean> {
+	async function choose(request: () => Promise<Response>, fallback: string) {
 		setBusy(true);
 		setError(null);
 		try {
-			await action();
-			return true;
+			const response = await request();
+			if (response.status === 204) return;
+			if (!response.ok) throw new Error(await responseError(response));
+			setWorkspace((await response.json()) as Workspace);
 		} catch (caught) {
-			setError(caught instanceof Error ? caught.message : fallbackMessage);
-			return false;
+			setError(errorMessage(caught, fallback));
 		} finally {
 			setBusy(false);
 		}
 	}
 
-	async function selectWorkspace(endpoint: "new-course" | "open-folder") {
-		await runMutation(async () => {
-			const response = await fetch(`/api/launcher/${endpoint}`, {
-				method: "POST",
-			});
-			if (response.status === 204) {
-				return;
-			}
-			if (!response.ok) {
-				throw new Error(await responseError(response));
-			}
-			await loadWorkspace((await response.json()) as Workspace);
-		}, "The Course folder could not be opened.");
-	}
-
-	async function openRecent(identity: string) {
-		await runMutation(async () => {
-			const response = await fetch(
-				`/api/launcher/recent/${encodeURIComponent(identity)}/open`,
-				{
-					method: "POST",
-				},
-			);
-			if (!response.ok) {
-				throw new Error(await responseError(response));
-			}
-			await loadWorkspace((await response.json()) as Workspace);
-		}, "The Course could not be reopened.");
-	}
-
-	async function createCourse(request: CourseRequest) {
-		await runMutation(async () => {
-			const response = await fetch("/api/course", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(request),
-			});
-			if (!response.ok) {
-				throw new Error(await responseError(response));
-			}
-			scrollToTop();
-			setCourse((await response.json()) as CoursePlan);
-			const filesResponse = await fetch("/api/workspace/files");
-			if (filesResponse.ok) {
-				setFiles((await filesResponse.json()) as WorkspaceEntry[]);
-			}
-		}, "The Course could not be created.");
-	}
-
-	async function refreshPresentations() {
-		const response = await fetch("/api/presentations");
-		if (response.ok) {
-			setPresentations((await response.json()) as PresentationSummary[]);
-			setPresentationVersion((v) => v + 1);
-		}
-	}
-
-	async function saveLectureChanges(drafts: LectureDraft[]): Promise<boolean> {
-		if (!course) {
-			return false;
-		}
-
-		return runMutation(async () => {
-			let updated = course;
-			const originalById = new Map(
-				course.lectures.map((lecture) => [lecture.id, lecture]),
-			);
-
-			for (const draft of drafts) {
-				const original = originalById.get(draft.id);
-				if (!original || original.title === draft.title) {
-					continue;
-				}
-				const response = await fetch(
-					`/api/course/lectures/${encodeURIComponent(draft.id)}`,
-					{
-						method: "PATCH",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ title: draft.title }),
-					},
-				);
-				if (!response.ok) {
-					throw new Error(await responseError(response));
-				}
-				updated = (await response.json()) as CoursePlan;
-			}
-
-			const requestedOrder = drafts.map((lecture) => lecture.id);
-			const currentOrder = updated.lectures.map((lecture) => lecture.id);
-			if (
-				requestedOrder.some(
-					(identity, index) => identity !== currentOrder[index],
-				)
-			) {
-				const response = await fetch("/api/course/lectures/order", {
-					method: "PUT",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ lecture_ids: requestedOrder }),
-				});
-				if (!response.ok) {
-					throw new Error(await responseError(response));
-				}
-				updated = (await response.json()) as CoursePlan;
-			}
-
-			setCourse(updated);
-		}, "The syllabus changes could not be saved.");
-	}
-
-	async function retryCourse() {
-		if (!workspace) {
-			return;
-		}
-		await runMutation(
-			() => loadWorkspace(workspace),
-			"The Course could not be read.",
-		);
-	}
-
 	async function returnToCourses() {
-		await runMutation(async () => {
-			const closeResponse = await fetch("/api/workspace/close", {
-				method: "POST",
-			});
-			if (!closeResponse.ok) {
-				throw new Error(await responseError(closeResponse));
-			}
-			scrollToTop();
-			setWorkspace(null);
-			setCourse(null);
-			setEvidenceTarget(null);
-			setFiles([]);
-			setChatMessages([]);
-			setChatApproval(null);
-			setCatalog({
-				provider_accounts: [],
-				model_presets: [],
-				selected_model_id: null,
-			});
-			setActiveView("course");
-
-			const recentResponse = await fetch("/api/launcher/recent");
-			if (!recentResponse.ok) {
-				throw new Error(await responseError(recentResponse));
-			}
+		const closeResponse = await fetch("/api/workspace/close", {
+			method: "POST",
+		});
+		if (!closeResponse.ok) throw new Error(await responseError(closeResponse));
+		setWorkspace(null);
+		setError(null);
+		const recentResponse = await fetch("/api/launcher/recent");
+		if (recentResponse.ok)
 			setRecent((await recentResponse.json()) as RecentWorkspace[]);
-		}, "Courses could not be opened.");
 	}
 
-	let content: React.ReactNode;
 	if (workspace === undefined) {
-		content = (
-			<main className="loading-main" aria-busy="true">
-				<p>Starting Course Harness…</p>
+		return (
+			<main className="boot" aria-busy="true">
+				{error ? <p role="alert">{error}</p> : <p>Opening Course Harness…</p>}
 			</main>
 		);
-	} else if (workspace === null) {
-		content = (
+	}
+
+	if (workspace === null) {
+		return (
 			<Launcher
 				recent={recent}
-				busy={busy || agentRunning}
+				busy={busy}
 				error={error}
-				onNew={() => selectWorkspace("new-course")}
-				onOpen={() => selectWorkspace("open-folder")}
-				onOpenRecent={openRecent}
+				onNew={() =>
+					choose(
+						() => fetch("/api/launcher/new-course", { method: "POST" }),
+						"The Course folder could not be created.",
+					)
+				}
+				onOpen={() =>
+					choose(
+						() => fetch("/api/launcher/open-folder", { method: "POST" }),
+						"The Course folder could not be opened.",
+					)
+				}
+				onOpenRecent={(identity) =>
+					choose(
+						() =>
+							fetch(
+								`/api/launcher/recent/${encodeURIComponent(identity)}/open`,
+								{ method: "POST" },
+							),
+						"The Course could not be reopened.",
+					)
+				}
 			/>
-		);
-	} else {
-		content = (
-			<WorkspaceShell
-				workspace={workspace}
-				busy={busy || agentRunning}
-				sections={workspaceViews}
-				activeView={activeView}
-				onNavigate={navigateTo}
-				onAllCourses={returnToCourses}
-			>
-				{activeView === "author" ? (
-					<main
-						className={`authoring-workspace${course ? "" : " is-course-empty"}`}
-						aria-labelledby="authoring-heading"
-					>
-						<header className="authoring-header">
-							<div>
-								<p className="eyebrow">Author</p>
-								<h1 id="authoring-heading">Build the Lecture</h1>
-							</div>
-							<p>
-								Shape the Presentation and direct the Course Agent in one place.
-							</p>
-						</header>
-						<div className="authoring-body">
-							<ResizableSplit
-								storageKey="course-harness:authoring-agent-width"
-								primary={
-									course ? (
-										<PresentationView
-											course={course}
-											busy={busy || agentRunning}
-											presentations={presentations}
-											presentationVersion={presentationVersion}
-											templates={templates}
-											chatContext={chatContext}
-											onChange={refreshPresentations}
-											onChatContext={openAgentWithContext}
-										/>
-									) : (
-										<section className="authoring-course-empty">
-											<p className="section-kicker">Presentation</p>
-											<h2>Start with a Course Plan</h2>
-											<p>
-												Ask the Course Agent to draft one, or create it from the
-												Course Plan view.
-											</p>
-										</section>
-									)
-								}
-								secondary={
-									<AgentPanel
-										key={workspace.path}
-										embedded
-										initialMessages={chatMessages}
-										initialApproval={chatApproval}
-										catalog={catalog}
-										onCatalogChange={setCatalog}
-										onOpenModels={() => navigateTo("models")}
-										onRunningChange={setAgentRunning}
-										onCourseChange={async (updated) => {
-											setCourse(updated);
-											const filesResponse = await fetch("/api/workspace/files");
-											if (filesResponse.ok) {
-												setFiles(
-													(await filesResponse.json()) as WorkspaceEntry[],
-												);
-											}
-										}}
-										onPresentationsChange={refreshPresentations}
-										chatContext={chatContext}
-										reconciliationDriftId={reconciliationDriftId}
-										onChatContextCleared={() => setChatContext(null)}
-										onReconciliationDriftCleared={() =>
-											setReconciliationDriftId(null)
-										}
-										onConversationCleared={() => {
-											setChatMessages([]);
-											setChatApproval(null);
-										}}
-										onTranscriptChange={(messages, approval) => {
-											setChatMessages(messages);
-											setChatApproval(approval);
-										}}
-									/>
-								}
-							/>
-						</div>
-					</main>
-				) : activeView === "current-state" ? (
-					<CurrentStateView
-						workspaceName={workspace.name}
-						onReconcileWithAgent={(driftId) =>
-							openAgentWithContext(
-								"Workspace Drift needs Reconciliation. Review the Current State findings, explain the inconsistency, and propose a reviewed patch. Do not treat the Drift as repaired until the Course Author approves a valid change.",
-								driftId,
-							)
-						}
-					/>
-				) : activeView === "models" ? (
-					<ModelsView catalog={catalog} onCatalogChange={setCatalog} />
-				) : activeView === "library" ? (
-					<LibraryView
-						resources={resources}
-						sources={sources}
-						onResourcesChange={setResources}
-						onSourcesChange={setSources}
-						evidenceTarget={evidenceTarget}
-						onEvidenceTargetClose={() => setEvidenceTarget(null)}
-					/>
-				) : activeView === "releases" && course ? (
-					<ReleasesView
-						course={course}
-						presentations={presentations}
-						sources={sources}
-						onOpenEvidence={openEvidence}
-						onOpenAgent={openAgentWithContext}
-					/>
-				) : activeView === "templates" ? (
-					<TemplatesView
-						templates={templates}
-						catalog={catalog}
-						onTemplatesChange={setTemplates}
-					/>
-				) : activeView === "files" ? (
-					<FilesView workspace={workspace} files={files} />
-				) : course === undefined && error ? (
-					<CourseReadError
-						workspace={workspace}
-						error={error}
-						busy={busy || agentRunning}
-						onRetry={retryCourse}
-					/>
-				) : course === undefined ? (
-					<main className="loading-main" aria-busy="true">
-						<p>Reading your Course…</p>
-					</main>
-				) : course === null ? (
-					<CourseSetup
-						workspace={workspace}
-						busy={busy || agentRunning}
-						error={error}
-						onCreate={createCourse}
-					/>
-				) : (
-					<CourseView
-						course={course}
-						busy={busy || agentRunning}
-						error={error}
-						onSaveLectures={saveLectureChanges}
-					/>
-				)}
-			</WorkspaceShell>
 		);
 	}
 
 	return (
-		<div className="app-shell">
-			<header className="topbar">
-				<Brand />
-				<div className="topbar-actions">
-					<button
-						className="runtime-diagnostics-trigger"
-						type="button"
-						onClick={() => setDiagnosticsOpen(true)}
-					>
-						Runtime diagnostics
-					</button>
-					<p className="local-status">
-						<span aria-hidden="true" /> Local session
-					</p>
+		<CourseWorkspace
+			key={workspace.path}
+			workspace={workspace}
+			onAllCourses={returnToCourses}
+		/>
+	);
+}
+
+function CourseWorkspace({
+	workspace,
+	onAllCourses,
+}: {
+	workspace: Workspace;
+	onAllCourses: () => Promise<void>;
+}) {
+	const [course, setCourse] = useState<CoursePlan | null | undefined>(
+		undefined,
+	);
+	const [courseError, setCourseError] = useState<string | null>(null);
+	const [catalog, setCatalog] = useState<ModelCatalog>(emptyCatalog);
+	const [resources, setResources] = useState<ResourceState[]>([]);
+	const [sources, setSources] = useState<Source[]>([]);
+	const [presentations, setPresentations] = useState<PresentationSummary[]>([]);
+	const [presentationVersion, setPresentationVersion] = useState(0);
+	const [templates, setTemplates] = useState<TemplateProfileSummary[]>([]);
+	const [currentState, setCurrentState] = useState<CurrentState | null>(null);
+	const [canvas, setCanvas] = useState<CanvasTarget | null>(null);
+	const [layout, setLayoutState] = useState<LayoutMode>(storedLayout);
+	const [narrowPane, setNarrowPane] = useState<"conversation" | "canvas">(
+		"conversation",
+	);
+	const [navOpen, setNavOpen] = useState(false);
+	const [focusContext, setFocusContext] = useState<AgentContext | null>(null);
+	const [settings, setSettings] = useState<SettingsSection | null>(null);
+	const [modelSetupOpen, setModelSetupOpen] = useState(false);
+	const [conversationDialog, setConversationDialog] =
+		useState<ConversationDialog | null>(null);
+	const [shellError, setShellError] = useState<string | null>(null);
+	const composerRef = useRef<HTMLTextAreaElement | null>(null);
+
+	function setLayout(next: LayoutMode) {
+		setLayoutState(next);
+		try {
+			window.localStorage.setItem(LAYOUT_KEY, next);
+		} catch {
+			// Layout preference is a convenience only.
+		}
+	}
+
+	const loadCourse = useCallback(async (signal?: AbortSignal) => {
+		const response = await fetch("/api/course", { signal });
+		if (response.status === 404) {
+			setCourse(null);
+			return;
+		}
+		if (!response.ok) throw new Error(await responseError(response));
+		setCourse((await response.json()) as CoursePlan);
+		setCourseError(null);
+	}, []);
+
+	const refreshCurrentState = useCallback(async () => {
+		try {
+			const response = await fetch("/api/workspace/current-state");
+			if (response.status === 404) {
+				setCurrentState(null);
+				return;
+			}
+			if (response.ok) setCurrentState((await response.json()) as CurrentState);
+		} catch {
+			// History shows its own errors; the badge simply stays as it was.
+		}
+	}, []);
+
+	const refreshPresentations = useCallback(async () => {
+		const response = await fetch("/api/presentations");
+		if (response.ok) {
+			setPresentations((await response.json()) as PresentationSummary[]);
+			setPresentationVersion((version) => version + 1);
+		}
+	}, []);
+
+	const refreshSources = useCallback(async () => {
+		const response = await fetch("/api/sources");
+		if (response.ok) setSources((await response.json()) as Source[]);
+	}, []);
+
+	useEffect(() => {
+		const controller = new AbortController();
+		const { signal } = controller;
+		void (async () => {
+			try {
+				const [
+					models,
+					resourceList,
+					sourceList,
+					presentationList,
+					templateList,
+				] = await Promise.all([
+					fetch("/api/models", { signal }),
+					fetch("/api/resources", { signal }),
+					fetch("/api/sources", { signal }),
+					fetch("/api/presentations", { signal }),
+					fetch("/api/templates", { signal }),
+					loadCourse(signal).catch((caught: unknown) => {
+						if (!isAbort(caught))
+							setCourseError(
+								errorMessage(caught, "The Course Plan could not be read."),
+							);
+					}),
+					refreshCurrentState(),
+				]);
+				if (models.ok) setCatalog((await models.json()) as ModelCatalog);
+				if (resourceList.ok)
+					setResources((await resourceList.json()) as ResourceState[]);
+				if (sourceList.ok) setSources((await sourceList.json()) as Source[]);
+				if (presentationList.ok)
+					setPresentations(
+						(await presentationList.json()) as PresentationSummary[],
+					);
+				if (templateList.ok)
+					setTemplates((await templateList.json()) as TemplateProfileSummary[]);
+			} catch (caught) {
+				if (!isAbort(caught))
+					setShellError(
+						errorMessage(caught, "The Course could not be opened."),
+					);
+			}
+		})();
+		return () => controller.abort();
+	}, [loadCourse, refreshCurrentState]);
+
+	const library = useLibrary({
+		resources,
+		sources,
+		onResourcesChange: setResources,
+		onSourcesChange: setSources,
+	});
+
+	const agent = useCourseAgent({
+		catalog,
+		onCourseChange: (updated) => {
+			setCourse(updated);
+		},
+		onPresentationsChange: refreshPresentations,
+		onSourcesChange: refreshSources,
+		onRunSettled: (result: RunResult) => {
+			void refreshCurrentState();
+			if (result.planChanged) {
+				setCanvas((current) => current ?? { kind: "plan" });
+			}
+		},
+	});
+
+	// Keep the composer's context aligned with what is open, unless the author is mid-draft.
+	const focusKey = focusContext?.key ?? null;
+	const agentContextKey = agent.context?.key ?? null;
+	const promptEmpty = agent.prompt.trim() === "";
+	const { setContext } = agent;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: only a change of focus should retarget the draft context
+	useEffect(() => {
+		if (promptEmpty && focusKey !== agentContextKey) setContext(focusContext);
+	}, [focusKey]);
+
+	const openCanvas = useCallback((target: CanvasTarget) => {
+		setCanvas(target);
+		setNarrowPane("canvas");
+		setNavOpen(false);
+		setLayoutState((current) =>
+			current === "conversation" ? "split" : current,
+		);
+	}, []);
+
+	function closeCanvas() {
+		setCanvas(null);
+		setNarrowPane("conversation");
+	}
+
+	/** Place an editable request in the composer. It is never sent automatically. */
+	const askAgent = useCallback(
+		(request: string, context?: AgentContext | null) => {
+			agent.setPrompt(request);
+			if (context !== undefined) agent.setContext(context);
+			setNarrowPane("conversation");
+			setLayoutState((current) => (current === "canvas" ? "split" : current));
+			requestAnimationFrame(() => {
+				const composer = composerRef.current;
+				if (!composer) return;
+				composer.focus();
+				composer.setSelectionRange(
+					composer.value.length,
+					composer.value.length,
+				);
+			});
+		},
+		[agent],
+	);
+
+	// Canvas targets that point at removed content fall back to the Course Plan.
+	useEffect(() => {
+		if (canvas?.kind !== "lecture" || !course) return;
+		if (!course.lectures.some((lecture) => lecture.id === canvas.lectureId)) {
+			setCanvas({ kind: "plan" });
+		}
+	}, [canvas, course]);
+
+	useEffect(() => {
+		if (!canvas) setFocusContext(null);
+		else if (canvas.kind === "plan" && course)
+			setFocusContext({
+				key: "plan",
+				label: "Course Plan",
+				instruction: "I'm looking at the Course Plan",
+			});
+		else if (canvas.kind !== "lecture") setFocusContext(null);
+	}, [canvas, course]);
+
+	const lectureNumber = useMemo(() => {
+		const map = new Map<string, number>();
+		for (const [index, lecture] of (course?.lectures ?? []).entries())
+			map.set(lecture.id, index + 1);
+		return map;
+	}, [course]);
+
+	const changesCount = currentState?.changes.length ?? 0;
+	const drift =
+		currentState && currentState.drift !== "clean" ? currentState : null;
+
+	function renderCanvas(target: CanvasTarget) {
+		switch (target.kind) {
+			case "plan":
+				return (
+					<CoursePlanCanvas
+						course={course ?? null}
+						courseError={courseError}
+						presentations={presentations}
+						sources={sources}
+						busy={agent.running}
+						onCourseChange={(updated) => {
+							setCourse(updated);
+							void refreshCurrentState();
+						}}
+						onRetry={() => void loadCourse().catch(() => undefined)}
+						onOpenLecture={(lectureId) =>
+							openCanvas({ kind: "lecture", lectureId })
+						}
+						onAskAgent={askAgent}
+					/>
+				);
+			case "sources":
+				return (
+					<SourcesCanvas
+						key="sources"
+						initialTab={target.tab}
+						resources={resources}
+						sources={sources}
+						library={library}
+						onRead={(readerTarget) =>
+							openCanvas({
+								kind: "reader",
+								target: readerTarget,
+								returnTo: target,
+							})
+						}
+						onAskAgent={askAgent}
+					/>
+				);
+			case "reader":
+				return (
+					<SourceReader
+						target={target.target}
+						returnLabel={
+							target.returnTo?.kind === "lecture"
+								? "Back to Slides"
+								: target.returnTo
+									? "Back to Sources"
+									: null
+						}
+						onReturn={() => setCanvas(target.returnTo ?? { kind: "sources" })}
+						onAskAgent={askAgent}
+					/>
+				);
+			case "lecture": {
+				if (!course) return null;
+				const lecture = course.lectures.find(
+					(item) => item.id === target.lectureId,
+				);
+				if (!lecture) return null;
+				return (
+					<LectureCanvas
+						key={lecture.id}
+						course={course}
+						lecture={lecture}
+						lectureNumber={lectureNumber.get(lecture.id) ?? 1}
+						presentationVersion={presentationVersion}
+						templates={templates}
+						sources={sources}
+						busy={agent.running}
+						onPresentationsChange={async () => {
+							await refreshPresentations();
+							void refreshCurrentState();
+						}}
+						onCourseChange={async () => {
+							await loadCourse();
+							await refreshPresentations();
+							void refreshCurrentState();
+						}}
+						onFocusChange={setFocusContext}
+						onAskAgent={askAgent}
+						onOpenEvidence={(readerTarget) =>
+							openCanvas({
+								kind: "reader",
+								target: readerTarget,
+								returnTo: target,
+							})
+						}
+						onManageTemplates={() => setSettings("templates")}
+						onTemplatesChange={setTemplates}
+					/>
+				);
+			}
+			case "history":
+				return (
+					<HistoryCanvas
+						key="history"
+						initialTab={target.tab}
+						course={course ?? null}
+						presentations={presentations}
+						onChanged={async () => {
+							await Promise.all([
+								refreshCurrentState(),
+								loadCourse().catch(() => undefined),
+								refreshPresentations(),
+								refreshSources(),
+							]);
+						}}
+						onReconcile={(driftId) => {
+							agent.setDriftId(driftId);
+							askAgent(
+								"Course files changed outside the app. Review the changes, explain what is inconsistent, and propose a fix for me to approve.",
+								{
+									key: `drift-${driftId}`,
+									label: "Outside changes",
+									instruction:
+										"Workspace Drift needs Reconciliation. Review the Current State findings, explain the inconsistency, and propose a reviewed patch. Do not treat the Drift as repaired until the Course Author approves a valid change.",
+								},
+							);
+						}}
+						onPublish={() => openCanvas({ kind: "release" })}
+					/>
+				);
+			case "release":
+				if (!course) return null;
+				return (
+					<ReleaseCanvas
+						course={course}
+						presentations={presentations}
+						sources={sources}
+						currentState={currentState}
+						onOpenHistory={(tab) => openCanvas({ kind: "history", tab })}
+						onOpenEvidence={(readerTarget) =>
+							openCanvas({
+								kind: "reader",
+								target: readerTarget,
+								returnTo: target,
+							})
+						}
+						onAskAgent={askAgent}
+						onPublished={() => void refreshCurrentState()}
+					/>
+				);
+		}
+	}
+
+	const effectiveLayout: LayoutMode = canvas ? layout : "conversation";
+
+	return (
+		<div
+			className="shell"
+			data-layout={effectiveLayout}
+			data-narrow-pane={canvas ? narrowPane : "conversation"}
+			data-nav-open={navOpen}
+		>
+			<Navigator
+				workspace={workspace}
+				course={course ?? null}
+				sources={sources}
+				presentations={presentations}
+				canvas={canvas}
+				agent={agent}
+				changesCount={changesCount}
+				onOpen={openCanvas}
+				onClose={() => setNavOpen(false)}
+				onSettings={() => setSettings("models")}
+				onWorkspaceDetails={() => setSettings("workspace")}
+				onConversationDialog={setConversationDialog}
+				onAllCourses={async () => {
+					try {
+						await onAllCourses();
+					} catch (caught) {
+						setShellError(errorMessage(caught, "Courses could not be opened."));
+					}
+				}}
+			/>
+			<button
+				type="button"
+				className="nav-scrim"
+				aria-label="Close navigation"
+				tabIndex={-1}
+				onClick={() => setNavOpen(false)}
+			/>
+			<div className="work">
+				{drift ? (
+					<DriftBanner
+						state={drift}
+						onReview={() => openCanvas({ kind: "history", tab: "changes" })}
+					/>
+				) : null}
+				{shellError ? (
+					<div className="shell-error" role="alert">
+						{shellError}
+					</div>
+				) : null}
+				<div className="panes">
+					<ConversationPane
+						agent={agent}
+						catalog={catalog}
+						course={course ?? null}
+						sources={sources}
+						library={library}
+						canvasOpen={canvas !== null}
+						focusContext={focusContext}
+						composerRef={composerRef}
+						onCatalogChange={setCatalog}
+						onAddModel={() => setModelSetupOpen(true)}
+						onOpenNav={() => setNavOpen(true)}
+						onShowCanvas={() => setNarrowPane("canvas")}
+						onOpen={openCanvas}
+						onConversationDialog={setConversationDialog}
+						presentations={presentations}
+						lectureNumber={lectureNumber}
+					/>
+					{canvas ? (
+						<CanvasFrame
+							layout={layout}
+							onLayout={setLayout}
+							onClose={closeCanvas}
+							onShowConversation={() => setNarrowPane("conversation")}
+							onOpenNav={() => setNavOpen(true)}
+							canPublish={Boolean(course)}
+							onPublish={() => openCanvas({ kind: "release" })}
+							publishActive={canvas.kind === "release"}
+						>
+							{renderCanvas(canvas)}
+						</CanvasFrame>
+					) : null}
 				</div>
-			</header>
-			{content}
-			{diagnosticsOpen ? (
-				<RuntimeDiagnosticsDialog onClose={() => setDiagnosticsOpen(false)} />
+			</div>
+
+			{library.modelPrompt ? <ModelDownloadDialog library={library} /> : null}
+			{modelSetupOpen ? (
+				<ModelSetupDialog
+					catalog={catalog}
+					onCatalogChange={setCatalog}
+					onClose={() => {
+						setModelSetupOpen(false);
+						requestAnimationFrame(() => composerRef.current?.focus());
+					}}
+				/>
+			) : null}
+			{settings ? (
+				<SettingsDialog
+					section={settings}
+					onSection={setSettings}
+					workspace={workspace}
+					catalog={catalog}
+					onCatalogChange={setCatalog}
+					templates={templates}
+					onTemplatesChange={setTemplates}
+					library={library}
+					onClose={() => setSettings(null)}
+				/>
+			) : null}
+			{conversationDialog ? (
+				<ConversationDialogs
+					dialog={conversationDialog}
+					agent={agent}
+					onClose={() => setConversationDialog(null)}
+				/>
 			) : null}
 		</div>
 	);

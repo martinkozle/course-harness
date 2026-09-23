@@ -1,6 +1,17 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
-test("Course Author creates a Course through chat and revises its Syllabus", async ({
+async function openSettings(page: Page, section: string) {
+	await page.getByRole("button", { name: "Settings" }).click();
+	const settings = page.getByRole("dialog", { name: "Settings" });
+	await expect(settings).toBeVisible();
+	await settings
+		.getByRole("navigation", { name: "Settings sections" })
+		.getByRole("button", { name: section })
+		.click();
+	return settings;
+}
+
+test("Course Author creates a Course through chat and revises its Course Plan", async ({
 	page,
 }) => {
 	await page.request.post("/api/workspace/close");
@@ -10,131 +21,131 @@ test("Course Author creates a Course through chat and revises its Syllabus", asy
 		page.getByRole("heading", { name: "Your courses" }),
 	).toBeVisible();
 	await page.getByRole("button", { name: "New course" }).click();
-
 	await expect(
-		page.getByRole("heading", { name: "Give the course a clear shape." }),
+		page.getByRole("heading", { name: "Start with your material" }),
 	).toBeVisible();
-	await page.getByRole("button", { name: "Models", exact: true }).click();
-	await expect(page.getByRole("heading", { name: "Models" })).toBeVisible();
-	if (await page.getByLabel("API key").isVisible()) {
-		await page.getByLabel("API key").fill("deterministic-test-key");
-		await page.getByRole("button", { name: "Save Provider Account" }).click();
-		await expect(page.getByLabel("Preset name")).toBeVisible();
+
+	// Provider and Model Preset management happens in Settings.
+	const settings = await openSettings(page, "Models");
+	if (await settings.getByLabel("API key").isVisible()) {
+		await settings.getByLabel("API key").fill("deterministic-test-key");
+		await settings
+			.getByRole("button", { name: "Save Provider Account" })
+			.click();
+		await expect(settings.getByLabel("Preset name")).toBeVisible();
 	}
-	if (await page.getByLabel("Preset name").isVisible()) {
-		await page.getByLabel("Preset name").fill("Planning model");
-		await page.getByLabel("Model ID").fill("openai/gpt-oss-20b:free");
-		await page.getByRole("button", { name: "Save Model Preset" }).click();
+	if (await settings.getByLabel("Preset name").isVisible()) {
+		await settings.getByLabel("Preset name").fill("Planning model");
+		await settings.getByLabel("Model ID").fill("openai/gpt-oss-20b:free");
+		await settings.getByRole("button", { name: "Save Model Preset" }).click();
 	}
-	await page.getByRole("button", { name: "Replace key" }).click();
-	await page
+	await settings.getByRole("button", { name: "Replace key" }).click();
+	await settings
 		.getByLabel("New API key for My OpenRouter")
 		.fill("rotated-deterministic-test-key");
-	await page.getByRole("button", { name: "Save new key" }).click();
-	await expect(page.getByText("Planning model")).toBeVisible();
+	await settings.getByRole("button", { name: "Save new key" }).click();
+	await expect(settings.getByText("Planning model")).toBeVisible();
 	await expect(
-		page.getByLabel("New API key for My OpenRouter"),
+		settings.getByLabel("New API key for My OpenRouter"),
 	).not.toBeVisible();
-	await page.getByRole("button", { name: "Authoring", exact: true }).click();
-	await expect(
-		page.getByRole("heading", { name: "Build the Lecture" }),
-	).toBeVisible();
+	await settings.getByRole("button", { name: "Close" }).click();
+	await expect(settings).toBeHidden();
+
+	// The first chat turn creates the Course Plan, which opens beside the conversation.
 	await page
 		.getByLabel("Message the Course Agent")
 		.fill(
 			"Create a practical causal inference Course for applied researchers.",
 		);
 	await page.getByRole("button", { name: "Send message" }).click();
-
 	await expect(
 		page.getByText("I created a two-Lecture Course Plan."),
 	).toBeVisible();
-	await page.getByRole("button", { name: "Course Plan" }).click();
 	await expect(
 		page.getByRole("heading", { name: "Causal Inference in Practice" }),
 	).toBeVisible();
-	const lectureSpine = page.getByRole("region", { name: "Lecture spine" });
-	await expect(lectureSpine.getByRole("listitem")).toHaveCount(2);
-	await page.getByRole("button", { name: "Files" }).click();
+	const lectureSequence = page.getByRole("list", { name: "Lecture sequence" });
+	await expect(lectureSequence.getByRole("listitem")).toHaveCount(2);
+	const navigator = page.getByRole("navigation", { name: "Course" });
 	await expect(
-		page
+		navigator.getByRole("button", { name: /From association to intervention/ }),
+	).toBeVisible();
+
+	// Workspace files are an advanced, read-only inventory in Settings.
+	const workspaceSettings = await openSettings(page, "Workspace");
+	await expect(
+		workspaceSettings
 			.getByRole("region", { name: "Course files" })
 			.getByText(/course\.yaml/),
 	).toBeVisible();
-	await page.getByRole("button", { name: "Course Plan" }).click();
+	await page.keyboard.press("Escape");
+	await expect(workspaceSettings).toBeHidden();
 
-	await page.getByRole("button", { name: "Edit syllabus" }).click();
+	// Lectures are renamed and reordered directly in the Course Plan.
+	await page
+		.getByRole("button", {
+			name: "Actions for From association to intervention",
+		})
+		.click();
+	await page.getByRole("menuitem", { name: "Rename" }).click();
 	await page
 		.getByLabel("Lecture 1 title")
 		.fill("Interventions, not associations");
-	await page
-		.getByRole("button", { name: "Move Confounding and adjustment earlier" })
-		.click();
-	await page.getByRole("button", { name: "Save changes" }).click();
-	await expect(lectureSpine.getByRole("listitem").first()).toContainText(
-		"Confounding and adjustment",
-	);
-	await expect(lectureSpine.getByRole("listitem").nth(1)).toContainText(
+	await page.getByRole("button", { name: "Save", exact: true }).click();
+	await expect(lectureSequence.getByRole("listitem").first()).toContainText(
 		"Interventions, not associations",
 	);
-
-	await page.getByRole("button", { name: "Authoring", exact: true }).click();
 	await page
-		.getByRole("button", { name: "Conversations", exact: true })
+		.getByRole("button", { name: "Actions for Confounding and adjustment" })
 		.click();
-	await page.getByRole("button", { name: "New conversation" }).click();
+	await page.getByRole("menuitem", { name: "Move earlier" }).click();
+	await expect(lectureSequence.getByRole("listitem").first()).toContainText(
+		"Confounding and adjustment",
+	);
+	await expect(lectureSequence.getByRole("listitem").nth(1)).toContainText(
+		"Interventions, not associations",
+	);
 	await expect(
-		page.getByRole("region", { name: "Conversations" }),
-	).toBeHidden();
+		navigator.getByRole("button", { name: /Confounding and adjustment/ }),
+	).toContainText("1");
+
+	// A new Conversation stays a draft until its first message.
+	const conversations = page.getByRole("list", { name: "Conversations" });
+	const savedRows = conversations.locator(".conversation-row");
+	await page.getByRole("button", { name: "New conversation" }).click();
 	await expect(
 		page.getByRole("heading", { name: "What should we work on?" }),
 	).toBeVisible();
-	await page
-		.getByRole("button", { name: "Conversations", exact: true })
-		.click();
-	await expect(page.locator(".conversation-list li")).toHaveCount(1);
-	await expect(
-		page.getByText("Send a message to save this new conversation."),
-	).toBeVisible();
+	await expect(conversations.getByText("New conversation")).toBeVisible();
+	await expect(savedRows).toHaveCount(1);
 	await page.reload();
-	await page.getByRole("button", { name: "Authoring", exact: true }).click();
-	await page
-		.getByRole("button", { name: "Conversations", exact: true })
-		.click();
-	await expect(page.locator(".conversation-list li")).toHaveCount(1);
+	await expect(savedRows).toHaveCount(1);
+	await expect(conversations.getByText("New conversation")).toHaveCount(0);
 	await expect(
 		page.getByText("I created a two-Lecture Course Plan."),
 	).toBeVisible();
+
+	// Stopping a run leaves the conversation usable.
 	await page.getByRole("button", { name: "New conversation" }).click();
 	await page
 		.getByLabel("Message the Course Agent")
 		.fill("Wait until I stop you.");
 	await page.getByRole("button", { name: "Send message" }).click();
 	await expect(
-		page.getByRole("button", { name: "Conversations", exact: true }),
-	).toBeVisible();
-	await expect(
 		page.getByRole("button", { name: "Stop response", exact: true }),
 	).toBeVisible();
 	await expect(
-		page.getByRole("region", { name: "Conversations" }),
-	).toBeHidden();
-	await page
-		.getByRole("button", { name: "Conversations", exact: true })
-		.click();
-	await expect(
-		page.getByRole("region", { name: "Conversations" }),
-	).toBeVisible();
-	await page.getByRole("button", { name: "Close conversations" }).click();
-	await expect(
-		page.getByRole("region", { name: "Conversations" }),
-	).toBeHidden();
+		page.getByRole("button", { name: "New conversation" }),
+	).toBeDisabled();
 	await page
 		.getByRole("button", { name: "Stop response", exact: true })
 		.click();
 	await expect(page.locator("#agent-run-status")).toHaveText(
 		"Course Agent stopped.",
 	);
+	await expect(
+		page.getByText(/Stopped\. Changes the agent saved/),
+	).toBeVisible();
 	await page
 		.getByLabel("Message the Course Agent")
 		.fill("Review the lecture sequence.");
@@ -142,64 +153,86 @@ test("Course Author creates a Course through chat and revises its Syllabus", asy
 	await expect(
 		page.getByText("The lecture sequence is ready for review."),
 	).toBeVisible();
-	await page
-		.getByRole("button", { name: "Conversations", exact: true })
-		.click();
-	await expect(page.locator(".conversation-list li")).toHaveCount(2);
-	await page
-		.locator(".conversation-list li:not(.is-active) .conversation-select")
+	await expect(savedRows).toHaveCount(2);
+
+	// Switching Conversations keeps the transcript area intact.
+	await savedRows
+		.locator('.conversation-item:not([aria-current="true"])')
 		.first()
 		.click();
 	await expect(
 		page.getByText("I created a two-Lecture Course Plan."),
 	).toBeVisible();
-	const savedConversation = page
-		.locator(".conversation-list li:not(.is-active)")
-		.first();
-	await savedConversation.getByRole("button", { name: "Archive" }).click();
-	await expect(savedConversation.getByText("Archived")).toBeVisible();
-	await savedConversation.getByRole("button", { name: "Restore" }).click();
+	const otherRow = savedRows.filter({
+		has: page.locator('.conversation-item:not([aria-current="true"])'),
+	});
+	const otherTitle = (
+		await otherRow.locator(".nav-label").textContent()
+	)?.trim();
+	expect(otherTitle).toBeTruthy();
+	await otherRow.getByRole("button", { name: /^Actions for / }).click();
+	await page.getByRole("menuitem", { name: "Archive" }).click();
+	await expect(savedRows).toHaveCount(1);
+	await page.getByRole("button", { name: "Archived (1)" }).click();
+	await expect(
+		page.getByRole("heading", { name: "Archived conversations" }),
+	).toBeVisible();
+	await savedRows.getByRole("button", { name: /^Actions for / }).click();
+	await page.getByRole("menuitem", { name: "Restore" }).click();
+	await expect(
+		page.getByRole("heading", { name: "Conversations", exact: true }),
+	).toBeVisible();
+	await expect(savedRows).toHaveCount(2);
+
+	// Summarizing earlier context keeps the full transcript visible.
+	await page.getByRole("button", { name: "Conversation actions" }).click();
 	await page
-		.getByRole("button", { name: "Compact current conversation" })
+		.getByRole("menuitem", { name: /Summarize earlier context/ })
 		.click();
-	const summary = page.getByLabel(
-		/Review the summary that will replace model context/,
-	);
+	const summary = page.getByLabel(/Summary of \d+ earlier messages/);
 	await expect(summary).toHaveValue(/Conversation so far:/);
 	await summary.fill(
 		"We drafted a two-Lecture course plan for applied researchers.",
 	);
 	await page.getByRole("button", { name: "Use this summary" }).click();
+	await expect(summary).toBeHidden();
 	await expect(
 		page.getByText("I created a two-Lecture Course Plan."),
 	).toBeVisible();
-	await page
-		.locator(".conversation-list li.is-active")
-		.getByRole("button", { name: "Delete", exact: true })
-		.click();
-	await page.getByRole("button", { name: "Delete now" }).click();
+
+	// Deleting the active Conversation opens the next one.
+	await page.getByRole("button", { name: "Conversation actions" }).click();
+	await page.getByRole("menuitem", { name: "Delete" }).click();
+	await page.getByRole("button", { name: "Delete conversation" }).click();
 	await expect(
 		page.getByText("The lecture sequence is ready for review."),
 	).toBeVisible();
-	await page
-		.locator(".conversation-list li.is-active")
-		.getByRole("button", { name: "Delete", exact: true })
-		.click();
-	await page.getByRole("button", { name: "Delete now" }).click();
+	await page.getByRole("button", { name: "Conversation actions" }).click();
+	await page.getByRole("menuitem", { name: "Delete" }).click();
+	await page.getByRole("button", { name: "Delete conversation" }).click();
 	await expect(
 		page.getByRole("heading", { name: "What should we work on?" }),
 	).toBeVisible();
 
-	await page.getByRole("button", { name: "Models", exact: true }).click();
-	await page.getByRole("button", { name: "Delete", exact: true }).click();
+	// Deleting a Provider Account explains the attached Presets it removes.
+	const modelSettings = await openSettings(page, "Models");
+	await modelSettings
+		.getByRole("button", { name: "Delete", exact: true })
+		.click();
 	await expect(
-		page.getByText("This will also delete 1 attached Model Preset."),
+		modelSettings.getByText("This will also delete 1 attached Model Preset."),
 	).toBeVisible();
-	await page.getByRole("button", { name: "Delete account" }).click();
-	await expect(page.getByText("No Provider Accounts saved yet.")).toBeVisible();
-	await expect(page.getByText("Add a Model Preset after")).toBeVisible();
+	await modelSettings.getByRole("button", { name: "Delete account" }).click();
+	await expect(
+		modelSettings.getByText("No Provider Accounts saved yet."),
+	).toBeVisible();
+	await expect(
+		modelSettings.getByText("Add a Model Preset after"),
+	).toBeVisible();
+	await page.keyboard.press("Escape");
 
-	await page.getByRole("button", { name: "All courses" }).click();
+	await page.getByRole("button", { name: "Course menu" }).click();
+	await page.getByRole("menuitem", { name: "Open another course" }).click();
 	await expect(
 		page.getByRole("heading", { name: "Your courses" }),
 	).toBeVisible();

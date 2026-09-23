@@ -1,24 +1,42 @@
+import { KeyRound, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
 
 import { responseError } from "./api";
 import type { ModelCatalog, ProviderKind } from "./models";
+import { Notice } from "./ui";
 
-export function ModelsView({
+const providerLabels: Record<ProviderKind, string> = {
+	openrouter: "OpenRouter",
+	anthropic: "Anthropic",
+	"openai-compatible": "OpenAI-compatible",
+};
+
+/** Provider Accounts and Model Presets. Shared by Settings and the composer's model setup. */
+export function ModelSettings({
 	catalog,
 	onCatalogChange,
+	onPresetSaved,
 }: {
 	catalog: ModelCatalog;
 	onCatalogChange: (catalog: ModelCatalog) => void;
+	onPresetSaved?: () => void;
 }) {
+	const hasAccounts = catalog.provider_accounts.length > 0;
 	const [providerName, setProviderName] = useState("My OpenRouter");
 	const [kind, setKind] = useState<ProviderKind>("openrouter");
 	const [baseUrl, setBaseUrl] = useState("");
 	const [allowInsecureHttp, setAllowInsecureHttp] = useState(false);
 	const [apiKey, setApiKey] = useState("");
-	const [presetName, setPresetName] = useState("");
+	const [presetName, setPresetName] = useState(
+		hasAccounts && catalog.model_presets.length === 0 ? "Course planning" : "",
+	);
 	const [model, setModel] = useState("");
 	const [providerId, setProviderId] = useState(
 		catalog.provider_accounts[0]?.id ?? "",
+	);
+	const [addingAccount, setAddingAccount] = useState(false);
+	const [addingPreset, setAddingPreset] = useState(
+		hasAccounts && catalog.model_presets.length === 0,
 	);
 	const [editingProviderId, setEditingProviderId] = useState<string | null>(
 		null,
@@ -29,6 +47,8 @@ export function ModelsView({
 	);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+
+	const showAccountForm = !hasAccounts || addingAccount;
 	const verificationDestination =
 		kind === "openrouter"
 			? "https://openrouter.ai/api/v1"
@@ -77,7 +97,11 @@ export function ModelsView({
 			setProviderId(account.id);
 			setApiKey("");
 			setAllowInsecureHttp(false);
-			if (next.provider_accounts.length === 1) setPresetName("Course planning");
+			setAddingAccount(false);
+			if (next.model_presets.length === 0) {
+				setPresetName("Course planning");
+				setAddingPreset(true);
+			}
 		} catch (caught) {
 			setError(
 				caught instanceof Error
@@ -107,6 +131,8 @@ export function ModelsView({
 			await reloadCatalog();
 			setPresetName("");
 			setModel("");
+			setAddingPreset(false);
+			onPresetSaved?.();
 		} catch (caught) {
 			setError(
 				caught instanceof Error
@@ -175,284 +201,66 @@ export function ModelsView({
 	}
 
 	return (
-		<main className="page-main models-main" aria-labelledby="models-heading">
-			<header className="page-heading models-heading">
-				<p className="eyebrow">Agent settings</p>
-				<h1 id="models-heading">Models</h1>
-				<p>
-					Save a provider credential once, then attach as many named Model
-					Presets as you need.
-				</p>
-			</header>
-
+		<div className="model-settings">
 			{error ? (
-				<p className="notice error-notice" id="models-error" role="alert">
-					{error}
-				</p>
+				<div id="models-error">
+					<Notice tone="error">{error}</Notice>
+				</div>
 			) : null}
 
-			<section
-				className="model-settings-section"
-				aria-labelledby="accounts-heading"
-			>
-				<div className="content-section-heading">
-					<div>
-						<p className="section-kicker">Reusable credentials</p>
-						<h2 id="accounts-heading">Provider Accounts</h2>
-					</div>
-					<span className="count-badge">
-						{catalog.provider_accounts.length}
-					</span>
-				</div>
-				{catalog.provider_accounts.length > 0 ? (
-					<ul className="provider-account-list">
-						{catalog.provider_accounts.map((account) => {
-							const presetCount = presetCountByProvider.get(account.id) ?? 0;
-							const isEditing = editingProviderId === account.id;
-							const isDeleting = deletingProviderId === account.id;
-							return (
-								<li key={account.id}>
-									<div className="provider-account-copy">
-										<strong>{account.name}</strong>
-										<span>{account.kind}</span>
-										<small>{account.base_url}</small>
-									</div>
-									<div className="provider-account-actions">
-										<button
-											className="quiet-action compact-action"
-											type="button"
-											disabled={busy}
-											aria-expanded={isEditing}
-											aria-controls={`replacement-form-${account.id}`}
-											onClick={() => {
-												setError(null);
-												setDeletingProviderId(null);
-												setReplacementApiKey("");
-												setEditingProviderId(isEditing ? null : account.id);
-											}}
-										>
-											{isEditing ? "Cancel replacement" : "Replace key"}
-										</button>
-										<button
-											className="quiet-action destructive-action compact-action"
-											type="button"
-											disabled={busy}
-											aria-expanded={isDeleting}
-											aria-controls={`delete-confirmation-${account.id}`}
-											onClick={() => {
-												setError(null);
-												setEditingProviderId(null);
-												setReplacementApiKey("");
-												setDeletingProviderId(isDeleting ? null : account.id);
-											}}
-										>
-											{isDeleting ? "Cancel deletion" : "Delete"}
-										</button>
-									</div>
-									{isEditing ? (
-										<form
-											id={`replacement-form-${account.id}`}
-											className="provider-account-inline-form"
-											onSubmit={(event) =>
-												void replaceCredential(event, account.id)
-											}
-											aria-busy={busy}
-										>
-											<div className="field">
-												<label htmlFor={`replacement-key-${account.id}`}>
-													New API key for {account.name}
-												</label>
-												<input
-													id={`replacement-key-${account.id}`}
-													type="password"
-													value={replacementApiKey}
-													onChange={(event) =>
-														setReplacementApiKey(event.target.value)
-													}
-													required
-													autoComplete="off"
-													aria-invalid={error ? true : undefined}
-													aria-describedby={`replacement-disclosure-${account.id}${error ? " models-error" : ""}`}
-												/>
-											</div>
-											<p
-												className="form-help"
-												id={`replacement-disclosure-${account.id}`}
-												role="note"
-											>
-												Saving sends this new key to {account.base_url} to
-												verify it before storage. Existing Model Presets will
-												keep using this account.
-											</p>
-											<button
-												className="primary-action compact-action"
-												type="submit"
-												disabled={busy}
-											>
-												{busy ? "Verifying…" : "Save new key"}
-											</button>
-										</form>
-									) : null}
-									{isDeleting ? (
-										<div
-											id={`delete-confirmation-${account.id}`}
-											className="provider-account-delete-confirmation"
-										>
-											<p>
-												Delete <strong>{account.name}</strong> and its saved
-												credential?
-												{presetCount > 0
-													? ` This will also delete ${presetCount} attached Model ${presetCount === 1 ? "Preset" : "Presets"}.`
-													: ""}
-											</p>
-											<button
-												className="secondary-action destructive-action compact-action"
-												type="button"
-												disabled={busy}
-												onClick={() => void deleteProvider(account.id)}
-											>
-												{busy ? "Deleting…" : "Delete account"}
-											</button>
-										</div>
-									) : null}
-								</li>
-							);
-						})}
-					</ul>
-				) : (
-					<p className="empty-note">No Provider Accounts saved yet.</p>
-				)}
-
-				<details
-					className="settings-form-card"
-					open={catalog.provider_accounts.length === 0}
-				>
-					<summary>Add Provider Account</summary>
-					<form onSubmit={addProvider} aria-busy={busy}>
-						<div className="field">
-							<label htmlFor="provider-name">Account name</label>
-							<input
-								id="provider-name"
-								value={providerName}
-								onChange={(event) => setProviderName(event.target.value)}
-								required
-							/>
-						</div>
-						<div className="field">
-							<label htmlFor="provider-kind">Provider</label>
-							<select
-								id="provider-kind"
-								value={kind}
-								onChange={(event) =>
-									setKind(event.target.value as ProviderKind)
-								}
-							>
-								<option value="openrouter">OpenRouter</option>
-								<option value="anthropic">Anthropic</option>
-								<option value="openai-compatible">OpenAI-compatible</option>
-							</select>
-						</div>
-						{kind === "openai-compatible" ? (
-							<>
-								<div className="field">
-									<label htmlFor="provider-url">API base URL</label>
-									<input
-										id="provider-url"
-										type="url"
-										value={baseUrl}
-										onChange={(event) => setBaseUrl(event.target.value)}
-										required
-									/>
-								</div>
-								{baseUrl.trim().toLowerCase().startsWith("http://") ? (
-									<label className="consent-control">
-										<input
-											type="checkbox"
-											checked={allowInsecureHttp}
-											onChange={(event) =>
-												setAllowInsecureHttp(event.target.checked)
-											}
-										/>
-										Allow HTTP to another host. Your API key and Course requests
-										will be sent without encryption.
-									</label>
-								) : null}
-							</>
-						) : null}
-						<div className="field">
-							<label htmlFor="provider-key">API key</label>
-							<input
-								id="provider-key"
-								type="password"
-								value={apiKey}
-								onChange={(event) => setApiKey(event.target.value)}
-								required
-								autoComplete="off"
-								aria-describedby="provider-network-disclosure"
-							/>
-						</div>
-						<p
-							className="form-help"
-							id="provider-network-disclosure"
-							role="note"
-						>
-							Saving sends this key to {verificationDestination} to verify
-							access before storing it outside every Course Workspace.
-						</p>
+			<section className="model-section" aria-labelledby="presets-heading">
+				<div className="canvas-section-head">
+					<h3 id="presets-heading">Model Presets</h3>
+					{hasAccounts && !addingPreset ? (
 						<button
-							className="primary-action compact-action"
-							type="submit"
-							disabled={busy}
+							type="button"
+							className="btn btn-small"
+							onClick={() => {
+								setError(null);
+								setAddingPreset(true);
+							}}
 						>
-							{busy ? "Verifying…" : "Save Provider Account"}
+							<Plus aria-hidden="true" />
+							Add Model Preset
 						</button>
-					</form>
-				</details>
-			</section>
-
-			<section
-				className="model-settings-section"
-				aria-labelledby="presets-heading"
-			>
-				<div className="content-section-heading">
-					<div>
-						<p className="section-kicker">Chat choices</p>
-						<h2 id="presets-heading">Model Presets</h2>
-					</div>
-					<span className="count-badge">{catalog.model_presets.length}</span>
+					) : null}
 				</div>
 				{catalog.model_presets.length > 0 ? (
-					<ul className="model-preset-list">
+					<ul className="row-list">
 						{catalog.model_presets.map((preset) => {
 							const account = catalog.provider_accounts.find(
 								(candidate) => candidate.id === preset.provider_account_id,
 							);
 							return (
-								<li key={preset.id}>
-									<div>
-										<strong>{preset.name}</strong>
-										<span>{preset.model}</span>
+								<li key={preset.id} className="row">
+									<div className="row-main">
+										<span className="row-title">{preset.name}</span>
+										<span className="row-meta">
+											<span className="mono">{preset.model}</span>
+											<span>{account?.name ?? "Missing Provider Account"}</span>
+										</span>
 									</div>
-									<small>{account?.name ?? "Missing Provider Account"}</small>
+									{preset.id === catalog.selected_model_id ? (
+										<span className="state is-included">In use</span>
+									) : null}
 								</li>
 							);
 						})}
 					</ul>
 				) : (
-					<p className="empty-note">
-						Add a Model Preset after saving a Provider Account.
+					<p className="meta">
+						{hasAccounts
+							? "Add a Model Preset to choose which model the Course Agent uses."
+							: "Add a Model Preset after saving a Provider Account."}
 					</p>
 				)}
 
-				<details
-					className="settings-form-card"
-					open={
-						catalog.provider_accounts.length > 0 &&
-						catalog.model_presets.length === 0
-					}
-				>
-					<summary>Add Model Preset</summary>
-					<form onSubmit={addModel} aria-busy={busy}>
+				{hasAccounts && addingPreset ? (
+					<form
+						className="model-form panel panel-pad"
+						onSubmit={addModel}
+						aria-busy={busy}
+					>
 						<div className="field">
 							<label htmlFor="model-preset-name">Preset name</label>
 							<input
@@ -493,23 +301,291 @@ export function ModelsView({
 								aria-describedby="preset-network-disclosure"
 							/>
 						</div>
-						<p className="form-help" id="preset-network-disclosure" role="note">
+						<p
+							className="field-help"
+							id="preset-network-disclosure"
+							role="note"
+						>
 							Saving sends this Model ID and uses the saved credential for{" "}
 							{selectedProviderAccount?.name ?? "the selected Provider Account"}{" "}
 							to contact{" "}
 							{selectedProviderAccount?.base_url ?? "its API endpoint"} and
 							verify capabilities.
 						</p>
-						<button
-							className="primary-action compact-action"
-							type="submit"
-							disabled={busy || catalog.provider_accounts.length === 0}
-						>
-							{busy ? "Verifying…" : "Save Model Preset"}
-						</button>
+						<div className="form-actions">
+							{catalog.model_presets.length > 0 ? (
+								<button
+									type="button"
+									className="btn"
+									disabled={busy}
+									onClick={() => setAddingPreset(false)}
+								>
+									Cancel
+								</button>
+							) : null}
+							<button className="btn btn-primary" type="submit" disabled={busy}>
+								{busy ? "Verifying…" : "Save Model Preset"}
+							</button>
+						</div>
 					</form>
-				</details>
+				) : null}
 			</section>
-		</main>
+
+			<section className="model-section" aria-labelledby="accounts-heading">
+				<div className="canvas-section-head">
+					<h3 id="accounts-heading">Provider Accounts</h3>
+					{hasAccounts && !addingAccount ? (
+						<button
+							type="button"
+							className="btn btn-small"
+							onClick={() => {
+								setError(null);
+								setAddingAccount(true);
+							}}
+						>
+							<Plus aria-hidden="true" />
+							Add Provider Account
+						</button>
+					) : null}
+				</div>
+				{hasAccounts ? (
+					<ul className="row-list">
+						{catalog.provider_accounts.map((account) => {
+							const presetCount = presetCountByProvider.get(account.id) ?? 0;
+							const isEditing = editingProviderId === account.id;
+							const isDeleting = deletingProviderId === account.id;
+							return (
+								<li key={account.id} className="model-account">
+									<div className="row">
+										<div className="row-main">
+											<span className="row-title">{account.name}</span>
+											<span className="row-meta">
+												<span>{providerLabels[account.kind]}</span>
+												<span className="mono">{account.base_url}</span>
+											</span>
+										</div>
+										<div className="row-actions">
+											<button
+												className="btn btn-quiet btn-small"
+												type="button"
+												disabled={busy}
+												aria-expanded={isEditing}
+												aria-controls={`replacement-form-${account.id}`}
+												onClick={() => {
+													setError(null);
+													setDeletingProviderId(null);
+													setReplacementApiKey("");
+													setEditingProviderId(isEditing ? null : account.id);
+												}}
+											>
+												<KeyRound aria-hidden="true" />
+												{isEditing ? "Cancel replacement" : "Replace key"}
+											</button>
+											<button
+												className="icon-btn is-small is-danger"
+												type="button"
+												disabled={busy}
+												aria-label={isDeleting ? "Cancel deletion" : "Delete"}
+												title={
+													isDeleting
+														? "Cancel deletion"
+														: `Delete ${account.name}`
+												}
+												aria-expanded={isDeleting}
+												aria-controls={`delete-confirmation-${account.id}`}
+												onClick={() => {
+													setError(null);
+													setEditingProviderId(null);
+													setReplacementApiKey("");
+													setDeletingProviderId(isDeleting ? null : account.id);
+												}}
+											>
+												<Trash2 aria-hidden="true" />
+											</button>
+										</div>
+									</div>
+									{isEditing ? (
+										<form
+											id={`replacement-form-${account.id}`}
+											className="model-inline-form"
+											onSubmit={(event) =>
+												void replaceCredential(event, account.id)
+											}
+											aria-busy={busy}
+										>
+											<div className="field">
+												<label htmlFor={`replacement-key-${account.id}`}>
+													New API key for {account.name}
+												</label>
+												<input
+													id={`replacement-key-${account.id}`}
+													type="password"
+													value={replacementApiKey}
+													onChange={(event) =>
+														setReplacementApiKey(event.target.value)
+													}
+													required
+													autoComplete="off"
+													aria-invalid={error ? true : undefined}
+													aria-describedby={`replacement-disclosure-${account.id}${error ? " models-error" : ""}`}
+												/>
+											</div>
+											<p
+												className="field-help"
+												id={`replacement-disclosure-${account.id}`}
+												role="note"
+											>
+												Saving sends this new key to {account.base_url} to
+												verify it before storage. Existing Model Presets keep
+												using this account.
+											</p>
+											<div className="form-actions">
+												<button
+													className="btn btn-primary btn-small"
+													type="submit"
+													disabled={busy}
+												>
+													{busy ? "Verifying…" : "Save new key"}
+												</button>
+											</div>
+										</form>
+									) : null}
+									{isDeleting ? (
+										<div
+											id={`delete-confirmation-${account.id}`}
+											className="model-inline-form model-delete-confirmation"
+										>
+											<p>
+												Delete <strong>{account.name}</strong> and its saved
+												credential?
+												{presetCount > 0
+													? ` This will also delete ${presetCount} attached Model ${presetCount === 1 ? "Preset" : "Presets"}.`
+													: ""}
+											</p>
+											<div className="form-actions">
+												<button
+													className="btn btn-small"
+													type="button"
+													disabled={busy}
+													onClick={() => setDeletingProviderId(null)}
+												>
+													Keep account
+												</button>
+												<button
+													className="btn btn-danger btn-small"
+													type="button"
+													disabled={busy}
+													onClick={() => void deleteProvider(account.id)}
+												>
+													{busy ? "Deleting…" : "Delete account"}
+												</button>
+											</div>
+										</div>
+									) : null}
+								</li>
+							);
+						})}
+					</ul>
+				) : (
+					<p className="meta">No Provider Accounts saved yet.</p>
+				)}
+
+				{showAccountForm ? (
+					<form
+						className="model-form panel panel-pad"
+						onSubmit={addProvider}
+						aria-busy={busy}
+					>
+						<div className="field">
+							<label htmlFor="provider-name">Account name</label>
+							<input
+								id="provider-name"
+								value={providerName}
+								onChange={(event) => setProviderName(event.target.value)}
+								required
+							/>
+						</div>
+						<div className="field">
+							<label htmlFor="provider-kind">Provider</label>
+							<select
+								id="provider-kind"
+								value={kind}
+								onChange={(event) =>
+									setKind(event.target.value as ProviderKind)
+								}
+							>
+								<option value="openrouter">OpenRouter</option>
+								<option value="anthropic">Anthropic</option>
+								<option value="openai-compatible">OpenAI-compatible</option>
+							</select>
+						</div>
+						{kind === "openai-compatible" ? (
+							<>
+								<div className="field">
+									<label htmlFor="provider-url">API base URL</label>
+									<input
+										id="provider-url"
+										type="url"
+										value={baseUrl}
+										onChange={(event) => setBaseUrl(event.target.value)}
+										required
+									/>
+								</div>
+								{baseUrl.trim().toLowerCase().startsWith("http://") ? (
+									<label className="check-row">
+										<input
+											type="checkbox"
+											checked={allowInsecureHttp}
+											onChange={(event) =>
+												setAllowInsecureHttp(event.target.checked)
+											}
+										/>
+										<span>
+											Allow HTTP to another host. Your API key and Course
+											requests will be sent without encryption.
+										</span>
+									</label>
+								) : null}
+							</>
+						) : null}
+						<div className="field">
+							<label htmlFor="provider-key">API key</label>
+							<input
+								id="provider-key"
+								type="password"
+								value={apiKey}
+								onChange={(event) => setApiKey(event.target.value)}
+								required
+								autoComplete="off"
+								aria-describedby="provider-network-disclosure"
+							/>
+						</div>
+						<p
+							className="field-help"
+							id="provider-network-disclosure"
+							role="note"
+						>
+							Saving sends this key to {verificationDestination} to verify
+							access before storing it outside every Course Workspace.
+						</p>
+						<div className="form-actions">
+							{hasAccounts ? (
+								<button
+									type="button"
+									className="btn"
+									disabled={busy}
+									onClick={() => setAddingAccount(false)}
+								>
+									Cancel
+								</button>
+							) : null}
+							<button className="btn btn-primary" type="submit" disabled={busy}>
+								{busy ? "Verifying…" : "Save Provider Account"}
+							</button>
+						</div>
+					</form>
+				) : null}
+			</section>
+		</div>
 	);
 }

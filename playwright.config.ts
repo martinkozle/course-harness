@@ -11,6 +11,8 @@ export default defineConfig({
 			? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
 			: undefined,
 		trace: "retain-on-failure",
+		// Axe must never measure a half-faded dialog; the app honours reduced motion.
+		contextOptions: { reducedMotion: "reduce" },
 	},
 	webServer: {
 		command: "uv run python tests/e2e/run_smoke_server.py",

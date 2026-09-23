@@ -51,25 +51,38 @@ For an OpenAI-compatible provider on another local machine, enter its API base U
 work without this opt-in. Remote HTTP sends the API key and Course requests without encryption;
 use it only on a network you trust.
 
-The Library accepts PDF, `.pptx`, and `.docx` Resources. Docling extracts text, tables, and
-document structure for search and Source use, including text recognition for scanned PDFs.
-On the first PDF upload, the Library asks before downloading layout, table, and OCR models to
-the application cache outside the Course Workspace. Conversion runs locally and stores a
-structured Docling result alongside the searchable Markdown. Reprocess existing Snapshots in the
-Library to make them searchable. The original files remain immutable Snapshots.
-The Library also has a **Download PDF models** control. If models are missing when you process or
-reprocess an existing PDF, the same prompt appears. Cancel leaves the Resource unchanged. The
-download shows progress across its layout, table, and OCR stages; stage progress is not a byte
-percentage.
+After you open a Course, the workspace has three parts: a navigator on the left (Course Plan,
+Sources, the numbered Lectures, Conversations, History, and Settings), the conversation with the
+Course Agent, and a canvas that shows whatever you open. A new Course starts with your material:
+drop papers, notes, or slides onto the start screen, discover papers, or reuse files from your
+Library, then tell the agent what the Course should teach. You can also write the Course Plan
+yourself.
 
-Each Workspace can keep multiple Conversations in that private application state. Use
-**Conversations** in the Course Agent panel to start or reopen one, rename it, archive it, or delete
-it. A new Conversation stays an unsaved draft until you send its first message. The server also
-reuses an existing empty draft, so blank Conversations do not accumulate. **Compact current
-conversation** shows an editable summary for review before using it as the
-earlier context for future model runs. The full transcript remains visible. Resolve any pending
-agent approval before compacting, archiving, or deleting its Conversation. An existing single
-transcript is migrated automatically when that Workspace's Conversations are first opened.
+**Sources** accepts PDF, `.pptx`, and `.docx` Resources. Files added from the start screen or the
+**This course** tab are saved to your Library and included in the Course; the **Library** tab keeps
+files without including them, and **Discover** searches public paper and code indexes. Docling
+extracts text, tables, and document structure for search and Source use, including text
+recognition for scanned PDFs. On the first PDF upload, Course Harness asks before downloading
+layout, table, and OCR models to the application cache outside the Course Workspace. Conversion
+runs locally and stores a structured Docling result alongside the searchable Markdown. The
+original files remain immutable Snapshots. **Settings → Diagnostics** also has a **Download PDF
+models** control and **Rebuild search index**. If models are missing when you process or reprocess
+an existing PDF, the same prompt appears. Cancel leaves the Resource unchanged. The download shows
+progress across its layout, table, and OCR stages; stage progress is not a byte percentage.
+
+Each Workspace can keep multiple Conversations in that private application state. The navigator
+lists them; each row's menu renames, archives, or deletes one. A new Conversation stays an unsaved
+draft until you send its first message, and an unsent message is kept per Conversation while you
+switch. **Summarize earlier context** in the Conversation menu shows an editable summary for
+review before using it as the earlier context for future model runs. The full transcript remains
+visible. Resolve any pending agent approval before summarizing, archiving, or deleting its
+Conversation. An existing single transcript is migrated automatically when that Workspace's
+Conversations are first opened.
+
+**History** lists changes since the last Course Revision, lets you save a named revision or restore
+an earlier one, and holds published Course Releases. **Publish release** in the canvas bar prepares
+a new Release; **Export PowerPoint** on a Lecture downloads a file from the current work without
+publishing anything.
 
 ## Development requirements
 

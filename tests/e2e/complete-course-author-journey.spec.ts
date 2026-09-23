@@ -73,6 +73,7 @@ function previewFor(
 test("Course Author completes a deterministic Course-to-Release journey", async ({
 	page,
 }) => {
+	const navigator = page.getByRole("navigation", { name: "Course" });
 	await page.request.post("/api/workspace/close");
 	await page.goto("/");
 	await expect(
@@ -82,41 +83,51 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	// Workspace creation and provider setup use the smoke server's local picker and validators.
 	await page.getByRole("button", { name: "New course" }).click();
 	await expect(
-		page.getByRole("heading", { name: "Give the course a clear shape." }),
+		page.getByRole("heading", { name: "Start with your material" }),
 	).toBeVisible();
 	await clearSmokeModelCatalog(page);
-	await page.getByRole("button", { name: "Models", exact: true }).click();
-	await expect(page.getByRole("heading", { name: "Models" })).toBeVisible();
+
+	// A draft survives adding a model from the composer.
+	const composer = page.getByLabel("Message the Course Agent");
+	await composer.fill(
+		"Create a practical causal inference Course for applied researchers.",
+	);
+	await page.getByRole("button", { name: "Add a model to chat" }).click();
+	const modelDialog = page.getByRole("dialog", { name: "Add a model" });
+	await expect(modelDialog).toBeVisible();
 	await expect(
-		page.getByText(
+		modelDialog.getByText(
 			/Saving sends this key to https:\/\/openrouter\.ai\/api\/v1/,
 		),
 	).toBeVisible();
-	await page.getByLabel("API key").fill("deterministic-test-key");
-	await page.getByRole("button", { name: "Save Provider Account" }).click();
-	await expect(page.getByLabel("Preset name")).toBeVisible();
+	await modelDialog.getByLabel("API key").fill("deterministic-test-key");
+	await modelDialog
+		.getByRole("button", { name: "Save Provider Account" })
+		.click();
+	await expect(modelDialog.getByLabel("Preset name")).toBeVisible();
 	await expect(
-		page.getByText(
+		modelDialog.getByText(
 			/Saving sends this Model ID and uses the saved credential for My OpenRouter to contact https:\/\/openrouter\.ai\/api\/v1/,
 		),
 	).toBeVisible();
-	await page.getByLabel("Preset name").fill("Planning model");
-	await page.getByLabel("Model ID").fill("deterministic/course-agent");
-	await page.getByRole("button", { name: "Save Model Preset" }).click();
-	await expect(page.getByText("Planning model")).toBeVisible();
-
-	// The first fake-agent turn creates the two-Lecture Course Plan through chat.
-	await page.getByRole("button", { name: "Authoring", exact: true }).click();
+	await modelDialog.getByLabel("Preset name").fill("Planning model");
+	await modelDialog.getByLabel("Model ID").fill("deterministic/course-agent");
+	await modelDialog.getByRole("button", { name: "Save Model Preset" }).click();
+	await expect(modelDialog).toBeHidden();
+	await expect(
+		page.getByRole("button", { name: "Model: Planning model" }),
+	).toBeVisible();
+	await expect(composer).toHaveValue(
+		"Create a practical causal inference Course for applied researchers.",
+	);
+	await page.getByRole("button", { name: "Where messages are sent" }).click();
 	await expect(
 		page.getByText(
 			/When you send a message, it and any Source excerpts needed/,
 		),
 	).toBeVisible();
-	await page
-		.getByLabel("Message the Course Agent")
-		.fill(
-			"Create a practical causal inference Course for applied researchers.",
-		);
+
+	// The first fake-agent turn creates the two-Lecture Course Plan through chat.
 	await page.getByRole("button", { name: "Send message" }).click();
 	await expect(
 		page.getByText("I created a two-Lecture Course Plan."),
@@ -135,16 +146,16 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	expect(firstLecture).toBeDefined();
 	expect(secondLecture).toBeDefined();
 
-	// Upload, process, admit, search, and read a checked-in Source through Library UI.
-	await page.getByRole("button", { name: "Library" }).click();
+	// Sources: discovery disclosure, PDF model consent, upload, preview, and inclusion.
+	await navigator.getByRole("button", { name: /Sources/ }).click();
 	await expect(
-		page.getByRole("heading", { name: "Resources", exact: true }),
+		page.getByRole("heading", { name: "Sources", exact: true }),
 	).toBeVisible();
+	await page.getByRole("tab", { name: "Discover" }).click();
 	await expect(
-		page.getByText(
-			/Searching sends only your query to the listed public discovery services/,
-		),
+		page.getByText(/Searching sends only your query to these public services/),
 	).toBeVisible();
+	await page.getByRole("tab", { name: /Library/ }).click();
 	let modelDownloadStarted = false;
 	let modelDownloadCompleted = false;
 	await page.route("**/api/resources/parser-models", async (route) => {
@@ -179,56 +190,82 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 			},
 		});
 	});
-	await page
-		.locator('input[type="file"]')
-		.first()
-		.setInputFiles(resolve("tests/fixtures/resources/teaching.pdf"));
+	const libraryUpload = page.getByLabel("Add files to Library");
+	await libraryUpload.setInputFiles(
+		resolve("tests/fixtures/resources/teaching.pdf"),
+	);
+	const consent = page.getByRole("dialog", {
+		name: "Download document processing models?",
+	});
+	await expect(consent).toBeVisible();
+	await consent.getByRole("button", { name: "Cancel" }).click();
+	await expect(consent).toBeHidden();
+	// Cancelling leaves a recoverable pending item rather than a false upload.
+	const uploads = page.getByRole("list", { name: "Files being added" });
+	await expect(uploads).toContainText("teaching.pdf");
+	await expect(uploads).toContainText("Needs PDF support");
+	await page.getByRole("button", { name: "Dismiss teaching.pdf" }).click();
+	await expect(uploads).toBeHidden();
+
+	await page.getByRole("button", { name: "Settings" }).click();
+	const settings = page.getByRole("dialog", { name: "Settings" });
+	await settings
+		.getByRole("navigation", { name: "Settings sections" })
+		.getByRole("button", { name: "Diagnostics" })
+		.click();
+	await settings.getByRole("button", { name: "Download PDF models" }).click();
+	await consent.getByRole("button", { name: "Download models" }).click();
 	await expect(
-		page.getByRole("dialog", { name: "Download document processing models?" }),
+		consent.getByRole("progressbar", {
+			name: "Model download stages completed",
+		}),
 	).toBeVisible();
-	await page.getByRole("button", { name: "Cancel" }).click();
-	await expect(page.getByRole("dialog")).toBeHidden();
-	await page.getByRole("button", { name: "Download PDF models" }).click();
-	await page.getByRole("button", { name: "Download models" }).click();
-	await expect(
-		page.getByRole("progressbar", { name: "Model download stages completed" }),
-	).toBeVisible();
-	await expect(page.getByText("Downloading layout models")).toBeVisible();
-	await expect(page.getByText("PDF models ready")).toBeVisible();
+	await expect(consent.getByText("Downloading layout models")).toBeVisible();
+	await expect(consent).toBeHidden();
+	await expect(settings.getByText("PDF support is ready")).toBeVisible();
+	await settings.getByRole("button", { name: "Close" }).click();
 	await page.unroute("**/api/resources/parser-models");
-	await page
-		.locator('input[type="file"]')
-		.first()
-		.setInputFiles(resolve("tests/fixtures/search/chapter_causal.md"));
+
+	await libraryUpload.setInputFiles(
+		resolve("tests/fixtures/search/chapter_causal.md"),
+	);
+	const libraryRow = page
+		.getByRole("list", { name: "Library" })
+		.getByRole("listitem")
+		.filter({ hasText: "chapter_causal.md" });
+	await expect(libraryRow).toBeVisible();
+	await expect(libraryRow.getByText("Searchable")).toBeVisible();
 	await expect(
-		page.getByText("chapter_causal.md", { exact: true }),
+		libraryRow.getByRole("button", { name: "Add to course" }),
 	).toBeVisible();
-	await expect(page.getByText("Ready", { exact: true })).toBeVisible();
-	await expect(page.getByText("Indexed", { exact: true })).toBeVisible();
-	await page.getByRole("button", { name: "Preview", exact: true }).click();
-	const resourcePreview = page.getByRole("dialog", { name: "Preview" });
-	await expect(resourcePreview).toBeVisible();
-	await expect(resourcePreview.getByText("chapter_causal.md")).toBeVisible();
-	await expect(resourcePreview.getByText(/counterfactual/i)).toBeVisible();
-	await page.keyboard.press("Escape");
-	await expect(resourcePreview).toBeHidden();
+	await libraryRow
+		.getByRole("button", { name: "chapter_causal.md", exact: true })
+		.click();
+	await expect(
+		page.getByRole("heading", { name: "chapter_causal.md" }),
+	).toBeVisible();
+	await expect(page.getByText(/counterfactual/i).first()).toBeVisible();
+	await page.getByRole("button", { name: "Back to Sources" }).click();
+	await page.getByRole("tab", { name: /Library/ }).click();
 	await page.route(
 		"**/api/sources",
 		async (route) => {
 			await route.fulfill({
 				status: 503,
 				contentType: "application/json",
-				body: JSON.stringify({ detail: "Source admission is temporarily unavailable." }),
+				body: JSON.stringify({
+					detail: "Source admission is temporarily unavailable.",
+				}),
 			});
 		},
 		{ times: 1 },
 	);
-	await page.getByRole("button", { name: "Use as course material" }).click();
+	await libraryRow.getByRole("button", { name: "Add to course" }).click();
 	await expect(page.getByRole("alert")).toHaveText(
 		"Source admission is temporarily unavailable.",
 	);
-	await page.getByRole("button", { name: "Use as course material" }).click();
-	await expect(page.getByText("Admitted", { exact: true })).toBeVisible();
+	await libraryRow.getByRole("button", { name: "Add to course" }).click();
+	await expect(libraryRow.getByText("In this course")).toBeVisible();
 	await expect(page.getByRole("alert")).toHaveCount(0);
 
 	const sourcesResponse = await page.request.get("/api/sources");
@@ -239,18 +276,25 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	}>;
 	expect(sources).toHaveLength(1);
 	const source = sources[0];
-	const sourceSearch = page.getByRole("region", { name: "Find in sources" });
-	await sourceSearch.getByLabel("Search source content").fill("counterfactual");
-	await sourceSearch
-		.getByRole("button", { name: "Search", exact: true })
-		.click();
 	await expect(
-		page.getByRole("button", { name: /chapter_causal\.md/ }),
+		navigator.getByRole("button", { name: /Sources/ }),
+	).toContainText("1");
+
+	// Search sits at the top of the Sources it searches.
+	await page.getByRole("tab", { name: /This course/ }).click();
+	await page
+		.getByRole("searchbox", { name: "Search inside this course's Sources" })
+		.fill("counterfactual");
+	await page.getByRole("button", { name: "Search", exact: true }).click();
+	const results = page.getByRole("region", { name: "Search results" });
+	await expect(
+		results.getByRole("button", { name: /chapter_causal\.md/ }),
 	).toBeVisible();
-	await page.getByRole("button", { name: /chapter_causal\.md/ }).click();
-	await expect(page.locator(".source-content-body")).toContainText(
-		"potential outcomes",
-	);
+	await results.locator(".sources-passage").first().click();
+	await expect(page.locator(".reader-line.is-cited").first()).toBeVisible();
+	await expect(
+		page.getByRole("list", { name: "Text of chapter_causal.md" }),
+	).toContainText("potential outcomes");
 
 	// Preview responses are a deterministic semantic canvas fixture; the exported PPTX remains real.
 	let selectedProfileId = "_builtin-default";
@@ -277,12 +321,9 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	});
 
 	// A second fake-agent turn emits replace_presentation with a citation to the admitted Source.
-	await page.getByRole("button", { name: "Authoring", exact: true }).click();
-	await page
-		.getByLabel("Message the Course Agent")
-		.fill(
-			`Create a cited presentation for lecture ${firstLecture.id} using source ${source.id}`,
-		);
+	await composer.fill(
+		`Create a cited presentation for lecture ${firstLecture.id} using source ${source.id}`,
+	);
 	await page.getByRole("button", { name: "Send message" }).click();
 	await expect(
 		page.getByText(
@@ -307,22 +348,34 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	};
 	expect(presentation.slides).toHaveLength(2);
 	expect(presentation.slides[1].citations[0].source_id).toBe(source.id);
-	await expect(
-		page.getByRole("heading", { name: "Presentation" }),
-	).toBeVisible();
-	await expect(page.locator(".slide-list > li")).toHaveCount(2);
-	await expect(page.locator(".semantic-preview")).toHaveCount(2);
 
-	// Onboard and inspect the checked-in template, then pin it to the Course.
-	await page.getByRole("button", { name: "Templates" }).click();
+	// The reply links to the Slides it created.
+	await page
+		.getByRole("list", { name: "Changes from this reply" })
+		.getByRole("button", {
+			name: new RegExp(`Lecture 1 · ${firstLecture.title}`),
+		})
+		.click();
 	await expect(
-		page.getByRole("heading", { name: "Templates", level: 1 }),
+		page.getByRole("heading", { name: firstLecture.title, level: 1 }),
 	).toBeVisible();
+	const filmstrip = page.getByRole("navigation", { name: "Slides" });
+	await expect(
+		filmstrip.getByRole("button", { name: /^Slide \d+:/ }),
+	).toHaveCount(2);
+	await expect(page.locator(".slide-preview.is-approximate")).toHaveCount(3);
+
+	// Onboard and inspect the checked-in template in Settings.
+	await page.getByRole("button", { name: "Settings" }).click();
+	await settings
+		.getByRole("navigation", { name: "Settings sections" })
+		.getByRole("button", { name: "Templates" })
+		.click();
 	const [templateResponse] = await Promise.all([
 		page.waitForResponse((response) =>
 			response.url().endsWith("/api/templates/upload"),
 		),
-		page
+		settings
 			.locator("#template-upload")
 			.setInputFiles(resolve("tests/fixtures/templates/python-pptx-test.pptx")),
 	]);
@@ -333,19 +386,43 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	selectedProfileId = templateBody.profile.id;
 	selectedProfileVersion = templateBody.profile.version;
 	await expect(
-		page.getByRole("heading", { name: templateBody.profile.name, level: 3 }),
+		settings.getByRole("heading", {
+			name: templateBody.profile.name,
+			level: 3,
+		}),
 	).toBeVisible();
 	await expect(
-		page.getByText("Layout mappings", { exact: true }),
+		settings.getByText("Layout mappings", { exact: true }),
 	).toBeVisible();
-	await page.getByRole("button", { name: "Check mappings" }).click();
-	await expect(page.getByText("Mapping check", { exact: true })).toBeVisible();
+	await settings.getByRole("button", { name: "Check mappings" }).click();
+	await expect(
+		settings.getByText("Mapping check", { exact: true }),
+	).toBeVisible();
+	await settings.getByRole("button", { name: "Close" }).click();
 
-	await page.getByRole("button", { name: "Authoring", exact: true }).click();
-	const templateSelect = page.getByLabel("Template profile");
-	await expect(templateSelect).toBeVisible();
-	await templateSelect.selectOption(templateBody.profile.id);
-	await expect(templateSelect).toHaveValue(templateBody.profile.id);
+	// Choose the template for the Course from the Presentation toolbar.
+	await page
+		.getByRole("button", { name: /^Template: Default template/ })
+		.click();
+	const gallery = page.getByRole("dialog", { name: /template/i });
+	await gallery
+		.locator("label")
+		.filter({ hasText: templateBody.profile.name })
+		.click();
+	await expect(
+		gallery.getByRole("radio", { name: new RegExp(templateBody.profile.name) }),
+	).toBeChecked();
+	await gallery.getByRole("button", { name: "Use template" }).click();
+	await expect(gallery).toBeHidden();
+	await expect(
+		page.getByRole("button", {
+			name: new RegExp(`^Template: ${templateBody.profile.name}`),
+		}),
+	).toBeVisible();
+	const pinned = (await (await page.request.get("/api/course")).json()) as {
+		template_profile_id: string | null;
+	};
+	expect(pinned.template_profile_id).toBe(templateBody.profile.id);
 
 	// Export the selected Presentation and verify the real response/download is a PPTX.
 	const [exportResponse, download] = await Promise.all([
@@ -364,16 +441,42 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 		"application/vnd.openxmlformats-officedocument.presentationml.presentation",
 	);
 	expect((await exportResponse.body()).subarray(0, 2).toString()).toBe("PK");
-	expect(download.suggestedFilename()).toBe("presentation.pptx");
+	expect(download.suggestedFilename()).toBe(
+		"from-association-to-intervention.pptx",
+	);
 
-	// Make one deliberate UI edit, then save a clean Course Revision before Release validation.
-	await page.locator(".slide-card").first().click();
-	await page.getByRole("button", { name: "Edit", exact: true }).click();
-	await page.getByLabel("Slide title").fill("Causal foundations, reviewed");
-	await page.getByRole("button", { name: "Save", exact: true }).click();
-	await page.getByRole("button", { name: "Current State" }).click();
+	// UX-08: a long Slide title is fully editable and saves.
+	const longTitle =
+		"The counterfactual question, and why it cannot be observed directly for any single person in a study group";
+	expect(longTitle.length).toBeGreaterThan(100);
+	await filmstrip.getByRole("button", { name: /^Slide 2:/ }).click();
+	await expect(page.getByText("Slide 2 of 2")).toBeVisible();
+	await page.getByRole("button", { name: "Edit Slide" }).click();
+	const titleField = page.getByLabel("Slide title");
+	await titleField.fill(longTitle);
+	const titleBox = await titleField.boundingBox();
+	expect(titleBox?.width ?? 0).toBeGreaterThan(500);
+	await page.getByRole("button", { name: "Save changes" }).click();
+	await expect(page.getByRole("button", { name: "Save changes" })).toBeHidden();
+	const edited = (await (
+		await page.request.get(`/api/presentations/${firstLecture.id}`)
+	).json()) as { slides: Array<{ title?: string }> };
+	expect(edited.slides[1].title).toBe(longTitle);
+
+	// UX-07: a Citation opens the exact Evidence, and returning restores the Slide.
+	await page.locator(".citation-chip").first().click();
+	await expect(page.getByRole("heading", { name: source.label })).toBeVisible();
+	await expect(page.locator(".reader-line.is-cited").first()).toBeVisible();
+	await page.getByRole("button", { name: "Back to Slides" }).click();
+	await expect(page.getByText("Slide 2 of 2")).toBeVisible();
 	await expect(
-		page.getByRole("heading", { name: "Current State" }),
+		filmstrip.getByRole("button", { name: /^Slide 2:/ }),
+	).toHaveAttribute("aria-current", "true");
+
+	// Save a clean Course Revision before Release validation.
+	await navigator.getByRole("button", { name: /History/ }).click();
+	await expect(
+		page.getByRole("heading", { name: "History", exact: true }),
 	).toBeVisible();
 	await expect(page.getByLabel("Revision summary")).toBeEnabled();
 	await page.getByLabel("Revision summary").fill("Review cited Presentation");
@@ -381,34 +484,41 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	await expect(
 		page.getByText("Review cited Presentation", { exact: true }),
 	).toBeVisible();
-	await expect(page.getByText("Clean", { exact: true })).toBeVisible();
-
-	// Publish only the first Lecture and its artifact; the second remains planned.
-	await page.getByRole("button", { name: "Releases" }).click();
-	await expect(page.getByRole("heading", { name: "Releases" })).toBeVisible();
-	const releaseLedger = page.getByRole("region", { name: "Prepare a Release" });
-	const firstLectureToggle = releaseLedger
-		.locator("label.release-lecture-toggle")
-		.filter({ hasText: firstLecture.title });
-	await firstLectureToggle.locator('input[type="checkbox"]').check();
-	await releaseLedger
-		.locator("fieldset.release-artifact-list")
-		.first()
-		.locator('input[type="checkbox"]')
-		.check();
-	await page.getByLabel("Release name").fill("Causal Foundations Preview");
-	await page.getByLabel("Release slug").fill("causal-foundations-preview");
-	await page.getByRole("button", { name: "Validate selection" }).click();
+	await page.getByRole("tab", { name: /Current changes/ }).click();
 	await expect(
-		page.getByText("No findings. This selection is ready to publish."),
+		page.getByRole("heading", { name: "No changes since the last revision." }),
 	).toBeVisible();
-	await page.getByRole("button", { name: "Publish Release" }).click();
+
+	// Publish only the first Lecture and its PowerPoint; the second remains planned.
+	await page.getByRole("button", { name: "Publish release" }).first().click();
+	await expect(
+		page.getByRole("heading", { name: "Publish a Course Release" }),
+	).toBeVisible();
+	await page.getByRole("checkbox", { name: firstLecture.title }).check();
+	const powerPoint = page.getByRole("checkbox", {
+		name: /PowerPoint · 2 Slides/,
+	});
+	await expect(powerPoint).toBeChecked();
+	await expect(page.getByText("1 Lecture · 1 PowerPoint file")).toBeVisible();
+	await powerPoint.uncheck();
 	await expect(
 		page.getByText(
-			"Published Causal Foundations Preview; its immutable detail is now open.",
+			"No Presentation files included — this release records the plan only.",
 		),
 	).toBeVisible();
-	const releaseDetail = page.locator(".release-detail");
+	await powerPoint.check();
+	await expect(page.getByText("No Presentation files included")).toHaveCount(0);
+	await page.getByLabel("Release name").fill("Causal Foundations Preview");
+	await expect(page.getByLabel("Release ID")).toHaveValue(
+		"causal-foundations-preview",
+	);
+	await page.getByRole("button", { name: "Check release" }).click();
+	await expect(page.getByText("No issues found.")).toBeVisible();
+	await page.getByRole("button", { name: "Publish release" }).click();
+	await expect(
+		page.getByRole("heading", { name: "Published Causal Foundations Preview" }),
+	).toBeVisible();
+	const releaseDetail = page.locator(".release-detail").first();
 	await expect(releaseDetail).toContainText("1 lectures included");
 	await expect(releaseDetail).toContainText("1 still planned");
 	await expect(releaseDetail).toContainText("chapter_causal.md");
