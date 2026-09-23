@@ -96,6 +96,7 @@ from course_harness.providers import (
     ModelCatalog,
     ModelPreset,
     ModelPresetRequest,
+    ModelSuggestion,
     ProviderAccount,
     ProviderAccountCredentialRequest,
     ProviderAccountInUseError,
@@ -107,6 +108,7 @@ from course_harness.providers import (
     ProviderStatus,
     ProviderValidationError,
     delete_provider_account,
+    list_provider_models,
     provider_request_for_credential_rotation,
     provider_request_for_model,
     provider_status,
@@ -417,6 +419,9 @@ def create_app(
     release_data_path: Path | None = None,
     agent_model: Model | None = None,
     provider_validator: ProviderCapabilityValidator = validate_provider_capabilities,
+    provider_model_lister: Callable[
+        [Path, str], Awaitable[list[ModelSuggestion]]
+    ] = list_provider_models,
     provider_account_validator: ProviderAccountValidator = validate_provider_account,
     remote_host_resolver: res.RemoteHostResolver = res.resolve_remote_host,
     precompute_template_backgrounds: bool = True,
@@ -1179,6 +1184,19 @@ def create_app(
             raise HTTPException(status_code=404, detail="Provider Account was not found") from error
         except ProviderAccountInUseError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.get(
+        "/api/provider-accounts/{account_id}/models",
+        response_model=list[ModelSuggestion],
+    )
+    async def suggest_provider_models(account_id: str) -> list[ModelSuggestion]:
+        require_workspace()
+        try:
+            return await provider_model_lister(provider_path, account_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Provider Account was not found") from error
+        except ProviderValidationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @app.post("/api/models", response_model=ModelPreset, status_code=201)
     async def create_model_preset(request: ModelPresetRequest) -> ModelPreset:

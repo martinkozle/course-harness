@@ -414,7 +414,8 @@ async def _validate_provider_capabilities(
         assert request.base_url is not None
         response = await client.get(f"{request.base_url.rstrip('/')}/models", headers=headers)
         response.raise_for_status()
-        models = response.json().get("data", [])
+        listing = response.json()
+        models = listing.get("data", [])
         metadata = next(
             (item for item in models if isinstance(item, dict) and item.get("id") == request.model),
             None,
@@ -424,6 +425,11 @@ async def _validate_provider_capabilities(
                 "The OpenAI-compatible endpoint did not report the selected model."
             )
         capabilities = _capabilities_from_metadata(metadata)
+        if not capabilities.vision and (
+            _listing_reports_vision(listing, request.model)
+            or await _server_props_report_vision(client, request.base_url, request.model, headers)
+        ):
+            capabilities = capabilities.model_copy(update={"vision": True})
         if capabilities.tool_calling:
             return capabilities
         tool_response = await client.post(
@@ -490,6 +496,39 @@ async def _validate_provider_capabilities(
         ) from error
 
 
+VISION_CAPABILITY_NAMES = frozenset({"vision", "multimodal"})
+
+
+def _listing_reports_vision(listing: object, model: str) -> bool:
+    """Read the Ollama-style ``models`` block that llama.cpp adds to ``/v1/models``."""
+    entries = listing.get("models", []) if isinstance(listing, dict) else []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict) or model not in (entry.get("name"), entry.get("model")):
+            continue
+        reported = entry.get("capabilities", [])
+        if isinstance(reported, list) and VISION_CAPABILITY_NAMES & set(map(str, reported)):
+            return True
+    return False
+
+
+async def _server_props_report_vision(
+    client: httpx2.AsyncClient, base_url: str, model: str, headers: dict[str, str]
+) -> bool:
+    """Ask a llama.cpp server whether its loaded model accepts images.
+
+    Other servers usually lack ``/props``; any failure simply means "not reported".
+    """
+    root = base_url.rstrip("/").removesuffix("/v1")
+    try:
+        response = await client.get(f"{root}/props", params={"model": model}, headers=headers)
+        if response.status_code != 200:
+            return False
+        modalities = response.json().get("modalities", {})
+    except httpx2.HTTPError, ValueError, AttributeError:
+        return False
+    return isinstance(modalities, dict) and modalities.get("vision") is True
+
+
 def _capabilities_from_metadata(metadata: object) -> ProviderCapabilities:
     if not isinstance(metadata, dict):
         raise ProviderValidationError("The provider returned invalid model metadata.")
@@ -502,6 +541,11 @@ def _capabilities_from_metadata(metadata: object) -> ProviderCapabilities:
     capabilities = metadata.get("capabilities", {})
     if not isinstance(parameters, list):
         parameters = []
+    if isinstance(capabilities, list):
+        # Some servers list capability names instead of flags.
+        capabilities = {str(name): True for name in capabilities} | (
+            {"vision": True} if VISION_CAPABILITY_NAMES & set(map(str, capabilities)) else {}
+        )
     if not isinstance(capabilities, dict):
         capabilities = {}
     meta = metadata.get("meta", {})
@@ -702,6 +746,80 @@ def select_model_preset(
     catalog.selected_model_id = model_id
     _write_catalog(store_path, catalog)
     return catalog
+
+
+class ModelSuggestion(BaseModel):
+    """A model an OpenAI-compatible endpoint reports, offered while adding a Model Preset."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    vision: bool = False
+    context_window: int | None = None
+
+
+MAX_MODEL_SUGGESTIONS = 200
+
+
+async def list_provider_models(
+    store_path: Path,
+    account_id: str,
+    *,
+    http_client: httpx2.AsyncClient | None = None,
+    credential_store: CredentialStore | None = None,
+) -> list[ModelSuggestion]:
+    """List the models an OpenAI-compatible Provider Account's endpoint reports.
+
+    Hosted providers have large curated catalogs, so they get no suggestions.
+    """
+    store = _credential_store(store_path, credential_store)
+    catalog = read_model_catalog(store_path, credential_store=store)
+    account = next((item for item in catalog.provider_accounts if item.id == account_id), None)
+    api_key = store.read(account_id)
+    if account is None or api_key is None:
+        raise KeyError(account_id)
+    if account.kind != "openai-compatible":
+        return []
+    if http_client is None:
+        async with product_connector_client(timeout=15) as client:
+            return await _list_provider_models(client, account.base_url, api_key)
+    return await _list_provider_models(http_client, account.base_url, api_key)
+
+
+async def _list_provider_models(
+    client: httpx2.AsyncClient, base_url: str, api_key: str
+) -> list[ModelSuggestion]:
+    try:
+        response = await client.get(
+            f"{base_url.rstrip('/')}/models", headers={"Authorization": f"Bearer {api_key}"}
+        )
+        response.raise_for_status()
+        listing = response.json()
+    except (httpx2.HTTPError, ValueError) as error:
+        raise ProviderValidationError(
+            "The OpenAI-compatible endpoint did not return a model list."
+        ) from error
+    entries = listing.get("data", []) if isinstance(listing, dict) else []
+    suggestions: list[ModelSuggestion] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
+            continue
+        model = entry["id"]
+        try:
+            capabilities = _capabilities_from_metadata(entry)
+            vision, context_window = capabilities.vision, capabilities.context_window
+        except ProviderValidationError:
+            vision, context_window = False, None
+        suggestions.append(
+            ModelSuggestion(
+                id=model,
+                vision=vision or _listing_reports_vision(listing, model),
+                context_window=context_window,
+            )
+        )
+        if len(suggestions) == MAX_MODEL_SUGGESTIONS:
+            break
+    return suggestions
 
 
 def provider_request_for_model(

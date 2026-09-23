@@ -1,9 +1,27 @@
 import { KeyRound, Plus, Trash2 } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 
 import { responseError } from "./api";
 import type { ModelCatalog, ProviderKind } from "./models";
 import { Notice } from "./ui";
+
+/** A model an OpenAI-compatible endpoint reports. */
+type ModelSuggestion = {
+	id: string;
+	vision: boolean;
+	context_window: number | null;
+};
+
+function suggestionDetail(suggestion: ModelSuggestion): string {
+	return [
+		suggestion.context_window
+			? `${Math.round(suggestion.context_window / 1024)}K context`
+			: null,
+		suggestion.vision ? "vision" : null,
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
 
 const providerLabels: Record<ProviderKind, string> = {
 	openrouter: "OpenRouter",
@@ -58,6 +76,32 @@ export function ModelSettings({
 	const selectedProviderAccount = catalog.provider_accounts.find(
 		(account) => account.id === providerId,
 	);
+	const [suggestions, setSuggestions] = useState<ModelSuggestion[]>([]);
+	const suggestFrom =
+		addingPreset && selectedProviderAccount?.kind === "openai-compatible"
+			? selectedProviderAccount.id
+			: null;
+	useEffect(() => {
+		setSuggestions([]);
+		if (!suggestFrom) return;
+		const controller = new AbortController();
+		void (async () => {
+			try {
+				const response = await fetch(
+					`/api/provider-accounts/${encodeURIComponent(suggestFrom)}/models`,
+					{ signal: controller.signal },
+				);
+				if (!response.ok) return;
+				const listed = (await response.json()) as ModelSuggestion[];
+				setSuggestions(listed);
+				// A single-model server, such as llama.cpp, needs no choice at all.
+				if (listed.length === 1) setModel((current) => current || listed[0].id);
+			} catch {
+				// Suggestions are optional; the Model ID can still be typed.
+			}
+		})();
+		return () => controller.abort();
+	}, [suggestFrom]);
 	const presetCountByProvider = new Map<string, number>();
 	for (const preset of catalog.model_presets) {
 		presetCountByProvider.set(
@@ -295,11 +339,37 @@ export function ModelSettings({
 								id="provider-model"
 								value={model}
 								onChange={(event) => setModel(event.target.value)}
-								placeholder="nvidia/llama-3.3-nemotron-super-49b-v1:free"
+								placeholder={
+									suggestions[0]?.id ??
+									"nvidia/llama-3.3-nemotron-super-49b-v1:free"
+								}
 								required
 								autoComplete="off"
+								list={
+									suggestions.length ? "provider-model-suggestions" : undefined
+								}
 								aria-describedby="preset-network-disclosure"
 							/>
+							{suggestions.length ? (
+								<>
+									<datalist id="provider-model-suggestions">
+										{suggestions.map((suggestion) => (
+											<option key={suggestion.id} value={suggestion.id}>
+												{suggestionDetail(suggestion)}
+											</option>
+										))}
+									</datalist>
+									<small>
+										{suggestions.length === 1
+											? `${selectedProviderAccount?.name} serves one model${
+													suggestionDetail(suggestions[0])
+														? ` (${suggestionDetail(suggestions[0])})`
+														: ""
+												}.`
+											: `${suggestions.length} models are available from ${selectedProviderAccount?.name}.`}
+									</small>
+								</>
+							) : null}
 						</div>
 						<p
 							className="field-help"
@@ -311,6 +381,9 @@ export function ModelSettings({
 							to contact{" "}
 							{selectedProviderAccount?.base_url ?? "its API endpoint"} and
 							verify capabilities.
+							{suggestFrom
+								? " The model list above was requested from the same endpoint."
+								: null}
 						</p>
 						<div className="form-actions">
 							{catalog.model_presets.length > 0 ? (

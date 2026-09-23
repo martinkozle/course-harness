@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx2
 import pytest
+from pydantic import SecretStr
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -30,10 +31,13 @@ from course_harness.course_agent import (
 )
 from course_harness.course_plan import read_course_plan, write_course_plan
 from course_harness.providers import (
+    ModelSuggestion,
     ProviderAccountRequest,
     ProviderCapabilities,
     ProviderConfigurationRequest,
     ProviderValidationError,
+    list_provider_models,
+    save_provider_account,
     validate_provider_capabilities,
 )
 
@@ -769,6 +773,8 @@ async def test_llamacpp_model_metadata_and_tool_call_are_verified() -> None:
                     ]
                 },
             )
+        if request.url.path == "/props":
+            return httpx2.Response(200, json={"modalities": {"vision": False}})
         assert request.url.path == "/v1/chat/completions"
         return httpx2.Response(
             200,
@@ -802,9 +808,96 @@ async def test_llamacpp_model_metadata_and_tool_call_are_verified() -> None:
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(local_provider)) as client:
         capabilities = await validate_provider_capabilities(request, http_client=client)
 
-    assert calls == ["/v1/models", "/v1/chat/completions"]
+    assert calls == ["/v1/models", "/props", "/v1/chat/completions"]
     assert capabilities.tool_calling is True
     assert capabilities.context_window == 140_032
+    assert capabilities.vision is False
+
+
+def _llamacpp_provider(
+    *, listing_capabilities: list[str], props_vision: bool | None
+) -> httpx2.MockTransport:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/v1/models":
+            return httpx2.Response(
+                200,
+                json={
+                    "models": [{"name": "qwen3.8-27b", "capabilities": listing_capabilities}],
+                    "data": [{"id": "qwen3.8-27b", "meta": {"n_ctx": 140_032}}],
+                },
+            )
+        if request.url.path == "/props":
+            if props_vision is None:
+                return httpx2.Response(404)
+            assert request.url.params["model"] == "qwen3.8-27b"
+            return httpx2.Response(200, json={"modalities": {"vision": props_vision}})
+        tool_call = {"type": "function", "function": {"name": "add_numbers", "arguments": "{}"}}
+        return httpx2.Response(200, json={"choices": [{"message": {"tool_calls": [tool_call]}}]})
+
+    return httpx2.MockTransport(handler)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("listing_capabilities", "props_vision", "vision"),
+    [
+        (["completion", "multimodal"], None, True),
+        (["completion"], True, True),
+        (["completion"], None, False),
+    ],
+)
+async def test_llamacpp_vision_is_read_from_its_model_listing_or_server_props(
+    listing_capabilities: list[str], props_vision: bool | None, vision: bool
+) -> None:
+    request = ProviderConfigurationRequest.model_validate(
+        {
+            "kind": "openai-compatible",
+            "model": "qwen3.8-27b",
+            "api_key": "local-secret",
+            "base_url": "http://127.0.0.1:8081/v1",
+            "allow_insecure_http": True,
+        }
+    )
+    transport = _llamacpp_provider(
+        listing_capabilities=listing_capabilities, props_vision=props_vision
+    )
+    async with httpx2.AsyncClient(transport=transport) as client:
+        capabilities = await validate_provider_capabilities(request, http_client=client)
+
+    assert capabilities.vision is vision
+
+
+@pytest.mark.anyio
+async def test_openai_compatible_accounts_suggest_their_reported_models(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    provider_path = tmp_path / "provider"
+    listing = _llamacpp_provider(listing_capabilities=["multimodal"], props_vision=None)
+
+    async def list_models(store_path: Path, account_id: str) -> list[ModelSuggestion]:
+        async with httpx2.AsyncClient(transport=listing) as client:
+            return await list_provider_models(store_path, account_id, http_client=client)
+
+    account = save_provider_account(
+        provider_path,
+        ProviderAccountRequest(
+            name="Home llama.cpp",
+            kind="openai-compatible",
+            api_key=SecretStr("local-secret"),
+            base_url="http://blaze.home:8081/v1",
+            allow_insecure_http=True,
+        ),
+    )
+    app = create_app(
+        workspace, provider_store_path=provider_path, provider_model_lister=list_models
+    )
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        suggestions = await client.get(f"/api/provider-accounts/{account.id}/models")
+        missing = await client.get("/api/provider-accounts/provider-000000000000/models")
+
+    assert suggestions.json() == [{"id": "qwen3.8-27b", "vision": True, "context_window": 140_032}]
+    assert missing.status_code == 404
 
 
 @pytest.mark.anyio
