@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" font-size="16" role="img" aria-labelledby="title desc">
+  <title id="title">Course Harness proposed workspace</title>
+  <desc id="desc">Static design concept showing a compact course navigator, spacious conversation, and Presentation canvas. This is a mockup, not a working interface.</desc>
+  <defs>
+    <style>
+      text { font-family: Arial, sans-serif; fill: #202B36; }
+      .small { font-size: 13px; fill: #596674; }
+      .muted { fill: #596674; }
+      .strong { font-weight: 600; }
+      .accent { fill: #006D77; }
+      .white { fill: #FFFFFF; }
+      .document { font-family: Georgia, serif; }
+      .line { stroke: #D9E0E5; stroke-width: 1; }
+      .icon { fill: none; stroke: #596674; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+  </defs>
+  <rect width="1440" height="900" fill="#FFFFFF"/>
+  <rect width="216" height="900" fill="#F4F6F8"/>
+  <rect x="636" width="804" height="900" fill="#F4F6F8"/>
+  <path d="M216 0V900M636 0V900" class="line"/>
+  <text x="22" y="35" class="strong" font-size="15">Course Harness</text>
+  <rect x="12" y="58" width="192" height="65" rx="8" fill="#FFFFFF"/>
+  <text x="24" y="83" class="strong">Causal inference</text>
+  <text x="24" y="105" class="small">Course workspace</text>
+  <path d="m185 83 4 4 4-4" class="icon"/>
+  <path d="M24 157h13m-13 5h13m-13 5h8" class="icon"/>
+  <text x="48" y="166">Course Plan</text>
+  <path d="M25 192h10v14H25zM28 189h10v14" class="icon"/>
+  <text x="48" y="205">Sources</text><text x="184" y="205" class="small">4</text>
+  <text x="24" y="263" class="small strong">Lectures</text>
+  <rect x="12" y="278" width="192" height="42" rx="6" fill="#E0EFF0"/>
+  <rect x="12" y="288" width="3" height="22" rx="1.5" fill="#006D77"/>
+  <text x="24" y="305" class="small accent">1</text>
+  <text x="46" y="305" class="strong accent">Foundations</text>
+  <text x="24" y="347" class="small">2</text><text x="46" y="347">Confounding</text>
+  <text x="24" y="389" class="small">3</text><text x="46" y="389">Identification</text>
+  <text x="24" y="431" class="small">4</text><text x="46" y="431">Applications</text>
+  <text x="24" y="497" class="small strong">Conversations</text>
+  <path d="M185 486v12m-6-6h12" class="icon"/>
+  <rect x="12" y="512" width="192" height="38" rx="6" fill="#E6EAEE"/>
+  <text x="24" y="537" font-size="14">Build the first Lecture</text>
+  <text x="24" y="577" font-size="14" class="muted">Plan from my papers</text>
+  <path d="M20 825H196" class="line"/>
+  <text x="24" y="858" class="muted">Settings</text>
+  <text x="24" y="884" class="small">Design concept · 23 Sep 2026</text>
+
+  <text x="240" y="37" class="strong">Build the first Lecture</text>
+  <path d="m597 29 4 4 4-4" class="icon"/>
+  <path d="M216 60H636" class="line"/>
+  <rect x="270" y="90" width="342" height="110" rx="12" fill="#F0F3F5"/>
+  <text x="288" y="118">
+    <tspan x="288">Create an opening Lecture from</tspan>
+    <tspan x="288" dy="25">these papers. Start with the</tspan>
+    <tspan x="288" dy="25">counterfactual question.</tspan>
+  </text>
+  <text x="240" y="246" class="strong">Course Agent</text>
+  <text x="240" y="278">
+    <tspan x="240">I drafted six Slides for Foundations.</tspan>
+    <tspan x="240" dy="27">The opening example compares the</tspan>
+    <tspan x="240" dy="27">same person under two treatments.</tspan>
+  </text>
+  <rect x="240" y="359" width="372" height="77" rx="8" fill="#FFFFFF" stroke="#D9E0E5"/>
+  <rect x="253" y="374" width="62" height="40" rx="3" fill="#E0EFF0"/>
+  <path d="M265 385h35m-35 8h25m-25 8h30" stroke="#006D77" stroke-width="2"/>
+  <text x="330" y="389" class="strong">Foundations</text>
+  <text x="330" y="413" class="small">6 Slides · Open Presentation →</text>
+  <text x="240" y="479">
+    <tspan x="240">The two content Slides cite your</tspan>
+    <tspan x="240" dy="27">teaching notes. You can inspect</tspan>
+    <tspan x="240" dy="27">the passages from each Citation.</tspan>
+  </text>
+  <text x="240" y="586" class="small accent">Updated 6 Slides</text>
+  <text x="357" y="586" class="small">·</text>
+  <text x="370" y="586" class="small accent">Review changes →</text>
+  <rect x="234" y="698" width="384" height="164" rx="12" fill="#FFFFFF" stroke="#A6B5BD"/>
+  <rect x="248" y="712" width="256" height="28" rx="5" fill="#E0EFF0"/>
+  <text x="260" y="731" class="small accent">Slide 2 · The counterfactual question</text>
+  <text x="483" y="731" class="small accent">×</text>
+  <text x="248" y="772" class="muted">Ask for a change…</text>
+  <path d="M255 819v14m-7-7h14" class="icon"/>
+  <text x="280" y="833" class="small">Planning model ⌄</text>
+  <rect x="568" y="810" width="36" height="36" rx="8" fill="#006D77"/>
+  <path d="M586 835v-16m-6 6 6-6 6 6" fill="none" stroke="#FFFFFF" stroke-width="2"/>
+  <text x="240" y="883" class="small">Uses My OpenRouter · Data details</text>
+
+  <rect x="637" width="803" height="60" fill="#FFFFFF"/>
+  <text x="660" y="37" class="small">Lecture 1 / Foundations</text>
+  <text x="1122" y="37" class="small">Saved</text>
+  <text x="1180" y="37" class="small">History</text>
+  <rect x="1259" y="12" width="159" height="36" rx="7" fill="#006D77"/>
+  <text x="1278" y="35" class="white strong" font-size="14">Export PowerPoint</text>
+  <path d="M636 60H1440" class="line"/>
+  <text x="668" y="102" class="document strong" font-size="25">Foundations</text>
+  <text x="668" y="127" class="small">6 Slides</text>
+  <rect x="1170" y="79" width="204" height="39" rx="7" fill="#FFFFFF" stroke="#D9E0E5"/>
+  <rect x="1182" y="90" width="25" height="16" rx="2" fill="#E0EFF0"/>
+  <text x="1218" y="104" class="small">Seminar · v2 ⌄</text>
+  <path d="M1392 91h14m-12 3 1 15h8l1-15m-9-5v-3h8v3" class="icon"/>
+
+  <rect x="668" y="158" width="740" height="416" rx="3" fill="#FFFFFF" stroke="#D9E0E5"/>
+  <rect x="668" y="158" width="7" height="416" fill="#006D77"/>
+  <text x="714" y="207" class="small accent">FOUNDATIONS</text>
+  <text x="714" y="267" class="document" font-size="32">The counterfactual question</text>
+  <text x="714" y="317" class="muted" font-size="18">What would happen to the same person</text>
+  <text x="714" y="344" class="muted" font-size="18">under a different treatment?</text>
+  <rect x="714" y="382" width="283" height="96" rx="5" fill="#F4F6F8"/>
+  <rect x="1020" y="382" width="342" height="96" rx="5" fill="#E0EFF0"/>
+  <text x="736" y="414" class="small">Observed</text>
+  <text x="736" y="447" class="strong">Outcome with treatment</text>
+  <text x="1042" y="414" class="small accent">Counterfactual</text>
+  <text x="1042" y="447" class="strong accent">Outcome without treatment</text>
+  <text x="714" y="539" class="small">Teaching notes · §1.1</text>
+  <text x="1350" y="539" class="small">02</text>
+
+  <text x="668" y="608" class="small">Slide 2 of 6</text>
+  <text x="1109" y="608" class="small accent">1 Citation</text>
+  <rect x="1230" y="585" width="178" height="36" rx="6" fill="#FFFFFF" stroke="#D9E0E5"/>
+  <text x="1252" y="608" font-size="14">Edit Slide content</text>
+  <text x="668" y="662" class="strong" font-size="14">Speaker notes</text>
+  <text x="668" y="689" class="muted" font-size="14">Ask which of these outcomes we can observe for one person.</text>
+  <path d="M668 721H1408" class="line"/>
+
+  <rect x="668" y="745" width="112" height="70" rx="4" fill="#FFFFFF" stroke="#D9E0E5"/>
+  <text x="680" y="771" class="small">1</text><text x="680" y="795" font-size="11">Foundations</text>
+  <rect x="790" y="744" width="114" height="72" rx="4" fill="#FFFFFF" stroke="#006D77" stroke-width="2"/>
+  <text x="802" y="771" class="small accent">2</text><text x="802" y="792" font-size="10">Counterfactual</text>
+  <rect x="914" y="745" width="112" height="70" rx="4" fill="#FFFFFF" stroke="#D9E0E5"/>
+  <text x="926" y="771" class="small">3</text><text x="926" y="795" font-size="11">Assumptions</text>
+  <rect x="1036" y="745" width="112" height="70" rx="4" fill="#FFFFFF" stroke="#D9E0E5"/>
+  <text x="1048" y="771" class="small">4</text><text x="1048" y="795" font-size="11">Causal graphs</text>
+  <rect x="1158" y="745" width="112" height="70" rx="4" fill="#FFFFFF" stroke="#D9E0E5"/>
+  <text x="1170" y="771" class="small">5</text><text x="1170" y="795" font-size="11">Worked example</text>
+  <rect x="1280" y="745" width="112" height="70" rx="4" fill="#FFFFFF" stroke="#D9E0E5"/>
+  <text x="1292" y="771" class="small">6</text><text x="1292" y="795" font-size="11">Discussion</text>
+  <text x="668" y="870" class="small">Canvas</text>
+  <rect x="1160" y="846" width="248" height="36" rx="6" fill="#FFFFFF" stroke="#D9E0E5"/>
+  <rect x="1250" y="849" width="59" height="30" rx="4" fill="#E0EFF0"/>
+  <text x="1174" y="869" class="small">Conversation</text>
+  <text x="1263" y="869" class="small accent">Split</text>
+  <text x="1328" y="869" class="small">Canvas only</text>
+</svg>
