@@ -1,14 +1,14 @@
 import {
 	ArrowLeft,
-	Columns2,
 	Maximize2,
 	Menu as MenuIcon,
-	MessageSquare,
+	Minimize2,
 	Send,
 	X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
+/** "conversation" is only the effective layout when no canvas is open. */
 export type LayoutMode = "conversation" | "split" | "canvas";
 
 export function CanvasFrame({
@@ -58,38 +58,22 @@ export function CanvasFrame({
 						Publish release
 					</button>
 				) : null}
-				<fieldset className="segmented wide-only" aria-label="Layout">
-					<button
-						type="button"
-						className="icon-btn"
-						aria-label="Conversation only"
-						title="Conversation only"
-						aria-pressed={layout === "conversation"}
-						onClick={() => onLayout("conversation")}
-					>
-						<MessageSquare aria-hidden="true" />
-					</button>
-					<button
-						type="button"
-						className="icon-btn"
-						aria-label="Conversation and canvas"
-						title="Conversation and canvas"
-						aria-pressed={layout === "split"}
-						onClick={() => onLayout("split")}
-					>
-						<Columns2 aria-hidden="true" />
-					</button>
-					<button
-						type="button"
-						className="icon-btn"
-						aria-label="Canvas only"
-						title="Canvas only"
-						aria-pressed={layout === "canvas"}
-						onClick={() => onLayout("canvas")}
-					>
+				<button
+					type="button"
+					className="icon-btn wide-only"
+					aria-label={
+						layout === "canvas" ? "Show conversation" : "Expand canvas"
+					}
+					title={layout === "canvas" ? "Show conversation" : "Expand canvas"}
+					aria-pressed={layout === "canvas"}
+					onClick={() => onLayout(layout === "canvas" ? "split" : "canvas")}
+				>
+					{layout === "canvas" ? (
+						<Minimize2 aria-hidden="true" />
+					) : (
 						<Maximize2 aria-hidden="true" />
-					</button>
-				</fieldset>
+					)}
+				</button>
 				<button
 					type="button"
 					className="icon-btn"

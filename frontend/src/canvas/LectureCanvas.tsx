@@ -3,8 +3,11 @@ import {
 	ArchiveRestore,
 	ArrowLeft,
 	ArrowRight,
+	ChevronLeft,
+	ChevronRight,
 	Download,
 	LayoutTemplate,
+	MoreHorizontal,
 	Pencil,
 	Sparkles,
 	Trash2,
@@ -35,6 +38,7 @@ import type {
 } from "../models";
 import {
 	ConfirmDialog,
+	Menu,
 	Notice,
 	downloadResponse,
 	errorMessage,
@@ -457,6 +461,25 @@ export function LectureCanvas({
 		setSelectedId(slideId);
 	}
 
+	function step(direction: -1 | 1) {
+		if (editing || selectedIndex < 0) return;
+		const next = activeSlides[selectedIndex + direction];
+		if (next) setSelectedId(next.id);
+	}
+
+	function onArrowKeys(event: React.KeyboardEvent<HTMLDivElement>) {
+		if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+		const target = event.target as HTMLElement;
+		if (target.closest("input, textarea, select, [role='menu']")) return;
+		event.preventDefault();
+		step(event.key === "ArrowLeft" ? -1 : 1);
+		requestAnimationFrame(() =>
+			document
+				.querySelector<HTMLButtonElement>('.film-slide[aria-current="true"]')
+				?.focus(),
+		);
+	}
+
 	async function patchSlide(slideId: string, body: Record<string, unknown>) {
 		const response = await fetch(
 			`/api/presentations/${encodeURIComponent(lecture.id)}/slides/${encodeURIComponent(slideId)}`,
@@ -642,7 +665,8 @@ export function LectureCanvas({
 					</button>
 				</div>
 			) : (
-				<div className="lecture-body">
+				// biome-ignore lint/a11y/noStaticElementInteractions: arrow keys step through Slides from any control inside
+				<div className="lecture-body" onKeyDown={onArrowKeys}>
 					<section className="stage" aria-label="Selected Slide">
 						{selected ? (
 							<>
@@ -653,60 +677,80 @@ export function LectureCanvas({
 									aspectRatio={aspectRatio}
 								/>
 								<div className="stage-bar">
-									<span className="stage-position">
-										{selected.archived
-											? "Archived Slide"
-											: `Slide ${selectedIndex + 1} of ${activeSlides.length}`}
+									<div className="stage-nav">
+										{selected.archived ? (
+											<span className="stage-position">Archived Slide</span>
+										) : (
+											<>
+												<button
+													type="button"
+													className="icon-btn"
+													aria-label="Previous Slide"
+													title="Previous Slide (←)"
+													disabled={editing || selectedIndex <= 0}
+													onClick={() => step(-1)}
+												>
+													<ChevronLeft aria-hidden="true" />
+												</button>
+												<span className="stage-position" aria-live="polite">
+													Slide {selectedIndex + 1} of {activeSlides.length}
+												</span>
+												<button
+													type="button"
+													className="icon-btn"
+													aria-label="Next Slide"
+													title="Next Slide (→)"
+													disabled={
+														editing || selectedIndex >= activeSlides.length - 1
+													}
+													onClick={() => step(1)}
+												>
+													<ChevronRight aria-hidden="true" />
+												</button>
+											</>
+										)}
 										<span className="stage-layout">
 											{layoutLabels[selected.layout] ?? selected.layout}
 										</span>
-									</span>
+									</div>
 									{!editing ? (
 										<div className="stage-actions">
-											{!selected.archived ? (
-												<>
-													<button
-														type="button"
-														className="icon-btn"
-														aria-label="Move Slide earlier"
-														title="Move Slide earlier"
-														disabled={busy || selectedIndex <= 0}
-														onClick={() => void move(-1)}
-													>
-														<ArrowLeft aria-hidden="true" />
-													</button>
-													<button
-														type="button"
-														className="icon-btn"
-														aria-label="Move Slide later"
-														title="Move Slide later"
-														disabled={
-															busy || selectedIndex >= activeSlides.length - 1
-														}
-														onClick={() => void move(1)}
-													>
-														<ArrowRight aria-hidden="true" />
-													</button>
-												</>
-											) : null}
-											<button
-												type="button"
-												className="icon-btn"
-												aria-label={
-													selected.archived ? "Restore Slide" : "Archive Slide"
-												}
-												title={
-													selected.archived ? "Restore Slide" : "Archive Slide"
-												}
+											<Menu
+												label="Slide actions"
+												trigger={<MoreHorizontal aria-hidden="true" />}
 												disabled={busy}
-												onClick={() => void toggleArchive(selected)}
-											>
-												{selected.archived ? (
-													<ArchiveRestore aria-hidden="true" />
-												) : (
-													<Archive aria-hidden="true" />
-												)}
-											</button>
+												items={[
+													...(selected.archived
+														? []
+														: [
+																{
+																	label: "Move earlier",
+																	icon: <ArrowLeft aria-hidden="true" />,
+																	disabled: selectedIndex <= 0,
+																	onSelect: () => void move(-1),
+																},
+																{
+																	label: "Move later",
+																	icon: <ArrowRight aria-hidden="true" />,
+																	disabled:
+																		selectedIndex >= activeSlides.length - 1,
+																	onSelect: () => void move(1),
+																},
+																"separator" as const,
+															]),
+													selected.archived
+														? {
+																label: "Restore Slide",
+																icon: <ArchiveRestore aria-hidden="true" />,
+																onSelect: () => void toggleArchive(selected),
+															}
+														: {
+																label: "Archive Slide",
+																icon: <Archive aria-hidden="true" />,
+																onSelect: () => void toggleArchive(selected),
+															},
+												]}
+											/>
 											<button
 												type="button"
 												className="btn btn-quiet"

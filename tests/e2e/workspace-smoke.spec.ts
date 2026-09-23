@@ -187,14 +187,14 @@ test("Course Author creates a Course through chat and revises its Course Plan", 
 	// Summarizing earlier context keeps the full transcript visible.
 	await page.getByRole("button", { name: "Conversation actions" }).click();
 	await page
-		.getByRole("menuitem", { name: /Summarize earlier context/ })
+		.getByRole("menuitem", { name: /Compact conversation/ })
 		.click();
 	const summary = page.getByLabel(/Summary of \d+ earlier messages/);
 	await expect(summary).toHaveValue(/Conversation so far:/);
 	await summary.fill(
 		"We drafted a two-Lecture course plan for applied researchers.",
 	);
-	await page.getByRole("button", { name: "Use this summary" }).click();
+	await page.getByRole("button", { name: "Compact conversation" }).click();
 	await expect(summary).toBeHidden();
 	await expect(
 		page.getByText("I created a two-Lecture Course Plan."),

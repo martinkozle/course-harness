@@ -206,3 +206,7 @@
 		justify-content: flex-end;
 	}
 }
+
+.reader-views {
+	margin-bottom: 16px;
+}

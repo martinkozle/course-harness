@@ -15,7 +15,7 @@ import {
 	Plus,
 	Search,
 	Settings2,
-	Sparkles,
+	Shrink,
 	Square,
 	Trash2,
 	X,
@@ -191,9 +191,9 @@ export function ConversationPane({
 										onConversationDialog({ kind: "rename", conversation }),
 								},
 								{
-									label: "Summarize earlier context",
-									detail: "Shorter context for future replies",
-									icon: <Sparkles aria-hidden="true" />,
+									label: "Compact conversation",
+									detail: "Replace earlier messages with a summary",
+									icon: <Shrink aria-hidden="true" />,
 									disabled:
 										Boolean(agent.changeBlocker) || agent.messages.length === 0,
 									title: agent.changeBlocker ?? undefined,

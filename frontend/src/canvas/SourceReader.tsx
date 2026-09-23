@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { responseError } from "../api";
 import type { ReaderTarget } from "../models";
-import { errorMessage, isAbort, Notice } from "../ui";
+import { errorMessage, isAbort, Notice, Tabs } from "../ui";
 import type { AgentContext } from "../useCourseAgent";
 
 type Content =
@@ -32,25 +32,51 @@ export function SourceReader({
 	onReturn: () => void;
 	onAskAgent: (request: string, context?: AgentContext | null) => void;
 }) {
-	const [content, setContent] = useState<Content>({ kind: "loading" });
-	const highlightRef = useRef<HTMLSpanElement | null>(null);
 	const range = lineRangeLabel(target.lineStart, target.lineEnd);
+	const hasText = Boolean(target.sourceId);
+	const hasOriginal = Boolean(target.resourceId);
+	// A cited passage opens on the extracted text; browsing a file opens on the original.
+	const [view, setView] = useState<"text" | "original">(
+		hasText && (range || !hasOriginal) ? "text" : "original",
+	);
+	const [text, setText] = useState<Content>({ kind: "loading" });
+	const [original, setOriginal] = useState<Content>({ kind: "loading" });
+	const content = view === "text" ? text : original;
+	const highlightRef = useRef<HTMLSpanElement | null>(null);
 
 	useEffect(() => {
+		if (!target.sourceId) return;
 		const controller = new AbortController();
-		let objectUrl: string | null = null;
-		setContent({ kind: "loading" });
+		setText({ kind: "loading" });
 		void (async () => {
 			try {
-				if (target.sourceId) {
-					const response = await fetch(
-						`/api/sources/${encodeURIComponent(target.sourceId)}/content?max_chars=400000`,
-						{ signal: controller.signal },
-					);
-					if (!response.ok) throw new Error(await responseError(response));
-					setContent({ kind: "text", text: await response.text() });
-					return;
-				}
+				const response = await fetch(
+					`/api/sources/${encodeURIComponent(target.sourceId ?? "")}/content?max_chars=400000`,
+					{ signal: controller.signal },
+				);
+				if (!response.ok) throw new Error(await responseError(response));
+				setText({ kind: "text", text: await response.text() });
+			} catch (caught) {
+				if (!isAbort(caught))
+					setText({
+						kind: "error",
+						message: errorMessage(
+							caught,
+							"The extracted text could not be opened.",
+						),
+					});
+			}
+		})();
+		return () => controller.abort();
+	}, [target.sourceId]);
+
+	useEffect(() => {
+		if (view !== "original") return;
+		const controller = new AbortController();
+		let objectUrl: string | null = null;
+		setOriginal({ kind: "loading" });
+		void (async () => {
+			try {
 				if (target.resourceId) {
 					const response = await fetch(
 						`/api/resources/${encodeURIComponent(target.resourceId)}/preview`,
@@ -62,19 +88,19 @@ export function SourceReader({
 					) {
 						objectUrl = URL.createObjectURL(await response.blob());
 						if (!controller.signal.aborted)
-							setContent({ kind: "pdf", url: objectUrl });
+							setOriginal({ kind: "pdf", url: objectUrl });
 					} else {
-						setContent({ kind: "text", text: await response.text() });
+						setOriginal({ kind: "text", text: await response.text() });
 					}
 					return;
 				}
-				setContent({
+				setOriginal({
 					kind: "error",
-					message: "This passage no longer points to a Source in this course.",
+					message: "The original file is no longer in your Library.",
 				});
 			} catch (caught) {
 				if (!isAbort(caught))
-					setContent({
+					setOriginal({
 						kind: "error",
 						message: errorMessage(caught, "This file could not be opened."),
 					});
@@ -84,14 +110,15 @@ export function SourceReader({
 			controller.abort();
 			if (objectUrl) URL.revokeObjectURL(objectUrl);
 		};
-	}, [target.sourceId, target.resourceId]);
+	}, [target.resourceId, view]);
 
 	useEffect(() => {
-		if (content.kind === "text")
+		if (view === "text" && text.kind === "text")
 			highlightRef.current?.scrollIntoView({ block: "center" });
-	}, [content]);
+	}, [text, view]);
 
 	const lines = content.kind === "text" ? content.text.split("\n") : [];
+	const showHighlight = view === "text";
 	const start = target.lineStart;
 	const end = target.lineEnd ?? target.lineStart;
 	const highlighted = (index: number) =>
@@ -137,6 +164,20 @@ export function SourceReader({
 				) : null}
 			</header>
 
+			{hasText && hasOriginal ? (
+				<div className="reader-views">
+					<Tabs
+						label="Show"
+						value={view}
+						onChange={setView}
+						tabs={[
+							{ id: "text", label: "Extracted text" },
+							{ id: "original", label: "Original file" },
+						]}
+					/>
+				</div>
+			) : null}
+
 			{content.kind === "loading" ? (
 				<p className="meta" role="status">
 					Opening…
@@ -155,7 +196,7 @@ export function SourceReader({
 					aria-label={`Text of ${target.label}`}
 				>
 					{lines.map((line, index) => {
-						const isHit = highlighted(index);
+						const isHit = showHighlight && highlighted(index);
 						const isFirstHit = isHit && index === start;
 						return (
 							<li

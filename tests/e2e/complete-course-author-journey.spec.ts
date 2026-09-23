@@ -467,6 +467,15 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	await page.locator(".citation-chip").first().click();
 	await expect(page.getByRole("heading", { name: source.label })).toBeVisible();
 	await expect(page.locator(".reader-line.is-cited").first()).toBeVisible();
+	// The original file is one switch away on the same page.
+	await expect(
+		page.getByRole("tab", { name: "Extracted text", selected: true }),
+	).toBeVisible();
+	await page.getByRole("tab", { name: "Original file" }).click();
+	await expect(page.locator(".reader-line.is-cited")).toHaveCount(0);
+	await expect(page.getByText(/potential outcomes/).first()).toBeVisible();
+	await page.getByRole("tab", { name: "Extracted text" }).click();
+	await expect(page.locator(".reader-line.is-cited").first()).toBeVisible();
 	await page.getByRole("button", { name: "Back to Slides" }).click();
 	await expect(page.getByText("Slide 2 of 2")).toBeVisible();
 	await expect(

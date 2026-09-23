@@ -57,7 +57,7 @@ const LAYOUT_KEY = "course-harness:layout";
 function storedLayout(): LayoutMode {
 	try {
 		const value = window.localStorage.getItem(LAYOUT_KEY);
-		return value === "conversation" || value === "canvas" ? value : "split";
+		return value === "canvas" ? "canvas" : "split";
 	} catch {
 		return "split";
 	}
@@ -332,10 +332,14 @@ function CourseWorkspace({
 		setCanvas(target);
 		setNarrowPane("canvas");
 		setNavOpen(false);
-		setLayoutState((current) =>
-			current === "conversation" ? "split" : current,
-		);
 	}, []);
+
+	/** Choosing a conversation brings the conversation back into view. */
+	function showConversation() {
+		setNarrowPane("conversation");
+		setNavOpen(false);
+		if (layout === "canvas") setLayout("split");
+	}
 
 	function closeCanvas() {
 		setCanvas(null);
@@ -434,7 +438,15 @@ function CourseWorkspace({
 			case "reader":
 				return (
 					<SourceReader
-						target={target.target}
+						key={`${target.target.sourceId}-${target.target.resourceId}-${target.target.lineStart}`}
+						target={{
+							...target.target,
+							resourceId:
+								target.target.resourceId ??
+								sources.find((source) => source.id === target.target.sourceId)
+									?.resource_id ??
+								null,
+						}}
 						returnLabel={
 							target.returnTo?.kind === "lecture"
 								? "Back to Slides"
@@ -556,6 +568,7 @@ function CourseWorkspace({
 				agent={agent}
 				changesCount={changesCount}
 				onOpen={openCanvas}
+				onShowConversation={showConversation}
 				onClose={() => setNavOpen(false)}
 				onSettings={() => setSettings("models")}
 				onWorkspaceDetails={() => setSettings("workspace")}

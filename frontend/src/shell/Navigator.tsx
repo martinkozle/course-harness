@@ -36,6 +36,7 @@ export function Navigator({
 	agent,
 	changesCount,
 	onOpen,
+	onShowConversation,
 	onClose,
 	onSettings,
 	onWorkspaceDetails,
@@ -50,6 +51,7 @@ export function Navigator({
 	agent: CourseAgent;
 	changesCount: number;
 	onOpen: (target: CanvasTarget) => void;
+	onShowConversation: () => void;
 	onClose: () => void;
 	onSettings: () => void;
 	onWorkspaceDetails: () => void;
@@ -214,6 +216,7 @@ export function Navigator({
 							onClick={() => {
 								setShowArchived(false);
 								agent.newConversation();
+								onShowConversation();
 							}}
 						>
 							<MessageSquarePlus aria-hidden="true" />
@@ -251,7 +254,7 @@ export function Navigator({
 										}
 										onClick={() => {
 											if (!isActive) agent.openConversation(conversation.id);
-											onClose();
+											onShowConversation();
 										}}
 									>
 										<span className="nav-label">{conversation.title}</span>

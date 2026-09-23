@@ -218,22 +218,35 @@ test("Course Author views Presentation canvas and slide outline", async ({
 		"Slide 3 · The intervention question",
 	);
 
-	// Reordering moves the selected Slide.
-	await page.getByRole("button", { name: "Move Slide earlier" }).click();
+	// The stage arrows and arrow keys step through Slides without reordering them.
+	await page.getByRole("button", { name: "Next Slide" }).click();
+	await expect(page.locator(".stage-position")).toContainText("Slide 4 of 18");
+	await page.keyboard.press("ArrowLeft");
+	await expect(page.locator(".stage-position")).toContainText("Slide 3 of 18");
+	await expect(filmSlides.nth(2)).toBeFocused();
+	await expect(filmSlides.nth(2)).toHaveAccessibleName(
+		"Slide 3: The intervention question",
+	);
+
+	// Reordering lives in the Slide actions menu and moves the selected Slide.
+	await page.getByRole("button", { name: "Slide actions" }).click();
+	await page.getByRole("menuitem", { name: "Move earlier" }).click();
 	await expect(page.locator(".stage-position")).toContainText("Slide 2 of 18");
 	await expect(filmSlides.nth(1)).toHaveAccessibleName(
 		"Slide 2: The intervention question",
 	);
 
 	// Archiving is reversible and keeps archived Slides reachable.
-	await page.getByRole("button", { name: "Archive Slide" }).click();
+	await page.getByRole("button", { name: "Slide actions" }).click();
+	await page.getByRole("menuitem", { name: "Archive Slide" }).click();
 	await expect(filmSlides).toHaveCount(17);
 	await page.getByRole("button", { name: "Archived (1)" }).click();
 	await filmstrip
 		.getByRole("button", { name: "Archived Slide: The intervention question" })
 		.click();
 	await expect(page.locator(".stage-position")).toContainText("Archived Slide");
-	await page.getByRole("button", { name: "Restore Slide" }).click();
+	await page.getByRole("button", { name: "Slide actions" }).click();
+	await page.getByRole("menuitem", { name: "Restore Slide" }).click();
 	await expect(filmSlides).toHaveCount(18);
 
 	// Only the canvas scrolls; the composer stays anchored.
@@ -266,25 +279,15 @@ test("Course Author views Presentation canvas and slide outline", async ({
 		(await page.locator(".transcript").boundingBox())?.height ?? 0;
 	expect(transcriptHeight).toBeGreaterThanOrEqual(400);
 
-	// Layout controls switch between conversation, split, and canvas focus.
+	// The canvas can expand; closing it or choosing a conversation brings the conversation back.
 	const conversationPane = page.getByRole("region", {
 		name: "Conversation",
 		exact: true,
 	});
 	const canvasPane = page.getByRole("region", { name: "Canvas", exact: true });
-	await page.getByRole("button", { name: "Canvas only" }).click();
+	await page.getByRole("button", { name: "Expand canvas" }).click();
 	await expect(conversationPane).toBeHidden();
 	await expect(canvasPane).toBeVisible();
-	await page.getByRole("button", { name: "Conversation only" }).click();
-	await expect(canvasPane).toBeHidden();
-	await expect(conversationPane).toBeVisible();
-	await expect(composer).toBeVisible();
-	await navigator.getByRole("button", { name: "Course Plan" }).click();
-	await expect(canvasPane).toBeVisible();
-	await expect(
-		page.getByRole("button", { name: "Conversation and canvas" }),
-	).toHaveAttribute("aria-pressed", "true");
-	await page.getByRole("button", { name: "Canvas only" }).click();
 	expect(
 		await page.evaluate(() => localStorage.getItem("course-harness:layout")),
 	).toBe("canvas");
@@ -293,9 +296,26 @@ test("Course Author views Presentation canvas and slide outline", async ({
 		.getByRole("button", { name: new RegExp(course.lectures[0].title) })
 		.click();
 	await expect(
-		page.getByRole("button", { name: "Canvas only" }),
+		page.getByRole("button", { name: "Show conversation" }),
 	).toHaveAttribute("aria-pressed", "true");
-	await page.getByRole("button", { name: "Conversation and canvas" }).click();
+	await expect(conversationPane).toBeHidden();
+	await navigator
+		.getByRole("list", { name: "Conversations" })
+		.getByRole("button")
+		.first()
+		.click();
+	await expect(conversationPane).toBeVisible();
+	await expect(canvasPane).toBeVisible();
+	await expect(
+		page.getByRole("button", { name: "Expand canvas" }),
+	).toHaveAttribute("aria-pressed", "false");
+	await page.getByRole("button", { name: "Close canvas" }).click();
+	await expect(canvasPane).toBeHidden();
+	await expect(composer).toBeVisible();
+	await navigator
+		.getByRole("button", { name: new RegExp(course.lectures[0].title) })
+		.click();
+	await expect(canvasPane).toBeVisible();
 	await page.setViewportSize({ width: 1250, height: 844 });
 	await expect
 		.poll(async () => (await conversationPane.boundingBox())?.width ?? 0)

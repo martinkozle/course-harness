@@ -131,7 +131,7 @@ function CompactDialog({
 
 	return (
 		<Dialog
-			title="Summarize earlier context"
+			title="Compact conversation"
 			onClose={onClose}
 			size="wide"
 			footer={
@@ -152,14 +152,14 @@ function CompactDialog({
 								});
 						}}
 					>
-						Use this summary
+						Compact conversation
 					</button>
 				</>
 			}
 		>
 			<p className="meta">
-				Future replies read this summary instead of the earlier messages. You
-				still see the full conversation here.
+				Future replies read this summary instead of the earlier messages, which
+				frees up the model's context. You still see the full conversation here.
 			</p>
 			{loading ? <p role="status">Preparing a summary…</p> : null}
 			{preview ? (

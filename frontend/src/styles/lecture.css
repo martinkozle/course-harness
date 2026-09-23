@@ -236,16 +236,24 @@
 	gap: 8px;
 }
 
-.stage-position {
-	display: inline-flex;
+.stage-nav {
+	display: flex;
 	flex: 1;
 	align-items: center;
-	gap: 10px;
+	gap: 2px;
+	min-width: 0;
+}
+
+.stage-position {
+	min-width: 92px;
 	font-size: 0.9375rem;
 	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+	text-align: center;
 }
 
 .stage-layout {
+	margin-left: 10px;
 	padding: 1px 8px;
 	border-radius: 999px;
 	background: var(--surface-sunken);
