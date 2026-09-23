@@ -23,11 +23,13 @@ from course_harness.presentation import (
     TitleSlide,
     TwoColumnSlide,
 )
+from course_harness.resources import image_dimensions
 from course_harness.template_slots import (
     CONTENT_LIKE_TYPES,
     find_body_placeholder,
     find_column_placeholder_groups,
     find_content_placeholders,
+    find_placeholder_of_type,
     find_slot_placeholder,
     find_slot_placeholder_or,
     find_subtitle_or_body_placeholder,
@@ -35,6 +37,7 @@ from course_harness.template_slots import (
 )
 
 if TYPE_CHECKING:
+    from course_harness.sources import SourceImage, SourceImageResolver
     from course_harness.template_profiles import TemplateProfile
 
 DEFAULT_LAYOUT_MAPPING: dict[str, int] = {
@@ -63,6 +66,7 @@ def export_presentation(
     presentation: Presentation,
     profile: TemplateProfile | None = None,
     template_path: Path | None = None,
+    image_resolver: SourceImageResolver | None = None,
 ) -> bytes:
     if profile is not None and profile.id != "_builtin-default":
         layout_mapping = {m.semantic_layout: m.template_layout_index for m in profile.layouts}
@@ -98,7 +102,15 @@ def export_presentation(
             )
 
         pptx_slide = prs.slides.add_slide(slide_layouts[layout_index])
-        _populate_slide(slide, pptx_slide, slot_mapping.get(slide.layout, {}))
+        if isinstance(slide, ImageSlide):
+            image = (
+                image_resolver(slide.image_source_id)
+                if image_resolver is not None and slide.image_source_id is not None
+                else None
+            )
+            _populate_image_slide(slide, pptx_slide, slot_mapping.get("image", {}), image)
+        else:
+            _populate_slide(slide, pptx_slide, slot_mapping.get(slide.layout, {}))
         _add_citations(slide, pptx_slide)
         _add_speaker_notes(slide, pptx_slide)
 
@@ -116,7 +128,6 @@ def _populate_slide(slide, pptx_slide, slot_mappings: dict[str, int]) -> None:
         "big_statement": _populate_big_statement_slide,
         "closing": _populate_closing_slide,
         "code": _populate_code_slide,
-        "image": _populate_image_slide,
         "quote": _populate_quote_slide,
     }
     handler = handlers.get(slide.layout)
@@ -234,18 +245,69 @@ def _populate_code_slide(slide: CodeSlide, pptx_slide, slot_mappings: dict[str, 
                 run.font.name = "Courier New"
 
 
-def _populate_image_slide(slide: ImageSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
+def _populate_image_slide(
+    slide: ImageSlide,
+    pptx_slide,
+    slot_mappings: dict[str, int],
+    image: SourceImage | None = None,
+) -> None:
     title_ph = find_slot_placeholder_or(pptx_slide, slot_mappings, "title", find_title_placeholder)
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     mapped_image_ph = find_slot_placeholder(pptx_slide, slot_mappings, "image")
-    phs = (
-        [mapped_image_ph] if mapped_image_ph is not None else find_content_placeholders(pptx_slide)
+    if image is None:
+        phs = (
+            [mapped_image_ph]
+            if mapped_image_ph is not None
+            else find_content_placeholders(pptx_slide)
+        )
+        if phs and slide.caption:
+            phs[0].text_frame.text = slide.caption
+        elif phs and slide.image_url:
+            phs[0].text_frame.text = slide.image_url
+        return
+
+    content_phs = find_content_placeholders(pptx_slide)
+    image_ph = (
+        mapped_image_ph
+        or find_placeholder_of_type(pptx_slide, {PP_PLACEHOLDER.PICTURE})
+        or next(iter(content_phs), None)
     )
-    if phs and slide.caption:
-        phs[0].text_frame.text = slide.caption
-    elif phs and slide.image_url:
-        phs[0].text_frame.text = slide.image_url
+    caption_ph = next((ph for ph in content_phs if ph is not image_ph), None)
+    if caption_ph is not None and slide.caption:
+        caption_ph.text_frame.text = slide.caption
+    _place_image(pptx_slide, image_ph, image)
+
+
+def _place_image(pptx_slide, placeholder, image: SourceImage) -> None:
+    """Fit an image inside its placeholder's frame without cropping it."""
+    content = image.path.read_bytes()
+    pixel_width, pixel_height = image_dimensions(content)
+    if placeholder is not None:
+        left, top, width, height = (
+            placeholder.left,
+            placeholder.top,
+            placeholder.width,
+            placeholder.height,
+        )
+    else:
+        left, top, width, height = Inches(1), Inches(1.5), Inches(8), Inches(5)
+    scale = min(width / pixel_width, height / pixel_height)
+    fitted_width, fitted_height = int(pixel_width * scale), int(pixel_height * scale)
+    fitted_left = int(left + (width - fitted_width) / 2)
+    fitted_top = int(top + (height - fitted_height) / 2)
+
+    if placeholder is not None and hasattr(placeholder, "insert_picture"):
+        picture = placeholder.insert_picture(BytesIO(content))
+        picture.crop_left = picture.crop_right = picture.crop_top = picture.crop_bottom = 0
+        picture.left, picture.top = fitted_left, fitted_top
+        picture.width, picture.height = fitted_width, fitted_height
+        return
+    if placeholder is not None:
+        placeholder.element.getparent().remove(placeholder.element)
+    pptx_slide.shapes.add_picture(
+        BytesIO(content), fitted_left, fitted_top, fitted_width, fitted_height
+    )
 
 
 def _populate_quote_slide(slide: QuoteSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:

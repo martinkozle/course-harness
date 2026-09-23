@@ -247,8 +247,15 @@ function CourseWorkspace({
 	}, []);
 
 	const refreshSources = useCallback(async () => {
-		const response = await fetch("/api/sources");
-		if (response.ok) setSources((await response.json()) as Source[]);
+		// Attached images reach the Library outside the Sources canvas, so an
+		// admitted attachment also needs the Resources it came from.
+		const [sourceList, resourceList] = await Promise.all([
+			fetch("/api/sources"),
+			fetch("/api/resources"),
+		]);
+		if (sourceList.ok) setSources((await sourceList.json()) as Source[]);
+		if (resourceList.ok)
+			setResources((await resourceList.json()) as ResourceState[]);
 	}, []);
 
 	useEffect(() => {
@@ -302,6 +309,14 @@ function CourseWorkspace({
 		onResourcesChange: setResources,
 		onSourcesChange: setSources,
 	});
+	const imageSources = useMemo(() => {
+		const images = new Set(
+			resources
+				.filter((resource) => resource.media_type?.startsWith("image/"))
+				.map((resource) => resource.resource_id),
+		);
+		return sources.filter((source) => images.has(source.resource_id));
+	}, [resources, sources]);
 
 	const agent = useCourseAgent({
 		catalog,
@@ -473,6 +488,7 @@ function CourseWorkspace({
 						presentationVersion={presentationVersion}
 						templates={templates}
 						sources={sources}
+						imageSources={imageSources}
 						busy={agent.running}
 						onPresentationsChange={async () => {
 							await refreshPresentations();

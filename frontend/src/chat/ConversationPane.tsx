@@ -5,6 +5,7 @@ import {
 	Check,
 	ChevronDown,
 	FilePlus2,
+	ImagePlus,
 	Info,
 	LibraryBig,
 	Loader2,
@@ -39,6 +40,7 @@ import type {
 } from "../models";
 import { Menu, Notice } from "../ui";
 import {
+	ATTACHABLE_TYPES,
 	type AgentContext,
 	type CourseAgent,
 	messageParts,
@@ -277,6 +279,20 @@ export function ConversationPane({
 									<li key={message.id} className={`message is-${message.role}`}>
 										{message.role === "user" ? (
 											<>
+												{parts.attachments.length ? (
+													<ul className="message-attachments">
+														{parts.attachments.map((attachment) => (
+															<li key={attachment.resourceId}>
+																<img
+																	src={`/api/resources/${encodeURIComponent(attachment.resourceId)}/content`}
+																	alt={attachment.name}
+																	title={attachment.name}
+																	loading="lazy"
+																/>
+															</li>
+														))}
+													</ul>
+												) : null}
 												{parts.context ? (
 													<span
 														className="message-context"
@@ -285,7 +301,9 @@ export function ConversationPane({
 														{shortContext(parts.context)}
 													</span>
 												) : null}
-												<div className="message-bubble">{parts.body}</div>
+												{parts.body ? (
+													<div className="message-bubble">{parts.body}</div>
+												) : null}
 											</>
 										) : (
 											<>
@@ -561,6 +579,8 @@ function Composer({
 	onOpen: (target: CanvasTarget) => void;
 }) {
 	const fileInputRef = useRef<HTMLInputElement>(null);
+	const imageInputRef = useRef<HTMLInputElement>(null);
+	const [dragging, setDragging] = useState(false);
 	const [disclosureOpen, setDisclosureOpen] = useState(false);
 	const [modelError, setModelError] = useState<string | null>(null);
 	const selected = catalog.model_presets.find(
@@ -600,7 +620,8 @@ function Composer({
 		agent.conversationBusy ||
 		agent.approval !== null ||
 		!agent.hasModel ||
-		!agent.prompt.trim();
+		agent.attachmentsPending ||
+		(!agent.prompt.trim() && agent.readyAttachments.length === 0);
 	const offerFocus =
 		focusContext &&
 		agent.prompt.trim() !== "" &&
@@ -608,13 +629,60 @@ function Composer({
 
 	return (
 		<form
-			className="composer"
+			className={`composer${dragging ? " is-dropping" : ""}`}
 			onSubmit={(event) => {
 				event.preventDefault();
 				void agent.send();
 			}}
+			onDragOver={(event) => {
+				if (!event.dataTransfer.types.includes("Files") || inputDisabled)
+					return;
+				event.preventDefault();
+				setDragging(true);
+			}}
+			onDragLeave={(event) => {
+				if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+					setDragging(false);
+			}}
+			onDrop={(event) => {
+				if (!event.dataTransfer.files.length || inputDisabled) return;
+				event.preventDefault();
+				setDragging(false);
+				agent.attach(Array.from(event.dataTransfer.files));
+			}}
 			aria-busy={agent.running}
 		>
+			{agent.attachments.length ? (
+				<ul className="composer-attachments" aria-label="Attached images">
+					{agent.attachments.map((attachment) => (
+						<li
+							key={attachment.id}
+							className={`attachment is-${attachment.state}`}
+							title={attachment.error ?? attachment.name}
+						>
+							<img src={attachment.previewUrl} alt={attachment.name} />
+							{attachment.state === "uploading" ? (
+								<span className="attachment-status">
+									<Loader2 className="spin" aria-hidden="true" />
+									<span className="visually-hidden">Attaching</span>
+								</span>
+							) : null}
+							{attachment.state === "failed" ? (
+								<span className="attachment-status" role="alert">
+									{attachment.error}
+								</span>
+							) : null}
+							<button
+								type="button"
+								aria-label={`Remove ${attachment.name}`}
+								onClick={() => agent.removeAttachment(attachment.id)}
+							>
+								<X aria-hidden="true" />
+							</button>
+						</li>
+					))}
+				</ul>
+			) : null}
 			{agent.context || offerFocus ? (
 				<div className="composer-context">
 					{agent.context ? (
@@ -662,6 +730,14 @@ function Composer({
 						: "What should this Course help people learn?"
 				}
 				onChange={(event) => agent.setPrompt(event.target.value)}
+				onPaste={(event) => {
+					const files = Array.from(event.clipboardData.files).filter((file) =>
+						ATTACHABLE_TYPES.includes(file.type),
+					);
+					if (!files.length) return;
+					event.preventDefault();
+					agent.attach(files);
+				}}
 				onKeyDown={(event) => {
 					if (
 						event.key === "Enter" &&
@@ -681,6 +757,11 @@ function Composer({
 					trigger={<Plus aria-hidden="true" />}
 					items={[
 						{
+							label: "Attach an image to this message",
+							icon: <ImagePlus aria-hidden="true" />,
+							onSelect: () => imageInputRef.current?.click(),
+						},
+						{
 							label: "Add files to this course",
 							icon: <FilePlus2 aria-hidden="true" />,
 							onSelect: () => fileInputRef.current?.click(),
@@ -696,6 +777,19 @@ function Composer({
 							onSelect: () => onOpen({ kind: "sources", tab: "library" }),
 						},
 					]}
+				/>
+				<input
+					ref={imageInputRef}
+					type="file"
+					multiple
+					hidden
+					accept={ATTACHABLE_TYPES.join(",")}
+					aria-label="Attach an image to this message"
+					onChange={(event) => {
+						const files = Array.from(event.target.files ?? []);
+						event.target.value = "";
+						agent.attach(files);
+					}}
 				/>
 				<input
 					ref={fileInputRef}
@@ -797,10 +891,11 @@ function Composer({
 			</div>
 			{disclosureOpen && selected && account ? (
 				<p className="composer-disclosure" role="note">
-					When you send a message, it and any Source excerpts needed for the
-					reply leave this device for <strong>{account.name}</strong> at{" "}
-					<strong>{account.base_url}</strong> using {selected.model}. The API
-					key stays in Course Harness&apos;s private credential store.
+					When you send a message, it, any Source excerpts, and any images the
+					Course Agent looks at for the reply leave this device for{" "}
+					<strong>{account.name}</strong> at <strong>{account.base_url}</strong>{" "}
+					using {selected.model}. The API key stays in Course Harness&apos;s
+					private credential store.
 				</p>
 			) : null}
 			{modelError ? <p className="field-error">{modelError}</p> : null}

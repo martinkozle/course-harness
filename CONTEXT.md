@@ -44,6 +44,10 @@ _Avoid_: Vector store, uploads
 A transient discovery result that may be inspected or registered but has not yet been made durable.
 _Avoid_: Source, search hit
 
+**Attachment**:
+A Library Resource the Course Author attached to one Conversation message, which the Course Agent may view or admit as a Source but which grounds nothing until admitted.
+_Avoid_: Upload, Source, Candidate
+
 **Resource**:
 An addressable item the harness knows how to access through a connector, independently of whether any Course considers it relevant.
 _Avoid_: Document, Source, Reference

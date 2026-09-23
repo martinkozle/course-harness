@@ -917,6 +917,7 @@ def create_app(
                         templates_data_root=templates_data,
                         request=request,
                         evidence_line_counts={},
+                        library_data_root=data_dir,
                     )
                 sources = sources_module.read_sources_index(active) or sources_module.SourcesIndex()
                 return publish_release(
@@ -927,6 +928,7 @@ def create_app(
                     evidence_line_counts=sources_module.read_pinned_evidence_line_counts(
                         cache_dir, sources.sources
                     ),
+                    library_data_root=data_dir,
                 )
             except sources_module.InvalidSourcesIndex as error:
                 raise HTTPException(status_code=422, detail="sources.yaml is invalid") from error
@@ -1003,6 +1005,7 @@ def create_app(
                 release_data_root=release_data,
                 slug=slug,
                 artifact_id=artifact_id,
+                library_data_root=data_dir,
             )
         except WorkspaceHistoryNotInitializedError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
@@ -1520,6 +1523,7 @@ def create_app(
                 data_dir=data_dir,
                 cache_dir=cache_dir,
                 chat_store_path=chat_path,
+                vision=configuration.capabilities.vision,
                 before_mutation=None if is_reconciliation else protect_agent_mutation,
                 after_mutation=None if is_reconciliation else checkpoint_agent_mutation,
                 create_revision=(
@@ -1958,7 +1962,12 @@ def create_app(
             if profile.id != tpl.BUILTIN_DEFAULT_ID
             else None
         )
-        return presentation, PreviewContext(profile, template_path, templates_cache)
+        return presentation, PreviewContext(
+            profile,
+            template_path,
+            templates_cache,
+            sources_module.source_image_resolver(active, data_dir),
+        )
 
     @app.get(
         "/api/presentations/{lecture_id}/preview",
@@ -2191,6 +2200,16 @@ def create_app(
                 update["code"] = request.code
             if request.language is not None and "language" in valid_fields:
                 update["language"] = request.language
+            if request.image_source_id is not None and "image_source_id" in valid_fields:
+                if request.image_source_id and (
+                    sources_module.source_image_resolver(active, data_dir)(request.image_source_id)
+                    is None
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail="The image must be an image Source admitted to this Course.",
+                    )
+                update["image_source_id"] = request.image_source_id or None
             if request.image_url is not None and "image_url" in valid_fields:
                 update["image_url"] = request.image_url
             if request.caption is not None and "caption" in valid_fields:
@@ -2307,7 +2326,10 @@ def create_app(
 
         try:
             pptx_bytes = export_presentation(
-                pres, profile=resolved_profile, template_path=template_file
+                pres,
+                profile=resolved_profile,
+                template_path=template_file,
+                image_resolver=sources_module.source_image_resolver(active, data_dir),
             )
         except ExportError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
@@ -2434,6 +2456,17 @@ def create_app(
             )
 
         return search_module.enrich_search_results(hits, sources_by_version)
+
+    @app.get("/api/sources/{source_id}/image")
+    async def source_image(source_id: str) -> StarletteResponse:
+        active = require_workspace()
+        image = sources_module.source_image_resolver(active, data_dir)(source_id)
+        if image is None:
+            raise HTTPException(status_code=404, detail="Image Source was not found")
+        return StarletteResponse(
+            content=await asyncio.to_thread(image.path.read_bytes),
+            media_type=image.media_type,
+        )
 
     @app.get("/api/sources/{source_id}/content")
     async def source_content(

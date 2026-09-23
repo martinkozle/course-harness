@@ -84,6 +84,27 @@
 	white-space: nowrap;
 }
 
+.message-attachments {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 6px;
+	max-width: min(88%, 560px);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.message-attachments img {
+	display: block;
+	max-width: 180px;
+	max-height: 140px;
+	border: 1px solid var(--rule);
+	border-radius: var(--radius-m);
+	background: var(--surface-sunken);
+	object-fit: contain;
+}
+
 .message-author {
 	display: inline-flex;
 	align-items: center;
@@ -676,6 +697,88 @@
 .context-offer:hover {
 	border-color: var(--accent);
 	color: var(--accent-ink);
+}
+
+.composer.is-dropping {
+	border-style: dashed;
+	border-color: var(--accent);
+	background: var(--accent-soft);
+}
+
+.composer-attachments {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 0;
+	padding: 2px 0 0;
+	list-style: none;
+}
+
+.attachment {
+	position: relative;
+	display: grid;
+	width: 64px;
+	height: 64px;
+	overflow: hidden;
+	border: 1px solid var(--rule);
+	border-radius: var(--radius-m);
+	background: var(--surface-sunken);
+}
+
+.attachment.is-failed {
+	width: auto;
+	max-width: 240px;
+	border-color: var(--danger);
+}
+
+.attachment img {
+	grid-area: 1 / 1;
+	width: 64px;
+	height: 64px;
+	object-fit: cover;
+}
+
+.attachment.is-uploading img {
+	opacity: 0.5;
+}
+
+.attachment-status {
+	grid-area: 1 / 1;
+	display: grid;
+	place-items: center;
+	padding: 4px 28px 4px 70px;
+	font-size: 0.75rem;
+	color: var(--danger);
+}
+
+.attachment.is-uploading .attachment-status {
+	padding: 0;
+	color: var(--ink-muted);
+}
+
+.attachment-status svg {
+	width: 18px;
+	height: 18px;
+}
+
+.attachment button {
+	position: absolute;
+	top: 3px;
+	right: 3px;
+	display: grid;
+	place-items: center;
+	width: 20px;
+	height: 20px;
+	padding: 0;
+	border: 0;
+	border-radius: 999px;
+	background: rgb(29 39 51 / 72%);
+	color: #fff;
+}
+
+.attachment button svg {
+	width: 12px;
+	height: 12px;
 }
 
 .composer-actions {

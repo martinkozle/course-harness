@@ -123,7 +123,7 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	await page.getByRole("button", { name: "Where messages are sent" }).click();
 	await expect(
 		page.getByText(
-			/When you send a message, it and any Source excerpts needed/,
+			/When you send a message, it, any Source excerpts, and any images/,
 		),
 	).toBeVisible();
 

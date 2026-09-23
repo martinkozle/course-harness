@@ -16,7 +16,8 @@ from pptx import Presentation as PPTXPresentation
 from pydantic import BaseModel, ConfigDict
 
 from course_harness.export import export_presentation
-from course_harness.presentation import Presentation, Slide
+from course_harness.presentation import ImageSlide, Presentation, Slide
+from course_harness.sources import SourceImageResolver
 from course_harness.template_inspect import infer_slot_mappings, inspect_template
 from course_harness.template_profiles import TemplateProfile
 
@@ -26,6 +27,7 @@ class PreviewContext:
     profile: TemplateProfile
     template_path: Path | None
     cache_dir: Path
+    image_resolver: SourceImageResolver | None = None
 
 
 class RendererCapability(BaseModel):
@@ -126,9 +128,20 @@ _PREVIEW_CACHE_VERSION = 2
 _RENDER_LOCK = threading.Lock()
 
 
-def slide_render_key(slide: Slide, profile: TemplateProfile) -> str:
+def slide_render_key(
+    slide: Slide,
+    profile: TemplateProfile,
+    image_resolver: SourceImageResolver | None = None,
+) -> str:
+    image = (
+        image_resolver(slide.image_source_id)
+        if isinstance(slide, ImageSlide)
+        and slide.image_source_id is not None
+        and image_resolver is not None
+        else None
+    )
     mapping = next((item for item in profile.layouts if item.semantic_layout == slide.layout), None)
-    payload = {
+    payload: dict[str, object] = {
         "cache_version": _PREVIEW_CACHE_VERSION,
         "profile_id": profile.id,
         "profile_version": profile.version,
@@ -146,12 +159,18 @@ def slide_render_key(slide: Slide, profile: TemplateProfile) -> str:
             exclude={"id", "archived", "speaker_notes", "purpose"},
         ),
     }
+    if image is not None:
+        payload["image_version"] = image.source_version_id
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:20]
 
 
-def presentation_render_key(presentation: Presentation, profile: TemplateProfile) -> str:
-    payload = [slide_render_key(slide, profile) for slide in presentation.slides]
+def presentation_render_key(
+    presentation: Presentation,
+    profile: TemplateProfile,
+    image_resolver: SourceImageResolver | None = None,
+) -> str:
+    payload = [slide_render_key(slide, profile, image_resolver) for slide in presentation.slides]
     return hashlib.sha256("".join(payload).encode("utf-8")).hexdigest()[:20]
 
 
@@ -174,11 +193,11 @@ def build_preview(
     inspection = (
         inspect_template(template_path) if template_path is not None else _builtin_inspection()
     )
-    render_key = presentation_render_key(presentation, profile)
+    render_key = presentation_render_key(presentation, profile, context.image_resolver)
     background_dir = cache_dir / profile.id / "backgrounds" / f"v{profile.version}"
     slides = []
     for slide in presentation.slides:
-        slide_key = slide_render_key(slide, profile)
+        slide_key = slide_render_key(slide, profile, context.image_resolver)
         thumbnail = cache_dir / profile.id / "previews" / slide_key / "thumbnail.png"
         background = background_dir / f"{slide.layout}.png"
         slides.append(
@@ -222,13 +241,18 @@ def render_presentation_preview(
         raise RuntimeError(capability.detail)
     render_layout_backgrounds(context)
     for slide in presentation.slides:
-        slide_key = slide_render_key(slide, profile)
+        slide_key = slide_render_key(slide, profile, context.image_resolver)
         target = cache_dir / profile.id / "previews" / slide_key / "thumbnail.png"
 
         def make_pptx(slide=slide) -> bytes:
             renderable_slide = slide.model_copy(update={"archived": False})
             single_slide = presentation.model_copy(update={"slides": [renderable_slide]})
-            return export_presentation(single_slide, profile=profile, template_path=template_path)
+            return export_presentation(
+                single_slide,
+                profile=profile,
+                template_path=template_path,
+                image_resolver=context.image_resolver,
+            )
 
         _render_cached_png(target, make_pptx)
     return build_preview(presentation, context)

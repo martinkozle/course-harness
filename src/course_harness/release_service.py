@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import time
 import zipfile
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -35,8 +35,11 @@ from course_harness.release_validation import (
 )
 from course_harness.sources import (
     InvalidSourcesIndex,
+    PinnedSource,
     Source,
+    SourceImageResolver,
     SourcesIndex,
+    pinned_image_resolver,
     read_sources_index,
 )
 from course_harness.template_profiles import (
@@ -144,6 +147,7 @@ def publish_release(
     templates_data_root: Path,
     request: PublishReleaseRequest,
     evidence_line_counts: Mapping[str, int],
+    library_data_root: Path | None = None,
 ) -> CourseRelease:
     """Validate, export, persist, and atomically name one immutable Release."""
     if len(request.selection.lecture_ids) > 1_000 or len(request.selection.artifact_ids) > 1_000:
@@ -210,7 +214,12 @@ def publish_release(
     exports: list[tuple[ReleaseArtifact, bytes]] = []
     total_bytes = len(template_bytes or b"")
     try:
-        generated = _export_presentations(presentations, profile, template_bytes)
+        generated = _export_presentations(
+            presentations,
+            profile,
+            template_bytes,
+            _image_resolver(sources.sources, library_data_root),
+        )
     except (OSError, ValueError, ExportError) as error:
         raise ReleaseError("A selected Presentation could not be exported") from error
     for presentation, content in generated:
@@ -381,7 +390,12 @@ def read_release_artifact(
 
 
 def regenerate_release_artifact(
-    *, workspace: Path, release_data_root: Path, slug: str, artifact_id: str
+    *,
+    workspace: Path,
+    release_data_root: Path,
+    slug: str,
+    artifact_id: str,
+    library_data_root: Path | None = None,
 ) -> bytes:
     """Regenerate solely from the tagged Revision and manifest-pinned template inputs."""
     release = read_release(workspace, slug)
@@ -405,7 +419,10 @@ def regenerate_release_artifact(
             raise ReleaseError("Stored Release template does not match its manifest")
     try:
         regenerated = _export_presentations(
-            [presentation], release.template_profile.definition, template_bytes
+            [presentation],
+            release.template_profile.definition,
+            template_bytes,
+            _image_resolver(release.sources, library_data_root),
         )[0][1]
     except (OSError, ValueError, ExportError) as error:
         raise ReleaseError("Release Artifact could not be regenerated") from error
@@ -596,14 +613,30 @@ def _read_template_bytes(templates_data_root: Path, profile: TemplateProfile) ->
         os.close(descriptor)
 
 
+def _image_resolver(
+    sources: Iterable[PinnedSource], library_data_root: Path | None
+) -> SourceImageResolver | None:
+    """Resolve Slide images from the Source Versions this Release pins."""
+    if library_data_root is None:
+        return None
+    return pinned_image_resolver(sources, library_data_root)
+
+
 def _export_presentations(
-    presentations: list[Presentation], profile: TemplateProfile, template_bytes: bytes | None
+    presentations: list[Presentation],
+    profile: TemplateProfile,
+    template_bytes: bytes | None,
+    image_resolver: SourceImageResolver | None = None,
 ) -> list[tuple[Presentation, bytes]]:
     if template_bytes is None:
         return [
             (
                 presentation,
-                _deterministic_pptx(export_presentation(presentation, profile=profile)),
+                _deterministic_pptx(
+                    export_presentation(
+                        presentation, profile=profile, image_resolver=image_resolver
+                    )
+                ),
             )
             for presentation in presentations
         ]
@@ -618,6 +651,7 @@ def _export_presentations(
                         presentation,
                         profile=profile,
                         template_path=template_path,
+                        image_resolver=image_resolver,
                     )
                 ),
             )

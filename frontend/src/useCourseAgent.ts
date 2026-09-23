@@ -61,16 +61,58 @@ export type AgentStatus =
 
 type AgentMode = "guided" | "autonomous";
 
+/** An image attached to the next message, uploaded to the Library as a Resource. */
+export type Attachment = {
+	id: string;
+	name: string;
+	mediaType: string;
+	previewUrl: string;
+	resourceId: string | null;
+	state: "uploading" | "ready" | "failed";
+	error: string | null;
+};
+
+/** An attachment as recorded in a sent message. */
+export type MessageAttachment = {
+	resourceId: string;
+	mediaType: string;
+	name: string;
+};
+
+export const ATTACHABLE_TYPES = ["image/png", "image/jpeg", "image/gif"];
+
 const CONTEXT_PATTERN = /^\[Context: (.+?)\]\n\n([\s\S]*)$/;
+const ATTACHMENT_PATTERN =
+	/^\[Attachment: (resource-[0-9a-f]{12}) (\S+) "(.*)"\]$/;
+
+function attachmentLine(attachment: MessageAttachment): string {
+	const name = attachment.name.replace(/["\r\n\]]/g, "_");
+	return `[Attachment: ${attachment.resourceId} ${attachment.mediaType} "${name}"]`;
+}
 
 export function messageParts(content: string): {
+	attachments: MessageAttachment[];
 	context: string | null;
 	body: string;
 } {
-	const match = CONTEXT_PATTERN.exec(content);
+	const lines = content.split("\n");
+	const attachments: MessageAttachment[] = [];
+	for (const line of lines) {
+		const match = ATTACHMENT_PATTERN.exec(line);
+		if (!match) break;
+		attachments.push({
+			resourceId: match[1],
+			mediaType: match[2],
+			name: match[3],
+		});
+	}
+	const rest = attachments.length
+		? lines.slice(attachments.length).join("\n").replace(/^\n/, "")
+		: content;
+	const match = CONTEXT_PATTERN.exec(rest);
 	return match
-		? { context: match[1], body: match[2] }
-		: { context: null, body: content };
+		? { attachments, context: match[1], body: match[2] }
+		: { attachments, context: null, body: rest };
 }
 
 function appendAssistantDelta(
@@ -133,6 +175,7 @@ export function useCourseAgent({
 	const [conversationBusy, setConversationBusy] = useState(false);
 	const [prompt, setPromptState] = useState("");
 	const [context, setContext] = useState<AgentContext | null>(null);
+	const [attachments, setAttachments] = useState<Attachment[]>([]);
 	const [driftId, setDriftId] = useState<string | null>(null);
 	const [results, setResults] = useState<Record<string, RunResult>>({});
 	const [loaded, setLoaded] = useState(false);
@@ -341,10 +384,80 @@ export function useCourseAgent({
 		}
 	}
 
+	function updateAttachment(id: string, update: Partial<Attachment>) {
+		setAttachments((current) =>
+			current.map((item) => (item.id === id ? { ...item, ...update } : item)),
+		);
+	}
+
+	/** Upload images to the Library so the next message can refer to them. */
+	function attach(files: File[]) {
+		const images = files.filter((file) => ATTACHABLE_TYPES.includes(file.type));
+		if (images.length < files.length)
+			setError(
+				"Only PNG, JPEG, and GIF images can be attached to a message. Add other files to the Course from the + menu.",
+			);
+		for (const file of images) {
+			const item: Attachment = {
+				id: crypto.randomUUID(),
+				name: file.name || "pasted-image.png",
+				mediaType: file.type,
+				previewUrl: URL.createObjectURL(file),
+				resourceId: null,
+				state: "uploading",
+				error: null,
+			};
+			setAttachments((current) => [...current, item]);
+			void (async () => {
+				try {
+					const formData = new FormData();
+					formData.append("file", file, item.name);
+					const response = await fetch("/api/resources/upload", {
+						method: "POST",
+						body: formData,
+					});
+					if (!response.ok) throw new Error(await responseError(response));
+					const uploaded = (await response.json()) as {
+						resource_id: string;
+						status: string;
+						error: string | null;
+					};
+					if (uploaded.status !== "ready")
+						throw new Error(uploaded.error ?? "The image could not be read.");
+					updateAttachment(item.id, {
+						state: "ready",
+						resourceId: uploaded.resource_id,
+					});
+				} catch (caught) {
+					updateAttachment(item.id, {
+						state: "failed",
+						error: errorMessage(caught, "The image could not be attached."),
+					});
+				}
+			})();
+		}
+	}
+
+	function removeAttachment(id: string) {
+		setAttachments((current) => {
+			const removed = current.find((item) => item.id === id);
+			if (removed) URL.revokeObjectURL(removed.previewUrl);
+			return current.filter((item) => item.id !== id);
+		});
+	}
+
+	const attachmentsPending = attachments.some(
+		(item) => item.state === "uploading",
+	);
+	const readyAttachments = attachments.filter(
+		(item) => item.state === "ready" && item.resourceId,
+	);
+
 	async function send() {
 		const content = prompt.trim();
 		if (
-			!content ||
+			(!content && readyAttachments.length === 0) ||
+			attachmentsPending ||
 			running ||
 			conversationBusy ||
 			approval ||
@@ -352,12 +465,23 @@ export function useCourseAgent({
 			!hasModel
 		)
 			return;
-		const prefix = context ? `[Context: ${context.instruction}]\n\n` : "";
+		const attached = readyAttachments.map((item) =>
+			attachmentLine({
+				resourceId: item.resourceId as string,
+				mediaType: item.mediaType,
+				name: item.name,
+			}),
+		);
+		const prefix =
+			(attached.length ? `${attached.join("\n")}\n\n` : "") +
+			(context ? `[Context: ${context.instruction}]\n\n` : "");
 		const userMessage: ChatMessage = {
 			id: crypto.randomUUID(),
 			role: "user",
 			content: prefix + content,
 		};
+		for (const item of attachments) URL.revokeObjectURL(item.previewUrl);
+		setAttachments([]);
 		const mode: AgentMode = driftId ? "guided" : "autonomous";
 		if (localDraft) {
 			setConversationBusy(true);
@@ -551,6 +675,11 @@ export function useCourseAgent({
 		setPrompt,
 		context,
 		setContext,
+		attachments,
+		attachmentsPending,
+		readyAttachments,
+		attach,
+		removeAttachment,
 		driftId,
 		setDriftId,
 		hasModel,

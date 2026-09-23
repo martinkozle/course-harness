@@ -72,7 +72,7 @@ type EditableField =
 	| "text"
 	| "code"
 	| "language"
-	| "image_url"
+	| "image_source_id"
 	| "caption"
 	| "quote"
 	| "attribution"
@@ -86,7 +86,7 @@ const fieldsByLayout: Record<string, EditableField[]> = {
 	two_column: ["title", "left_content", "right_content"],
 	big_statement: ["title", "statement"],
 	code: ["title", "code", "language"],
-	image: ["title", "image_url", "caption"],
+	image: ["title", "image_source_id", "caption"],
 	quote: ["quote", "attribution"],
 };
 
@@ -100,7 +100,7 @@ const fieldLabels: Record<EditableField, string> = {
 	text: "Text",
 	code: "Code",
 	language: "Code language",
-	image_url: "Image address",
+	image_source_id: "Image",
 	caption: "Caption",
 	quote: "Quote",
 	attribution: "Attribution",
@@ -155,7 +155,7 @@ function slotContent(slide: Slide, slot: string): string | null {
 							: slot === "statement"
 								? slide.statement
 								: slot === "image"
-									? (slide.caption ?? "Image")
+									? (slide.caption ?? (slide.image_source_id ? null : "Image"))
 									: undefined;
 	return value ?? null;
 }
@@ -174,6 +174,10 @@ function slotStyle(slot: PreviewSlot): CSSProperties {
 				: "left",
 		fontSize: `clamp(4px, ${slot.font_size / 9.6}cqw, ${slot.font_size}px)`,
 	};
+}
+
+function sourceImageUrl(sourceId: string): string {
+	return `/api/sources/${encodeURIComponent(sourceId)}/image`;
 }
 
 function SlidePreview({
@@ -203,6 +207,16 @@ function SlidePreview({
 				<img src={preview.thumbnail_url} alt="" />
 			) : (
 				slots.map(([name, slot]) => {
+					if (name === "image" && slide.image_source_id)
+						return (
+							<img
+								key={name}
+								className="slide-slot slide-slot-image"
+								style={slotStyle(slot)}
+								src={sourceImageUrl(slide.image_source_id)}
+								alt=""
+							/>
+						);
 					const content = slotContent(slide, name);
 					return content ? (
 						<span key={name} className="slide-slot" style={slotStyle(slot)}>
@@ -241,6 +255,7 @@ export function LectureCanvas({
 	presentationVersion,
 	templates,
 	sources,
+	imageSources,
 	busy,
 	onPresentationsChange,
 	onCourseChange,
@@ -256,6 +271,8 @@ export function LectureCanvas({
 	presentationVersion: number;
 	templates: TemplateProfileSummary[];
 	sources: Source[];
+	/** Course Sources that can be shown on an Image Slide. */
+	imageSources: Source[];
 	busy: boolean;
 	onPresentationsChange: () => Promise<void>;
 	onCourseChange: () => Promise<void>;
@@ -806,6 +823,7 @@ export function LectureCanvas({
 									<SlideEditor
 										key={selected.id}
 										slide={selected}
+										imageSources={imageSources}
 										busy={busy}
 										onCancel={() => setEditing(false)}
 										onSave={async (body) => {
@@ -1140,11 +1158,13 @@ function AutoTextarea({
 
 function SlideEditor({
 	slide,
+	imageSources,
 	busy,
 	onCancel,
 	onSave,
 }: {
 	slide: Slide;
+	imageSources: Source[];
 	busy: boolean;
 	onCancel: () => void;
 	onSave: (body: Record<string, unknown>) => Promise<void>;
@@ -1237,7 +1257,39 @@ function SlideEditor({
 				return (
 					<div className="field" key={field}>
 						<label htmlFor={id}>{fieldLabels[field]}</label>
-						{multiline.has(field) ? (
+						{field === "image_source_id" ? (
+							<>
+								<select
+									id={id}
+									value={values[field]}
+									onChange={(event) =>
+										setValues((current) => ({
+											...current,
+											[field]: event.target.value,
+										}))
+									}
+								>
+									<option value="">No image</option>
+									{imageSources.map((source) => (
+										<option key={source.id} value={source.id}>
+											{source.label}
+										</option>
+									))}
+								</select>
+								{values[field] ? (
+									<img
+										className="slide-editor-image"
+										src={sourceImageUrl(values[field])}
+										alt=""
+									/>
+								) : imageSources.length === 0 ? (
+									<small>
+										Paste an image into the conversation and ask the Course
+										Agent to use it, or add an image to the Course Sources.
+									</small>
+								) : null}
+							</>
+						) : multiline.has(field) ? (
 							<AutoTextarea
 								id={id}
 								value={values[field]}

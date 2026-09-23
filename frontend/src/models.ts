@@ -50,6 +50,7 @@ export type ResourceState = {
 	resource_id: string;
 	kind: ResourceKind | null;
 	location: string | null;
+	media_type?: string | null;
 	status: ProcessingStatus;
 	indexed: boolean;
 	error: string | null;
@@ -130,6 +131,7 @@ export type Slide = {
 	text?: string;
 	code?: string;
 	language?: string;
+	image_source_id?: string | null;
 	image_url?: string;
 	caption?: string;
 	quote?: string;

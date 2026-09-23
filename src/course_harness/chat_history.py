@@ -1,5 +1,6 @@
 """Private, Workspace-scoped Course Agent conversation storage."""
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -10,6 +11,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict
 from pydantic_ai.messages import (
+    BinaryContent,
     ModelMessage,
     ModelMessagesTypeAdapter,
     ModelRequest,
@@ -383,6 +385,32 @@ def _visible_messages(history: list[ModelMessage]) -> list[dict[str, object]]:
     return result
 
 
+def _without_images(history: list[ModelMessage]) -> list[ModelMessage]:
+    """Replace viewed image bytes with a reference before a transcript is stored.
+
+    The Snapshot stays in the Library, so the Course Agent can view it again
+    instead of replaying the bytes into every later model request.
+    """
+
+    def strip(part: object) -> object:
+        if not isinstance(part, UserPromptPart) or isinstance(part.content, str):
+            return part
+        content = [
+            f"[Image {item.identifier} was viewed earlier; call view_image to see it again.]"
+            if isinstance(item, BinaryContent) and item.is_image
+            else item
+            for item in part.content
+        ]
+        return dataclasses.replace(part, content=content)
+
+    return [
+        dataclasses.replace(message, parts=[strip(part) for part in message.parts])
+        if isinstance(message, ModelRequest)
+        else message
+        for message in history
+    ]
+
+
 def save_chat_history(
     store_path: Path,
     workspace: Path,
@@ -404,6 +432,7 @@ def save_chat_history(
             )
         ):
             history = history[1:]
+    history = _without_images(history)
     history_payload = ModelMessagesTypeAdapter.dump_python(history, mode="json")
     retained = ChatTranscript.model_validate(
         {"messages": thread.get("retained_messages", [])}

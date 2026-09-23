@@ -63,6 +63,7 @@ class ResourceState(BaseModel):
     resource_id: str
     kind: ResourceKind | None = None
     location: str | None = None
+    media_type: str | None = None
     status: ProcessingStatus
     indexed: bool = False
     error: str | None = None
@@ -236,7 +237,11 @@ MEDIA_TYPE_PROCESSORS: dict[str, str] = {
     "text/x-yaml": "code",
     "application/x-yaml": "code",
     "application/toml": "code",
+    **dict.fromkeys(("image/png", "image/jpeg", "image/gif"), "image"),
 }
+IMAGE_MEDIA_TYPES = frozenset(
+    media_type for media_type, processor in MEDIA_TYPE_PROCESSORS.items() if processor == "image"
+)
 
 
 def content_hash(data: bytes) -> str:
@@ -262,6 +267,10 @@ def identify_media_type(path_or_name: str, content: bytes | None = None) -> str:
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ".ipynb": "application/x-ipynb+json",
         ".html": "text/html",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
     }
     return mapping.get(suffix, "application/octet-stream")
 
@@ -349,6 +358,14 @@ def process_snapshot(
             status="ready",
         )
 
+    if processor_name == "image":
+        try:
+            reference = describe_image(media_type, content)
+        except ValueError as error:
+            return ResourceState(resource_id="", status="failed", error=str(error))
+        (derived_dir / "extracted.md").write_text(reference, encoding="utf-8")
+        return ResourceState(resource_id="", status="ready")
+
     if processor_name == "docling":
         try:
             extracted, structured = convert_document(media_type, content, cache_dir)
@@ -373,6 +390,30 @@ def process_snapshot(
         status="unprocessed",
         error=f"No processor available for {media_type}; content stored as immutable Snapshot.",
     )
+
+
+def image_dimensions(content: bytes) -> tuple[int, int]:
+    """Return an image's pixel size, rejecting content that is not a readable image."""
+    from io import BytesIO  # noqa: PLC0415
+
+    from PIL import Image, UnidentifiedImageError  # noqa: PLC0415
+
+    try:
+        with Image.open(BytesIO(content)) as image:
+            image.verify()
+            return image.size
+    except (UnidentifiedImageError, OSError, SyntaxError) as error:
+        raise ValueError("The image could not be read.") from error
+
+
+def describe_image(media_type: str, content: bytes) -> str:
+    """Build the textual Derived Representation of an image.
+
+    It is what a model without vision input knows about the image, and what a
+    Citation of the image resolves to.
+    """
+    width, height = image_dimensions(content)
+    return f"Image ({media_type}), {width} × {height} px, {len(content)} bytes.\n"
 
 
 def read_library_index(registry_path: Path) -> LibraryIndex:

@@ -93,6 +93,7 @@ class CodeSlide(SlideBase):
 class ImageSlide(SlideBase):
     layout: Literal["image"] = "image"
     title: str | None = None
+    image_source_id: str | None = Field(default=None, pattern=r"^source-[0-9a-f]{12}$")
     image_url: str | None = None
     caption: str | None = None
     speaker_notes: str | None = None
@@ -327,6 +328,8 @@ class SlidePatchRequest(BaseModel):
     text: str | None = None
     code: str | None = None
     language: str | None = None
+    # An empty string removes the Slide's image Source.
+    image_source_id: str | None = Field(default=None, pattern=r"^(source-[0-9a-f]{12})?$")
     image_url: str | None = None
     caption: str | None = None
     quote: str | None = None
@@ -358,6 +361,7 @@ def fill_slide_layout_fields(
         result["code"] = getattr(cmd, "code", "") or ""
         result["language"] = getattr(cmd, "language", None)
     elif layout == "image":
+        result["image_source_id"] = getattr(cmd, "image_source_id", None)
         result["image_url"] = getattr(cmd, "image_url", None)
         result["caption"] = getattr(cmd, "caption", None)
     elif layout == "quote":

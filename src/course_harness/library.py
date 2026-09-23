@@ -67,6 +67,7 @@ def register_and_snapshot(
             resource_id=resource.id,
             kind=resource.kind,
             location=resource.location,
+            media_type=resource.media_type,
             status=state.status,
             indexed=indexed,
             error=state.error,
@@ -91,6 +92,7 @@ def register_remote_reference(
         resource_id=resource.id,
         kind=resource.kind,
         location=resource.location,
+        media_type=resource.media_type,
         status="unprocessed",
     )
 
@@ -142,6 +144,7 @@ def process_existing_resource(
         resource_id=resource.id,
         kind=resource.kind,
         location=resource.location,
+        media_type=resource.media_type,
         status=state.status,
         indexed=indexed,
         error=state.error,
@@ -179,6 +182,7 @@ def list_resources_with_state(data_dir: Path, cache_dir: Path) -> list[ResourceS
             resource_id=resource.id,
             kind=resource.kind,
             location=resource.location,
+            media_type=resource.media_type,
             status=(
                 "ready"
                 if snapshot is not None and _has_representation(cache_dir, resource.snapshot_hash)
@@ -202,6 +206,7 @@ def get_resource_state(data_dir: Path, cache_dir: Path, resource_id: str) -> Res
         resource_id=resource.id,
         kind=resource.kind,
         location=resource.location,
+        media_type=resource.media_type,
         status=(
             "ready"
             if snapshot is not None and _has_representation(cache_dir, resource.snapshot_hash)
@@ -303,6 +308,7 @@ def reprocess_resource(
         resource_id=resource.id,
         kind=resource.kind,
         location=resource.location,
+        media_type=resource.media_type,
         status=state.status,
         indexed=indexed,
         error=state.error,

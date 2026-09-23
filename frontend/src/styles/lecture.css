@@ -209,6 +209,11 @@
 	white-space: pre-line;
 }
 
+.slide-preview img.slide-slot-image {
+	inset: auto;
+	object-fit: contain;
+}
+
 .slide-fallback {
 	position: absolute;
 	inset: 12% 8%;
@@ -342,6 +347,17 @@
 .slide-editor .field textarea {
 	resize: none;
 	overflow: hidden;
+}
+
+.slide-editor-image {
+	display: block;
+	max-width: 100%;
+	max-height: 180px;
+	margin-top: 8px;
+	border: 1px solid var(--rule);
+	border-radius: var(--radius-s);
+	background: var(--surface-sunken);
+	object-fit: contain;
 }
 
 .field .slide-title-input {

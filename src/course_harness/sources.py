@@ -1,10 +1,11 @@
 import os
 import stat
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -44,6 +45,64 @@ class SourceAdmissionRequest(BaseModel):
 
 class InvalidSourcesIndex(ValueError):
     """Canonical Sources state exists but does not satisfy the schema."""
+
+
+@dataclass(frozen=True)
+class SourceImage:
+    """The pinned Source Version of an image Source, ready to place on a Slide."""
+
+    source_id: str
+    source_version_id: str
+    media_type: str
+    path: Path
+
+
+SourceImageResolver = Callable[[str], SourceImage | None]
+
+
+class PinnedSource(Protocol):
+    @property
+    def id(self) -> str: ...
+    @property
+    def resource_id(self) -> str: ...
+    @property
+    def source_version_id(self) -> str: ...
+
+
+def source_image_resolver(workspace: Path, data_dir: Path) -> SourceImageResolver:
+    """Resolve image Source IDs against the Workspace's Sources as they are now."""
+    try:
+        index = read_sources_index(workspace) or SourcesIndex()
+    except InvalidSourcesIndex:
+        index = SourcesIndex()
+    return pinned_image_resolver(index.sources, data_dir)
+
+
+def pinned_image_resolver(sources: Iterable[PinnedSource], data_dir: Path) -> SourceImageResolver:
+    """Resolve image Source IDs to the Source Versions pinned by ``sources``.
+
+    Only Sources whose Resource is an image resolve; anything else, including a
+    missing Snapshot, resolves to ``None`` so callers can degrade gracefully.
+    """
+    from course_harness.library import registry_path, snapshots_dir  # noqa: PLC0415
+    from course_harness.resources import IMAGE_MEDIA_TYPES, read_library_index  # noqa: PLC0415
+
+    media_types = {
+        resource.id: resource.media_type
+        for resource in read_library_index(registry_path(data_dir)).resources
+    }
+    images: dict[str, SourceImage] = {}
+    for source in sources:
+        media_type = media_types.get(source.resource_id)
+        path = snapshots_dir(data_dir) / source.source_version_id
+        if media_type is not None and media_type in IMAGE_MEDIA_TYPES and path.is_file():
+            images[source.id] = SourceImage(
+                source_id=source.id,
+                source_version_id=source.source_version_id,
+                media_type=media_type,
+                path=path,
+            )
+    return images.get
 
 
 def read_pinned_evidence_line_counts(cache_dir: Path, sources: Iterable[Source]) -> dict[str, int]:
