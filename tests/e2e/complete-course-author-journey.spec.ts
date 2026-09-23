@@ -212,8 +212,24 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	await expect(resourcePreview.getByText(/counterfactual/i)).toBeVisible();
 	await page.keyboard.press("Escape");
 	await expect(resourcePreview).toBeHidden();
+	await page.route(
+		"**/api/sources",
+		async (route) => {
+			await route.fulfill({
+				status: 503,
+				contentType: "application/json",
+				body: JSON.stringify({ detail: "Source admission is temporarily unavailable." }),
+			});
+		},
+		{ times: 1 },
+	);
+	await page.getByRole("button", { name: "Use as course material" }).click();
+	await expect(page.getByRole("alert")).toHaveText(
+		"Source admission is temporarily unavailable.",
+	);
 	await page.getByRole("button", { name: "Use as course material" }).click();
 	await expect(page.getByText("Admitted", { exact: true })).toBeVisible();
+	await expect(page.getByRole("alert")).toHaveCount(0);
 
 	const sourcesResponse = await page.request.get("/api/sources");
 	expect(sourcesResponse.ok()).toBe(true);

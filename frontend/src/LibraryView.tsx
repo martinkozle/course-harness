@@ -169,11 +169,12 @@ export function LibraryView({
 	const modelDialog = useRef<HTMLDialogElement>(null);
 	const [processing, setProcessing] = useState<Set<string>>(new Set());
 	const [reprocessing, setReprocessing] = useState<Set<string>>(new Set());
-	const [reprocessErrors, setReprocessErrors] = useState<Map<string, string>>(
+	const [resourceErrors, setResourceErrors] = useState<Map<string, string>>(
 		new Map(),
 	);
 	const [admitting, setAdmitting] = useState<Set<string>>(new Set());
 	const [regenerating, setRegenerating] = useState(false);
+	const [indexError, setIndexError] = useState<string | null>(null);
 	const [searchQuery, setSearchQuery] = useState("");
 	const [searchResults, setSearchResults] = useState<GroupedSearchResult[]>([]);
 	const [searching, setSearching] = useState(false);
@@ -264,6 +265,22 @@ export function LibraryView({
 	const sourceByResource = Object.fromEntries(
 		sources.map((s) => [s.resource_id, s]),
 	);
+	function clearResourceError(resourceId: string) {
+		setResourceErrors((current) => {
+			const next = new Map(current);
+			next.delete(resourceId);
+			return next;
+		});
+	}
+
+	function reportResourceError(resourceId: string, caught: unknown, fallback: string) {
+		setResourceErrors((current) =>
+			new Map(current).set(
+				resourceId,
+				caught instanceof Error ? caught.message : fallback,
+			),
+		);
+	}
 
 	const statusCounts = resources.reduce(
 		(counts, item) => {
@@ -407,6 +424,7 @@ export function LibraryView({
 
 	async function handleProcess(resourceId: string) {
 		setProcessing((current) => new Set(current).add(resourceId));
+		clearResourceError(resourceId);
 		try {
 			const response = await fetch(
 				`/api/resources/${encodeURIComponent(resourceId)}/process`,
@@ -421,6 +439,8 @@ export function LibraryView({
 			const updated = await fetch("/api/resources");
 			if (!updated.ok) throw new Error(await responseError(updated));
 			onResourcesChange((await updated.json()) as ResourceState[]);
+		} catch (caught) {
+			reportResourceError(resourceId, caught, "Could not process this Resource.");
 		} finally {
 			setProcessing((current) => {
 				const next = new Set(current);
@@ -432,11 +452,7 @@ export function LibraryView({
 
 	async function handleReprocess(resourceId: string) {
 		setReprocessing((current) => new Set(current).add(resourceId));
-		setReprocessErrors((current) => {
-			const next = new Map(current);
-			next.delete(resourceId);
-			return next;
-		});
+		clearResourceError(resourceId);
 		try {
 			const response = await fetch(
 				`/api/resources/${encodeURIComponent(resourceId)}/reprocess`,
@@ -452,11 +468,7 @@ export function LibraryView({
 			if (!updated.ok) throw new Error(await responseError(updated));
 			onResourcesChange((await updated.json()) as ResourceState[]);
 		} catch (error) {
-			const message =
-				error instanceof Error ? error.message : "Reprocessing failed.";
-			setReprocessErrors((current) =>
-				new Map(current).set(resourceId, message),
-			);
+			reportResourceError(resourceId, error, "Reprocessing failed.");
 		} finally {
 			setReprocessing((current) => {
 				const next = new Set(current);
@@ -471,6 +483,7 @@ export function LibraryView({
 		if (!resource) return;
 		const label = (resource.location ?? resourceId).slice(0, 200);
 		setAdmitting((current) => new Set(current).add(resourceId));
+		clearResourceError(resourceId);
 		try {
 			const response = await fetch("/api/sources", {
 				method: "POST",
@@ -481,6 +494,8 @@ export function LibraryView({
 			const updated = await fetch("/api/sources");
 			if (!updated.ok) throw new Error(await responseError(updated));
 			onSourcesChange((await updated.json()) as Source[]);
+		} catch (caught) {
+			reportResourceError(resourceId, caught, "Could not admit this Resource.");
 		} finally {
 			setAdmitting((current) => {
 				const next = new Set(current);
@@ -491,6 +506,9 @@ export function LibraryView({
 	}
 
 	async function handleRemoveSource(sourceId: string) {
+		const resourceId = sources.find((source) => source.id === sourceId)?.resource_id;
+		if (!resourceId) return;
+		clearResourceError(resourceId);
 		try {
 			const response = await fetch(
 				`/api/sources/${encodeURIComponent(sourceId)}`,
@@ -500,20 +518,28 @@ export function LibraryView({
 			const updated = await fetch("/api/sources");
 			if (!updated.ok) throw new Error(await responseError(updated));
 			onSourcesChange((await updated.json()) as Source[]);
-		} catch {
-			// Source removal failure is non-blocking
+		} catch (caught) {
+			reportResourceError(resourceId, caught, "Could not unadmit this Source.");
 		}
 	}
 
 	async function handleRegenerateIndex() {
 		setRegenerating(true);
+		setIndexError(null);
 		try {
-			await fetch("/api/resources/cache", { method: "DELETE" });
+			const response = await fetch("/api/resources/cache", {
+				method: "DELETE",
+			});
+			if (!response.ok) throw new Error(await responseError(response));
 			const updated = await fetch("/api/resources");
 			if (!updated.ok) throw new Error(await responseError(updated));
 			onResourcesChange((await updated.json()) as ResourceState[]);
-		} catch {
-			// Regeneration failure is non-blocking
+		} catch (caught) {
+			setIndexError(
+				caught instanceof Error
+					? caught.message
+					: "Could not regenerate the search index.",
+			);
 		} finally {
 			setRegenerating(false);
 		}
@@ -579,11 +605,7 @@ export function LibraryView({
 
 	async function handleRefresh(resourceId: string) {
 		setRefreshing((current) => new Set(current).add(resourceId));
-		setReprocessErrors((current) => {
-			const next = new Map(current);
-			next.delete(resourceId);
-			return next;
-		});
+		clearResourceError(resourceId);
 		try {
 			const response = await fetch(
 				`/api/resources/${encodeURIComponent(resourceId)}/refresh`,
@@ -594,14 +616,7 @@ export function LibraryView({
 			if (!updated.ok) throw new Error(await responseError(updated));
 			onResourcesChange((await updated.json()) as ResourceState[]);
 		} catch (error) {
-			setReprocessErrors((current) =>
-				new Map(current).set(
-					resourceId,
-					error instanceof Error
-						? error.message
-						: "Could not refresh this Resource.",
-				),
-			);
+			reportResourceError(resourceId, error, "Could not refresh this Resource.");
 		} finally {
 			setRefreshing((current) => {
 				const next = new Set(current);
@@ -612,7 +627,10 @@ export function LibraryView({
 	}
 
 	async function handleAdoptVersion(sourceId: string) {
+		const resourceId = sources.find((source) => source.id === sourceId)?.resource_id;
+		if (!resourceId) return;
 		setAdopting((current) => new Set(current).add(sourceId));
+		clearResourceError(resourceId);
 		try {
 			const response = await fetch(
 				`/api/sources/${encodeURIComponent(sourceId)}/adopt-version`,
@@ -622,6 +640,8 @@ export function LibraryView({
 			const updated = await fetch("/api/sources");
 			if (!updated.ok) throw new Error(await responseError(updated));
 			onSourcesChange((await updated.json()) as Source[]);
+		} catch (caught) {
+			reportResourceError(resourceId, caught, "Could not adopt the latest Source version.");
 		} finally {
 			setAdopting((current) => {
 				const next = new Set(current);
@@ -633,6 +653,7 @@ export function LibraryView({
 
 	async function handleRemoveResource(resourceId: string) {
 		setRemoving((current) => new Set(current).add(resourceId));
+		clearResourceError(resourceId);
 		try {
 			const response = await fetch(
 				`/api/resources/${encodeURIComponent(resourceId)}`,
@@ -642,6 +663,8 @@ export function LibraryView({
 			const updated = await fetch("/api/resources");
 			if (!updated.ok) throw new Error(await responseError(updated));
 			onResourcesChange((await updated.json()) as ResourceState[]);
+		} catch (caught) {
+			reportResourceError(resourceId, caught, "Could not remove this Resource.");
 		} finally {
 			setRemoving((current) => {
 				const next = new Set(current);
@@ -908,6 +931,11 @@ export function LibraryView({
 						</label>
 					</div>
 				</div>
+				{indexError ? (
+					<p className="library-error" role="alert">
+						{indexError}
+					</p>
+				) : null}
 
 				<div className="library-stats" aria-live="polite">
 					<span className="count-badge">{resources.length}</span>
@@ -1014,9 +1042,9 @@ export function LibraryView({
 											{resource.error}
 										</p>
 									) : null}
-									{reprocessErrors.get(resource.resource_id) ? (
+									{resourceErrors.get(resource.resource_id) ? (
 										<p className="library-error" role="alert">
-											{reprocessErrors.get(resource.resource_id)}
+											{resourceErrors.get(resource.resource_id)}
 										</p>
 									) : null}
 									<div className="resource-actions">

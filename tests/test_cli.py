@@ -1,4 +1,5 @@
 import subprocess
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +8,20 @@ import pytest
 from typer.testing import CliRunner
 
 from course_harness.cli import app
+
+
+def test_cli_reports_installed_version_without_starting_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_server(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("The version flag must not start the server")
+
+    monkeypatch.setattr("course_harness.cli.uvicorn.run", unexpected_server)
+
+    result = CliRunner().invoke(app, ["--version"])
+
+    assert result.exit_code == 0
+    assert result.stdout == f"course-harness {version('course-harness')}\n"
 
 
 @pytest.mark.anyio

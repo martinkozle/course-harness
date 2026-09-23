@@ -1,6 +1,7 @@
 import sys
 import threading
 import webbrowser
+from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, NoReturn
 
@@ -47,7 +48,14 @@ def launch(
         bool,
         typer.Option("--no-browser", help="Start without opening the application in a browser"),
     ] = False,
+    show_version: Annotated[
+        bool,
+        typer.Option("--version", help="Show the installed Course Harness version and exit"),
+    ] = False,
 ) -> None:
+    if show_version:
+        typer.echo(f"course-harness {version('course-harness')}")
+        return
     workspace = _workspace_from(workspace_path) if workspace_path is not None else None
     recent_store_path = default_recent_store_path()
     if workspace is not None:

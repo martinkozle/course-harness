@@ -158,6 +158,23 @@ test("major Course Author journey surfaces meet automated and keyboard accessibi
 		page.getByRole("heading", { name: "Resources", exact: true }),
 	).toBeVisible();
 	await expectNoAccessibilityViolations(page, "Source Library");
+	await page.route(
+		"**/api/resources/cache",
+		async (route) => {
+			await route.fulfill({
+				status: 503,
+				contentType: "application/json",
+				body: JSON.stringify({ detail: "Search index is temporarily unavailable." }),
+			});
+		},
+		{ times: 1 },
+	);
+	await page.getByRole("button", { name: "Regenerate search index" }).click();
+	await expect(page.getByRole("alert")).toHaveText(
+		"Search index is temporarily unavailable.",
+	);
+	await page.getByRole("button", { name: "Regenerate search index" }).click();
+	await expect(page.getByRole("alert")).toHaveCount(0);
 
 	await page.getByRole("button", { name: "Templates" }).click();
 	await expect(

@@ -38,6 +38,8 @@ application automatically, or `--port <number>` to choose another local port:
 course-harness /path/to/course-workspace
 ```
 
+Run `course-harness --version` to check the installed build.
+
 Course Harness stores canonical Course state in readable Workspace files. Runtime caches,
 application state, and provider credentials stay in platform-native user locations outside Course
 Workspaces. Provider credentials use a safe operating-system keyring when one is available and a
