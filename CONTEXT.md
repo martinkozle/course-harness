@@ -152,6 +152,14 @@ _Avoid_: Model, connection, provider configuration
 A named model choice with verified capabilities that uses one Provider Account; multiple Model Presets may share the same Provider Account.
 _Avoid_: Provider, connection, model configuration
 
+**Connector**:
+A per-installation, Course Author-configured external tool server, such as a remote MCP web search, whose tools the Course Agent may use for research; what it returns is Candidate material until admitted.
+_Avoid_: Plugin, integration, Provider Account
+
+**Connector Credential**:
+A private secret, such as an API key header, that authenticates one Connector and lives in installation credential storage, never in a Course Workspace.
+_Avoid_: Provider Account, API key setting
+
 **Worker Agent**:
 A temporary model-powered delegate that receives a narrow assignment and returns research, Evidence, critique, or a draft proposal without directly changing authoritative Course state. It is distinct from a generic asynchronous or background application job.
 _Avoid_: Course Agent, pipeline node, background task
