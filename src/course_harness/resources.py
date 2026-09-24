@@ -51,6 +51,8 @@ class Resource(BaseModel):
     registered_at: str
     snapshot_hash: str | None = None
     snapshot_history: list[str] = Field(default_factory=list)
+    # The Connector that read the current Snapshot when the page could not be fetched directly.
+    captured_via: str | None = None
 
 
 class Snapshot(BaseModel):
@@ -73,6 +75,7 @@ class ResourceState(BaseModel):
     indexed: bool = False
     error: str | None = None
     snapshot: Snapshot | None = None
+    captured_via: str | None = None
 
 
 class LibraryIndex(BaseModel):
@@ -315,6 +318,8 @@ def update_resource_snapshot(
     resource_id: str,
     snapshot_hash: str,
     media_type: str | None = None,
+    *,
+    captured_via: str | None = None,
 ) -> Resource | None:
     index = read_library_index(registry_path)
     for idx, resource in enumerate(index.resources):
@@ -328,6 +333,7 @@ def update_resource_snapshot(
                     "snapshot_hash": snapshot_hash,
                     "snapshot_history": history,
                     "media_type": media_type or resource.media_type,
+                    "captured_via": captured_via,
                 }
             )
             index.resources[idx] = updated

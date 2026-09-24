@@ -59,6 +59,8 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+  # In-process MCP servers stand in for Connectors in tests.
+  "fastmcp-slim[server]<4",
   "pypdf>=6.0",
   "pytest",
   "ruff",

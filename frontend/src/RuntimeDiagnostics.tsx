@@ -39,6 +39,8 @@ const pathLabels: Record<string, string> = {
 	releases: "Published Releases",
 	provider_configuration: "Provider Account data",
 	provider_credentials: "Provider credentials",
+	connector_configuration: "Connector settings",
+	connector_credentials: "Connector credentials without a keyring",
 };
 
 const credentialStorageLabels = {

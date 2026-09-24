@@ -7,6 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import uvicorn
+from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
@@ -247,6 +248,10 @@ uvicorn.run(
         agent_model=FunctionModel(stream_function=course_planning_model),
         provider_validator=verified_capabilities,
         provider_account_validator=verified_account,
+        # The smoke journey must not reach the default Exa Connector over the network.
+        connector_connect=lambda connector: MCPToolset(
+            "http://127.0.0.1:9/mcp", id=connector.id, init_timeout=2
+        ),
     ),
     host="127.0.0.1",
     port=18765,

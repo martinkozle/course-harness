@@ -969,3 +969,17 @@
 		flex-basis: calc(100% - 48px);
 	}
 }
+
+/* The Conversation pane is narrow: put each result's actions under its details. */
+.research-body .sources-candidate {
+	flex-wrap: wrap;
+}
+
+.research-body .sources-candidate .row-main {
+	flex-basis: 100%;
+}
+
+.research-body .sources-candidate-actions {
+	width: 100%;
+	justify-content: flex-start;
+}

@@ -63,6 +63,7 @@ from course_harness.workspace_history import (
 )
 
 RESEARCH_CANDIDATES_KIND = "research_candidates"
+CONNECTOR_RESULT_KIND = "connector_result"
 
 
 NEEDS_COURSE_PLAN = (

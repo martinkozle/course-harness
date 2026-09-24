@@ -5,11 +5,13 @@ import {
 	Folder,
 	FolderOpen,
 	LayoutTemplate,
+	Plug,
 	Stethoscope,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 
 import { responseError } from "../api";
+import { ConnectorSettings } from "../ConnectorSettings";
 import type {
 	ModelCatalog,
 	TemplateProfileSummary,
@@ -24,12 +26,18 @@ import type { Library } from "../useLibrary";
 
 export type SettingsSection =
 	| "models"
+	| "connectors"
 	| "templates"
 	| "workspace"
 	| "diagnostics";
 
 const sections: { id: SettingsSection; label: string; icon: ReactNode }[] = [
 	{ id: "models", label: "Models", icon: <Bot aria-hidden="true" /> },
+	{
+		id: "connectors",
+		label: "Connectors",
+		icon: <Plug aria-hidden="true" />,
+	},
 	{
 		id: "templates",
 		label: "Templates",
@@ -105,6 +113,8 @@ export function SettingsDialog({
 							catalog={catalog}
 							onCatalogChange={onCatalogChange}
 						/>
+					) : section === "connectors" ? (
+						<ConnectorSettings />
 					) : section === "templates" ? (
 						<TemplateSettings
 							templates={templates}

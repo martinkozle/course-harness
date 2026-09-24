@@ -68,6 +68,10 @@ async def test_runtime_diagnostics_are_available_unbound_and_read_only(tmp_path:
         "releases": str(paths.release_data_path),
         "provider_configuration": str(paths.provider_store_path),
         "provider_credentials": str(paths.provider_credentials_path),
+        "connector_configuration": str(paths.provider_store_path / "connectors.json"),
+        "connector_credentials": str(
+            paths.provider_store_path / "connector-credentials" / "credentials.json"
+        ),
     }
     assert body["provider"] == {
         "configured": False,
@@ -175,6 +179,10 @@ async def test_runtime_diagnostics_use_effective_location_overrides(tmp_path: Pa
         "releases": str(overrides["release_data_path"]),
         "provider_configuration": str(overrides["provider_store_path"]),
         "provider_credentials": str(overrides["provider_store_path"] / "credentials.json"),
+        "connector_configuration": str(overrides["provider_store_path"] / "connectors.json"),
+        "connector_credentials": str(
+            overrides["provider_store_path"] / "connector-credentials" / "credentials.json"
+        ),
     }
 
 

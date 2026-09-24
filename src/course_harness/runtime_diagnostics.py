@@ -56,6 +56,11 @@ def runtime_diagnostics(
             "releases": str(locations.release_data_path),
             "provider_configuration": str(locations.provider_store_path),
             "provider_credentials": provider.credential_storage.location,
+            "connector_configuration": str(locations.provider_store_path / "connectors.json"),
+            # Connector Credentials prefer the operating-system keyring; this is the fallback.
+            "connector_credentials": str(
+                locations.provider_store_path / "connector-credentials" / "credentials.json"
+            ),
         },
         provider=provider,
         parser=ParserCapability(

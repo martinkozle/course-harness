@@ -56,13 +56,26 @@ class CredentialStore:
     keyring.
     """
 
-    def __init__(self, store_path: Path, *, keyring_backend: KeyringBackend | None = None) -> None:
+    def __init__(
+        self,
+        store_path: Path,
+        *,
+        keyring_backend: KeyringBackend | None = None,
+        service: str = _SERVICE_NAME,
+    ) -> None:
         self.store_path = store_path
         self._keyring_backend = keyring_backend
+        self._service = service
 
     @classmethod
-    def for_provider_store(cls, store_path: Path, *, use_os_keyring: bool) -> CredentialStore:
-        return cls(store_path, keyring_backend=_safe_keyring_backend() if use_os_keyring else None)
+    def for_provider_store(
+        cls, store_path: Path, *, use_os_keyring: bool, service: str = _SERVICE_NAME
+    ) -> CredentialStore:
+        return cls(
+            store_path,
+            keyring_backend=_safe_keyring_backend() if use_os_keyring else None,
+            service=service,
+        )
 
     @property
     def credentials_path(self) -> Path:
@@ -78,7 +91,7 @@ class CredentialStore:
             if self._keyring_backend is None:
                 return None
             try:
-                return self._keyring_backend.get_password(_SERVICE_NAME, account_id)
+                return self._keyring_backend.get_password(self._service, account_id)
             except Exception:
                 return None
         return self._read_file_credentials().get(account_id)
@@ -96,7 +109,7 @@ class CredentialStore:
         if self._keyring_backend is not None:
             previous_keyring_credential = self._keyring_credential(account_id)
             try:
-                self._keyring_backend.set_password(_SERVICE_NAME, account_id, credential)
+                self._keyring_backend.set_password(self._service, account_id, credential)
             except Exception as error:
                 # Some backends can change a secret and still raise. Restore the
                 # known prior value before committing the file fallback.
@@ -157,7 +170,7 @@ class CredentialStore:
                     "The operating-system keyring credential is unavailable."
                 )
             try:
-                self._keyring_backend.delete_password(_SERVICE_NAME, account_id)
+                self._keyring_backend.delete_password(self._service, account_id)
             except Exception as error:
                 raise CredentialStoreError(
                     "The operating-system keyring could not delete the key."
@@ -218,7 +231,7 @@ class CredentialStore:
                 raise CredentialStoreError("The operating-system keyring is unavailable.")
             try:
                 self._keyring_backend.set_password(
-                    _SERVICE_NAME,
+                    self._service,
                     recovery.account_id,
                     recovery.credential,
                 )
@@ -301,7 +314,7 @@ class CredentialStore:
     def _keyring_credential(self, account_id: str) -> str | None:
         assert self._keyring_backend is not None
         try:
-            return self._keyring_backend.get_password(_SERVICE_NAME, account_id)
+            return self._keyring_backend.get_password(self._service, account_id)
         except Exception as error:
             raise CredentialStoreError("The operating-system keyring is unavailable.") from error
 
@@ -309,9 +322,9 @@ class CredentialStore:
         assert self._keyring_backend is not None
         try:
             if credential is None:
-                self._keyring_backend.delete_password(_SERVICE_NAME, account_id)
+                self._keyring_backend.delete_password(self._service, account_id)
             else:
-                self._keyring_backend.set_password(_SERVICE_NAME, account_id, credential)
+                self._keyring_backend.set_password(self._service, account_id, credential)
         except Exception as error:
             raise CredentialStoreError(
                 "The operating-system keyring credential could not be restored safely."
@@ -335,7 +348,7 @@ class CredentialStore:
         # best-effort cleanup reports an absent/cancelled item.
         assert self._keyring_backend is not None
         with suppress(Exception):
-            self._keyring_backend.delete_password(_SERVICE_NAME, account_id)
+            self._keyring_backend.delete_password(self._service, account_id)
         return True
 
     def _snapshot(self, path: Path) -> bytes | None:
@@ -411,7 +424,7 @@ class CredentialStore:
         try:
             if restored_keyring:
                 assert self._keyring_backend is not None
-                self._keyring_backend.delete_password(_SERVICE_NAME, account_id)
+                self._keyring_backend.delete_password(self._service, account_id)
             self._restore_private_snapshots(post_delete_metadata, post_delete_credentials)
         except Exception as error:
             raise CredentialStoreError("Credential recovery could not be undone safely.") from error

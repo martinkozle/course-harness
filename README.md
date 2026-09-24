@@ -79,6 +79,17 @@ relevant results itself and tells you which; for a narrow one it lists them and 
 an address that a search returned or that you gave it. A Course Plan must exist before Sources can
 be added.
 
+**Settings → Connectors** adds web search. A Connector is a remote MCP server whose tools the
+Course Agent may use; **Exa** is set up by default and works without a key at Exa's free,
+rate-limited tier. Put an Exa API key in its `x-api-key` header to raise the limits, or delete Exa
+and add another search service with its own URL and headers. Header values and URLs marked secret
+are stored like provider keys, in the operating-system keyring or a private file, never in a Course
+Workspace. **Test** lists a Connector's tools so you can choose which the agent may use and which
+one reads pages. Your requests, including search queries, are sent to each enabled Connector. When
+a site blocks a direct download or renders its text with scripts, Course Harness reads the page
+through that page reader instead and records which Connector read it. Only HTTPS Connectors, or
+HTTP to this computer, are accepted.
+
 Each Workspace can keep multiple Conversations in that private application state. The navigator
 lists them; each row's menu renames, archives, or deletes one. A new Conversation stays an unsaved
 draft until you send its first message, and an unsent message is kept per Conversation while you

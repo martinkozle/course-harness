@@ -6,13 +6,14 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import AgentRunResult, DeferredToolRequests
+from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.models import Model
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 from starlette.background import BackgroundTask
@@ -23,7 +24,7 @@ from starlette.responses import Response as StarletteResponse
 from starlette.responses import StreamingResponse
 from starlette.staticfiles import StaticFiles
 
-from course_harness import docling_parser, library
+from course_harness import connector_tools, docling_parser, library
 from course_harness import resources as res
 from course_harness import search as search_module
 from course_harness import sources as sources_module
@@ -53,6 +54,22 @@ from course_harness.chat_history import (
     read_conversation_transcript,
     save_chat_history,
     update_conversation,
+)
+from course_harness.connector_tools import (
+    ConnectorConnect,
+    ConnectorToolCache,
+    connector_toolsets,
+    describe_error,
+    fetch_via_connector,
+    list_connector_tools,
+)
+from course_harness.connectors import (
+    ConnectorError,
+    ConnectorInput,
+    ConnectorStore,
+    ConnectorTest,
+    ConnectorView,
+    ResolvedConnector,
 )
 from course_harness.course_agent import (
     AgentMode,
@@ -202,6 +219,8 @@ STREAM_TERMINATION_CONFIRMATION_SECONDS = 0.5
 MAX_UPLOAD_FILENAME_LENGTH = 255
 # Long enough for docling to convert a typical paper on a CPU.
 REMOTE_CAPTURE_TIMEOUT_SECONDS = 300.0
+# Less readable text than this suggests a page that renders its content with scripts.
+MIN_WEB_PAGE_CHARS = 500
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_MULTIPART_FIELD_BYTES = 64 * 1024
 # This covers the multipart boundary and a normal file disposition. The parser
@@ -427,11 +446,15 @@ def create_app(
     ] = list_provider_models,
     provider_account_validator: ProviderAccountValidator = validate_provider_account,
     remote_host_resolver: res.RemoteHostResolver = res.resolve_remote_host,
+    connector_connect: ConnectorConnect | None = None,
     precompute_template_backgrounds: bool = True,
 ) -> FastAPI:
     """Create the HTTP application, optionally bound to one Course Workspace."""
     if not logging.getLogger("course-harness").handlers:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        # Connector clients log every MCP request at INFO.
+        for name in ("httpx", "mcp", "fastmcp"):
+            logging.getLogger(name).setLevel(logging.WARNING)
     logger = logging.getLogger("course-harness")
 
     app = FastAPI(title="Course Harness")
@@ -564,6 +587,17 @@ def create_app(
     templates_cache = locations.templates_cache_path
     release_data = locations.release_data_path
     chat_path = locations.chat_store_path
+    if connector_connect is None:
+
+        def connector_connect(connector: ResolvedConnector) -> MCPToolset[Any]:
+            return connector_tools.connect(connector)
+
+    connector_tool_cache = ConnectorToolCache()
+    # Like Provider Accounts, only the platform store may reach the OS keyring.
+    connector_store = ConnectorStore.for_provider_store(
+        provider_path,
+        use_os_keyring=provider_path == RuntimePaths.platform().provider_store_path,
+    )
     startup_diagnostics = runtime_diagnostics(locations)
     logger.info(
         "Runtime capabilities: provider=%s; parsers=%s; LibreOffice=%s",
@@ -1248,6 +1282,55 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Model Preset was not found") from error
 
+    def enabled_connectors() -> list[ResolvedConnector]:
+        try:
+            return connector_store.enabled()
+        except ConnectorError as error:
+            logger.warning("Connectors are unavailable: %s", error)
+            return []
+
+    def connector_call[T](action: Callable[[], T]) -> T:
+        require_workspace()
+        try:
+            return action()
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Connector was not found") from error
+        except ConnectorError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.get("/api/connectors", response_model=list[ConnectorView])
+    async def list_connectors() -> list[ConnectorView]:
+        return connector_call(connector_store.views)
+
+    @app.post("/api/connectors", response_model=ConnectorView, status_code=201)
+    async def create_connector(request: ConnectorInput) -> ConnectorView:
+        return connector_call(lambda: connector_store.create(request))
+
+    @app.put("/api/connectors/{connector_id}", response_model=ConnectorView)
+    async def update_connector(connector_id: str, request: ConnectorInput) -> ConnectorView:
+        return connector_call(lambda: connector_store.update(connector_id, request))
+
+    @app.delete("/api/connectors/{connector_id}", status_code=204)
+    async def delete_connector(connector_id: str) -> Response:
+        connector_call(lambda: connector_store.delete(connector_id))
+        return Response(status_code=204)
+
+    @app.post("/api/connectors/restore-defaults", response_model=list[ConnectorView])
+    async def restore_default_connectors() -> list[ConnectorView]:
+        return connector_call(connector_store.restore_defaults)
+
+    @app.post("/api/connectors/{connector_id}/test", response_model=ConnectorTest)
+    async def test_connector(connector_id: str) -> ConnectorTest:
+        connector = connector_call(lambda: connector_store.resolve(connector_id))
+        try:
+            tools = await list_connector_tools(connector, connector_connect, connector_tool_cache)
+        except Exception as error:
+            raise HTTPException(
+                status_code=502,
+                detail=f"{connector.name} could not be reached: {describe_error(error)}",
+            ) from error
+        return ConnectorTest(tools=tools)
+
     class ConversationCreateRequest(BaseModel):
         title: str | None = Field(default=None, max_length=200)
 
@@ -1625,6 +1708,13 @@ def create_app(
                 conversation_id=conversation_id,
                 on_complete=persist_if_not_cancelled,
                 allowed_file_url_schemes=frozenset(),
+                toolsets=(
+                    None
+                    if is_reconciliation
+                    else connector_toolsets(
+                        enabled_connectors(), connector_tool_cache, connector_connect
+                    )
+                ),
             )
         except BaseException:
             try:
@@ -2685,7 +2775,37 @@ def create_app(
         state = library.get_resource_state(data_dir, cache_dir, resource_id)
         if state is None:
             raise ValueError("The Resource was removed from the Library while it was captured.")
-        return with_remote_job_state(state)
+        state = with_remote_job_state(state)
+        if not needs_connector_fetch(state):
+            return state
+        # A blocked or script-rendered page can often still be read by a Connector.
+        fetched = await fetch_via_connector(enabled_connectors(), url, connector_connect)
+        if fetched is None:
+            return state
+        markdown, connector_name = fetched
+        async with resource_registry_lock:
+            snapshot = await asyncio.to_thread(
+                library.save_connector_snapshot, data_dir, resource_id, markdown, connector_name
+            )
+        if snapshot is None:
+            return state
+        processed = await asyncio.to_thread(
+            library.reprocess_resource, data_dir, cache_dir, resource_id
+        )
+        remote_job_states.pop(resource_id, None)
+        return processed or state
+
+    def needs_connector_fetch(state: res.ResourceState) -> bool:
+        if state.status != "ready":
+            # Missing PDF models are for the Course Author to download, not to route around.
+            return "PDF processing models" not in (state.error or "")
+        if state.media_type not in docling_parser.HTML_MEDIA_TYPES or state.snapshot is None:
+            return False
+        extracted = library.derived_dir(cache_dir) / state.snapshot.content_hash / "extracted.md"
+        try:
+            return len(extracted.read_text(encoding="utf-8").strip()) < MIN_WEB_PAGE_CHARS
+        except OSError:
+            return False
 
     @app.get("/api/resources", response_model=list[res.ResourceState])
     async def list_resources() -> list[res.ResourceState]:

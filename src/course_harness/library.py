@@ -111,6 +111,21 @@ def save_remote_snapshot(
     return snapshot
 
 
+def save_connector_snapshot(
+    data_dir: Path, resource_id: str, markdown: str, connector: str
+) -> Snapshot | None:
+    """Attach page text a Connector read, recording which Connector read it."""
+    registry = registry_path(data_dir)
+    index = read_library_index(registry)
+    if not any(resource.id == resource_id for resource in index.resources):
+        return None
+    snapshot = create_snapshot(snapshots_dir(data_dir), resource_id, markdown.encode("utf-8"))
+    updated = update_resource_snapshot(
+        registry, resource_id, snapshot.content_hash, "text/markdown", captured_via=connector
+    )
+    return snapshot if updated is not None else None
+
+
 def _index_if_ready(cache_dir: Path, content_hash: str) -> bool:
     from course_harness.search import index_resource  # noqa: PLC0415
 
@@ -190,6 +205,7 @@ def list_resources_with_state(data_dir: Path, cache_dir: Path) -> list[ResourceS
             ),
             indexed=indexed,
             snapshot=snapshot,
+            captured_via=resource.captured_via,
         )
         results.append(result)
     return results
@@ -214,6 +230,7 @@ def get_resource_state(data_dir: Path, cache_dir: Path, resource_id: str) -> Res
         ),
         indexed=indexed,
         snapshot=snapshot,
+        captured_via=resource.captured_via,
     )
 
 
@@ -318,6 +335,7 @@ def reprocess_resource(
             byte_count=snapshot_path.stat().st_size,
             captured_at=resource.registered_at,
         ),
+        captured_via=resource.captured_via,
     )
 
 

@@ -469,3 +469,40 @@ export type ReaderTarget = {
 	lineStart: number | null;
 	lineEnd: number | null;
 };
+
+export type ConnectorHeader = {
+	name: string;
+	value: string | null;
+	secret: boolean;
+	configured: boolean;
+};
+
+export type Connector = {
+	id: string;
+	name: string;
+	url: string;
+	url_secret: boolean;
+	headers: ConnectorHeader[];
+	enabled: boolean;
+	hidden_tools: string[];
+	fetch_tool: string | null;
+	preset: "exa" | null;
+	credential_storage:
+		| "os-keyring"
+		| "private-json-file"
+		| "unavailable"
+		| "unconfigured"
+		| null;
+};
+
+export type ConnectorTool = { name: string; description: string | null };
+
+export type ConnectorInput = {
+	name: string;
+	url: string;
+	url_secret: boolean;
+	headers: { name: string; value: string | null; secret: boolean }[];
+	enabled: boolean;
+	hidden_tools: string[];
+	fetch_tool: string | null;
+};
