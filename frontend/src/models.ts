@@ -506,3 +506,10 @@ export type ConnectorInput = {
 	hidden_tools: string[];
 	fetch_tool: string | null;
 };
+
+export type PaperSearchKey = {
+	provider: "semantic_scholar";
+	label: string;
+	configured: boolean;
+	credential_storage: Connector["credential_storage"];
+};

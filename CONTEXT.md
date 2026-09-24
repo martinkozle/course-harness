@@ -160,6 +160,10 @@ _Avoid_: Plugin, integration, Provider Account
 A private secret, such as an API key header, that authenticates one Connector and lives in installation credential storage, never in a Course Workspace.
 _Avoid_: Provider Account, API key setting
 
+**Paper Search Key**:
+An optional private API key for one native paper index, such as Semantic Scholar, that raises its rate limit; it lives in installation credential storage, never in a Course Workspace, and is not a Connector Credential because paper search is not a Connector.
+_Avoid_: Connector Credential, research key
+
 **Worker Agent**:
 A temporary model-powered delegate that receives a narrow assignment and returns research, Evidence, critique, or a draft proposal without directly changing authoritative Course state. It is distinct from a generic asynchronous or background application job.
 _Avoid_: Course Agent, pipeline node, background task

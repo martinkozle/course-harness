@@ -145,7 +145,7 @@ def test_paper_search_shows_candidates_without_changing_the_library_or_course(
             )
         return ModelResponse(parts=[TextPart(content="I found one strong overview.")])
 
-    async def fake_discover(request):
+    async def fake_discover(request, api_keys=None):
         assert set(request.providers) == {"arxiv", "crossref", "semantic_scholar", "openalex"}
         return [
             DiscoveryResult(
@@ -299,7 +299,7 @@ def _research_app(tmp_path: Path, model: Any) -> tuple[Any, Path]:
     return app, workspace
 
 
-async def _fake_discover(_request: object) -> list[DiscoveryResult]:
+async def _fake_discover(_request: object, api_keys: object = None) -> list[DiscoveryResult]:
     return [
         DiscoveryResult(
             provider="semantic_scholar",

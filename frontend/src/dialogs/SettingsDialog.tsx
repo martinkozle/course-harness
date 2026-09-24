@@ -18,6 +18,7 @@ import type {
 	Workspace,
 	WorkspaceEntry,
 } from "../models";
+import { PaperSearchSettings } from "../PaperSearchSettings";
 import { ModelSettings } from "../ProviderSetup";
 import { RuntimeDiagnosticsPanel } from "../RuntimeDiagnostics";
 import { TemplateSettings } from "../TemplatesView";
@@ -35,7 +36,7 @@ const sections: { id: SettingsSection; label: string; icon: ReactNode }[] = [
 	{ id: "models", label: "Models", icon: <Bot aria-hidden="true" /> },
 	{
 		id: "connectors",
-		label: "Connectors",
+		label: "Research",
 		icon: <Plug aria-hidden="true" />,
 	},
 	{
@@ -114,7 +115,10 @@ export function SettingsDialog({
 							onCatalogChange={onCatalogChange}
 						/>
 					) : section === "connectors" ? (
-						<ConnectorSettings />
+						<div className="model-settings">
+							<ConnectorSettings />
+							<PaperSearchSettings />
+						</div>
 					) : section === "templates" ? (
 						<TemplateSettings
 							templates={templates}

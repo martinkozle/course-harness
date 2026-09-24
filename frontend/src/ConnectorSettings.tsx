@@ -20,7 +20,7 @@ type Draft = {
 	headers: HeaderDraft[];
 };
 
-const storageLabels: Record<string, string> = {
+export const storageLabels: Record<string, string> = {
 	"os-keyring": "Keys are in the operating-system keyring.",
 	"private-json-file": "Keys are in a private file on this computer.",
 	unavailable: "Saved keys are unavailable. Enter them again.",

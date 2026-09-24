@@ -96,6 +96,13 @@ from course_harness.course_plan import (
 )
 from course_harness.credential_store import CredentialStoreError
 from course_harness.export import ExportError, export_presentation, validate_export_mapping
+from course_harness.paper_search_keys import (
+    PaperSearchKeyError,
+    PaperSearchKeyInput,
+    PaperSearchKeyProvider,
+    PaperSearchKeyStore,
+    PaperSearchKeyView,
+)
 from course_harness.presentation import (
     Presentation,
     Slide,
@@ -595,6 +602,10 @@ def create_app(
     connector_tool_cache = ConnectorToolCache()
     # Like Provider Accounts, only the platform store may reach the OS keyring.
     connector_store = ConnectorStore.for_provider_store(
+        provider_path,
+        use_os_keyring=provider_path == RuntimePaths.platform().provider_store_path,
+    )
+    paper_search_key_store = PaperSearchKeyStore.for_provider_store(
         provider_path,
         use_os_keyring=provider_path == RuntimePaths.platform().provider_store_path,
     )
@@ -1319,6 +1330,31 @@ def create_app(
     async def restore_default_connectors() -> list[ConnectorView]:
         return connector_call(connector_store.restore_defaults)
 
+    def paper_search_key_call[T](action: Callable[[], T]) -> T:
+        require_workspace()
+        try:
+            return action()
+        except PaperSearchKeyError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.get("/api/paper-search-keys", response_model=list[PaperSearchKeyView])
+    async def list_paper_search_keys() -> list[PaperSearchKeyView]:
+        return paper_search_key_call(paper_search_key_store.views)
+
+    @app.put("/api/paper-search-keys/{provider}", response_model=list[PaperSearchKeyView])
+    async def save_paper_search_key(
+        provider: PaperSearchKeyProvider, request: PaperSearchKeyInput
+    ) -> list[PaperSearchKeyView]:
+        paper_search_key_call(lambda: paper_search_key_store.save(provider, request))
+        return paper_search_key_call(paper_search_key_store.views)
+
+    @app.delete("/api/paper-search-keys/{provider}", response_model=list[PaperSearchKeyView])
+    async def delete_paper_search_key(
+        provider: PaperSearchKeyProvider,
+    ) -> list[PaperSearchKeyView]:
+        paper_search_key_call(lambda: paper_search_key_store.delete(provider))
+        return paper_search_key_call(paper_search_key_store.views)
+
     @app.post("/api/connectors/{connector_id}/test", response_model=ConnectorTest)
     async def test_connector(connector_id: str) -> ConnectorTest:
         connector = connector_call(lambda: connector_store.resolve(connector_id))
@@ -1655,6 +1691,7 @@ def create_app(
                 chat_store_path=chat_path,
                 vision=configuration.capabilities.vision,
                 capture_remote=None if is_reconciliation else capture_remote_resource,
+                paper_search_keys=paper_search_key_store.keys,
                 before_mutation=None if is_reconciliation else protect_agent_mutation,
                 after_mutation=None if is_reconciliation else checkpoint_agent_mutation,
                 create_revision=(
@@ -3037,7 +3074,7 @@ def create_app(
         require_workspace()
         from course_harness import discovery  # noqa: PLC0415
 
-        return await discovery.discover(request)
+        return await discovery.discover(request, api_keys=paper_search_key_store.keys())
 
     @app.post("/api/discovery/inspect", response_model=res.Candidate)
     async def inspect_remote(request: res.RemoteFetchRequest) -> res.Candidate:

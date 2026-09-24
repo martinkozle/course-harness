@@ -1,7 +1,7 @@
 import enum
 import json
 import subprocess
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -279,6 +279,8 @@ class CourseAgentDeps:
     vision: bool = False
     # Captures a remote URL into the Library and waits until it is processed.
     capture_remote: Callable[[str], Awaitable[ResourceState]] | None = None
+    # Reads the saved Paper Search Keys, by provider, when a search runs.
+    paper_search_keys: Callable[[], Mapping[str, str]] | None = None
     before_mutation: Callable[[], None] | None = None
     after_mutation: Callable[[], None] | None = None
     create_revision: Callable[[str], str] | None = None
@@ -922,7 +924,8 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         from course_harness.discovery import search_papers as search  # noqa: PLC0415
 
         bounded = max(1, min(limit, 15))
-        candidates, errors = await search(query, providers, bounded)
+        keys = ctx.deps.paper_search_keys() if ctx.deps.paper_search_keys else None
+        candidates, errors = await search(query, providers, bounded, api_keys=keys)
         digests = [candidate_digest(candidate) for candidate in candidates]
         found = f"{len(digests)} paper{'' if len(digests) == 1 else 's'}"
         return ToolReturn(

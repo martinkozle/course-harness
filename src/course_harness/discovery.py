@@ -1,7 +1,7 @@
 import asyncio
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import httpx2
@@ -151,13 +151,16 @@ async def search_semantic_scholar(
     query: str,
     limit: int = 15,
     client: httpx2.AsyncClient | None = None,
+    api_key: str | None = None,
 ) -> list[Candidate]:
     url = (
         "https://api.semanticscholar.org/graph/v1/paper/search"
         f"?query={httpx2.URL(query).raw_path.decode()}"
         f"&limit={limit}&fields={_SEMANTIC_SCHOLAR_FIELDS}"
     )
-    return await _fetch_json(client, url, _parse_semantic_scholar)
+    # Without a key, requests share Semantic Scholar's public rate limit.
+    headers = {"x-api-key": api_key} if api_key else None
+    return await _fetch_json(client, url, _parse_semantic_scholar, headers)
 
 
 def _parse_semantic_scholar(data: dict[str, Any]) -> list[Candidate]:
@@ -398,7 +401,11 @@ PROVIDERS: dict[str, Callable[..., Any]] = {
 PAPER_PROVIDERS = ("arxiv", "crossref", "semantic_scholar", "openalex")
 
 
-async def discover(request: DiscoveryRequest) -> list[DiscoveryResult]:
+async def discover(
+    request: DiscoveryRequest, api_keys: Mapping[str, str] | None = None
+) -> list[DiscoveryResult]:
+    """Search each requested provider, sending its Paper Search Key when one is saved."""
+    api_keys = api_keys or {}
     providers = request.providers or list(PROVIDERS)
     # A connector redirect may target a destination outside the connector's
     # disclosed boundary. Surface it as a provider error instead of following it.
@@ -409,7 +416,9 @@ async def discover(request: DiscoveryRequest) -> list[DiscoveryResult]:
             if fn is not None:
                 tasks.append(
                     asyncio.create_task(
-                        _run_provider(name, fn, request.query, request.limit, client)
+                        _run_provider(
+                            name, fn, request.query, request.limit, client, api_keys.get(name)
+                        )
                     )
                 )
             else:
@@ -418,14 +427,19 @@ async def discover(request: DiscoveryRequest) -> list[DiscoveryResult]:
 
 
 async def search_papers(
-    query: str, providers: list[str] | None = None, limit: int = 10
+    query: str,
+    providers: list[str] | None = None,
+    limit: int = 10,
+    api_keys: Mapping[str, str] | None = None,
 ) -> tuple[list[Candidate], dict[str, str]]:
     """Search paper indexes and merge results that describe the same paper.
 
     Returns the merged Candidates, best-ranked first, and per-provider errors.
     """
     selected = [name for name in providers or PAPER_PROVIDERS if name in PAPER_PROVIDERS]
-    results = await discover(DiscoveryRequest(query=query, providers=selected, limit=limit))
+    results = await discover(
+        DiscoveryRequest(query=query, providers=selected, limit=limit), api_keys=api_keys
+    )
     errors = {result.provider: result.error for result in results if result.error}
     return merge_candidates([result.candidates for result in results])[:limit], errors
 
@@ -479,13 +493,20 @@ async def _run_provider(
     query: str,
     limit: int,
     client: httpx2.AsyncClient,
+    api_key: str | None = None,
 ) -> DiscoveryResult:
     try:
-        candidates = await fn(query, limit, client=client)
+        keyed = {"api_key": api_key} if api_key else {}
+        candidates = await fn(query, limit, client=client, **keyed)
         return DiscoveryResult(provider=name, candidates=candidates)
     except httpx2.HTTPStatusError as exc:
         status = exc.response.status_code
-        detail = "is rate limiting requests; try again shortly" if status == 429 else "failed"
+        if status == 429:
+            detail = "is rate limiting requests; try again shortly"
+        elif api_key and status in (401, 403):
+            detail = "rejected the saved API key; check it in Settings"
+        else:
+            detail = "failed"
         return DiscoveryResult(provider=name, error=f"{name} {detail} (HTTP {status}).")
     except Exception as exc:
         return DiscoveryResult(provider=name, error=str(exc))
@@ -526,11 +547,12 @@ async def _fetch_json(
     client: httpx2.AsyncClient | None,
     url: str,
     parse: Callable[[Any], list[Candidate]],
+    headers: dict[str, str] | None = None,
 ) -> list[Candidate]:
     if client is None:
         async with product_connector_client(timeout=15) as owned_client:
-            return await _fetch_json(owned_client, url, parse)
-    response = await client.get(url)
+            return await _fetch_json(owned_client, url, parse, headers)
+    response = await client.get(url, headers=headers)
     response.raise_for_status()
     return parse(response.json())
 

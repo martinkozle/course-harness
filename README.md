@@ -79,7 +79,12 @@ relevant results itself and tells you which; for a narrow one it lists them and 
 an address that a search returned or that you gave it. A Course Plan must exist before Sources can
 be added.
 
-**Settings → Connectors** adds web search. A Connector is a remote MCP server whose tools the
+Paper search works without keys. Semantic Scholar's keyless requests share a public rate limit
+that is often busy; add your own key under **Settings → Research → Paper search** and it is sent
+as `x-api-key` on every Semantic Scholar request, from both Discover and the Course Agent. The key
+is stored like provider keys, never in a Course Workspace.
+
+**Settings → Research** adds web search through Connectors. A Connector is a remote MCP server whose tools the
 Course Agent may use; **Exa** is set up by default and works without a key at Exa's free,
 rate-limited tier. Put an Exa API key in its `x-api-key` header to raise the limits, or delete Exa
 and add another search service with its own URL and headers. Header values and URLs marked secret
