@@ -476,6 +476,13 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	await expect(page.getByText(/potential outcomes/).first()).toBeVisible();
 	await page.getByRole("tab", { name: "Extracted text" }).click();
 	await expect(page.locator(".reader-line.is-cited").first()).toBeVisible();
+	// The way back stays in view however far the text scrolls.
+	await page
+		.locator(".canvas-scroll")
+		.evaluate((scroller) => scroller.scrollTo(0, scroller.scrollHeight));
+	await expect(
+		page.getByRole("button", { name: "Back to Slides" }),
+	).toBeInViewport();
 	await page.getByRole("button", { name: "Back to Slides" }).click();
 	await expect(page.getByText("Slide 2 of 2")).toBeVisible();
 	await expect(

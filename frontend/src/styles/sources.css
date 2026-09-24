@@ -224,3 +224,29 @@
 .reader-views {
 	margin-bottom: 16px;
 }
+
+.reader {
+	padding-top: 0;
+}
+
+.reader-head {
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	margin-bottom: 16px;
+	padding-top: 20px;
+	background: var(--surround);
+}
+
+.reader-head .canvas-head {
+	margin-bottom: 12px;
+}
+
+.reader-head:not(:has(.reader-views)) {
+	padding-bottom: 12px;
+	border-bottom: 1px solid var(--rule);
+}
+
+.reader-head .reader-views {
+	margin-bottom: 0;
+}

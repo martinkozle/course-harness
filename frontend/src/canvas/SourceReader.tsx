@@ -129,57 +129,62 @@ export function SourceReader({
 
 	return (
 		<div className="canvas-page reader">
-			{returnLabel ? (
-				<button type="button" className="back-link" onClick={onReturn}>
-					<ArrowLeft aria-hidden="true" />
-					{returnLabel}
-				</button>
-			) : null}
-			<header className="canvas-head">
-				<div className="canvas-head-copy">
-					<h1 className="display-title reader-title">{target.label}</h1>
-					{range ? <p className="meta">{range}</p> : null}
-				</div>
-				{target.sourceId ? (
-					<div className="canvas-head-actions">
-						<button
-							type="button"
-							className="btn"
-							onClick={() =>
-								onAskAgent(
-									range
-										? "Explain how this passage should be used in the Course."
-										: "Summarize what this Source can contribute to the Course.",
-									{
-										key: `reader-${target.sourceId}-${target.lineStart ?? "all"}-${target.lineEnd ?? "all"}`,
-										label: range ? `${target.label} · ${range}` : target.label,
-										instruction: range
-											? `I'm looking at ${target.label}, ${range.toLowerCase()}`
-											: `I'm looking at the Source ${target.label}`,
-									},
-								)
-							}
-						>
-							<MessageSquareText aria-hidden="true" />
-							{range ? "Ask about this passage" : "Ask about this Source"}
-						</button>
+			{/* Stays in view so a deep-linked passage never strands the way back. */}
+			<div className="reader-head">
+				{returnLabel ? (
+					<button type="button" className="back-link" onClick={onReturn}>
+						<ArrowLeft aria-hidden="true" />
+						{returnLabel}
+					</button>
+				) : null}
+				<header className="canvas-head">
+					<div className="canvas-head-copy">
+						<h1 className="display-title reader-title">{target.label}</h1>
+						{range ? <p className="meta">{range}</p> : null}
+					</div>
+					{target.sourceId ? (
+						<div className="canvas-head-actions">
+							<button
+								type="button"
+								className="btn"
+								onClick={() =>
+									onAskAgent(
+										range
+											? "Explain how this passage should be used in the Course."
+											: "Summarize what this Source can contribute to the Course.",
+										{
+											key: `reader-${target.sourceId}-${target.lineStart ?? "all"}-${target.lineEnd ?? "all"}`,
+											label: range
+												? `${target.label} · ${range}`
+												: target.label,
+											instruction: range
+												? `I'm looking at ${target.label}, ${range.toLowerCase()}`
+												: `I'm looking at the Source ${target.label}`,
+										},
+									)
+								}
+							>
+								<MessageSquareText aria-hidden="true" />
+								{range ? "Ask about this passage" : "Ask about this Source"}
+							</button>
+						</div>
+					) : null}
+				</header>
+
+				{hasText && hasOriginal ? (
+					<div className="reader-views">
+						<Tabs
+							label="Show"
+							value={view}
+							onChange={setView}
+							tabs={[
+								{ id: "text", label: "Extracted text" },
+								{ id: "original", label: "Original file" },
+							]}
+						/>
 					</div>
 				) : null}
-			</header>
-
-			{hasText && hasOriginal ? (
-				<div className="reader-views">
-					<Tabs
-						label="Show"
-						value={view}
-						onChange={setView}
-						tabs={[
-							{ id: "text", label: "Extracted text" },
-							{ id: "original", label: "Original file" },
-						]}
-					/>
-				</div>
-			) : null}
+			</div>
 
 			{content.kind === "loading" ? (
 				<p className="meta" role="status">
