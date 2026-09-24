@@ -18,7 +18,7 @@ def _available_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def _wait_for(url: str, *, timeout: float = 30) -> bytes:
+def _wait_for(url: str, *, timeout: float = 600) -> bytes:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -82,6 +82,8 @@ def _install_tool(
             "install",
             "--python",
             "3.14",
+            "--torch-backend",
+            "cpu",
             "--no-cache",
             "--force",
             package,
@@ -149,6 +151,8 @@ def main() -> None:
             "uvx",
             "--python",
             "3.14",
+            "--torch-backend",
+            "cpu",
             "--from",
             str(wheel),
             "course-harness",
@@ -197,6 +201,8 @@ def main() -> None:
                 "uvx",
                 "--python",
                 "3.14",
+                "--torch-backend",
+                "cpu",
                 "--no-cache",
                 "--from",
                 f"git+{repository.as_uri()}",

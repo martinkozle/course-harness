@@ -8,15 +8,19 @@ human-readable Course Workspace.
 Course Harness requires Python 3.14. Run the published package without a permanent installation:
 
 ```bash
-uvx --python 3.14 course-harness
+uvx --python 3.14 --torch-backend cpu course-harness
 ```
 
 Or install it as a command-line tool:
 
 ```bash
-uv tool install --python 3.14 course-harness
+uv tool install --python 3.14 --torch-backend cpu course-harness
 course-harness
 ```
+
+`--torch-backend cpu` installs the CPU build of PyTorch, which local document conversion uses.
+Without it, uv installs the default CUDA build on Linux, which downloads several gigabytes of GPU
+libraries.
 
 The package contains the production web interface. Course Authors do not need Node.js, Bun, Nix,
 Docker, a database, or a paid model provider to launch the Workspace Launcher. LibreOffice is
@@ -26,7 +30,7 @@ is available on `PATH`; semantic previews remain available without it.
 To try an unreleased revision directly from GitHub:
 
 ```bash
-uvx --python 3.14 --from git+https://github.com/martinkozle/course-harness.git course-harness
+uvx --python 3.14 --torch-backend cpu --from git+https://github.com/martinkozle/course-harness.git course-harness
 ```
 
 The command starts one loopback-only process, opens `http://127.0.0.1:8765`, and shows the
