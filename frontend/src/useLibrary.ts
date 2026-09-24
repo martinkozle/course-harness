@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { responseError } from "./api";
-import type { Candidate, ResourceState, Source } from "./models";
+import {
+	type Candidate,
+	candidateResource,
+	type ResourceState,
+	type Source,
+} from "./models";
 import { errorMessage } from "./ui";
 
 export const MATERIAL_ACCEPT =
@@ -411,33 +416,43 @@ export function useLibrary({
 
 	async function addRemote(candidate: Candidate, includeInCourse: boolean) {
 		const key = candidate.url;
+		// The open-access copy usually holds the full text; the landing page may not.
+		const url =
+			candidateResource(resourcesRef.current, candidate)?.location ??
+			candidate.open_access_url ??
+			candidate.url;
 		await withResource(
 			key,
-			"Adding…",
+			includeInCourse ? "Adding to course…" : "Saving…",
 			"This result could not be added.",
 			async () => {
-				const existing = resourcesRef.current.find(
-					(resource) => resource.location === candidate.url,
-				);
-				let resourceId = existing?.resource_id;
-				if (!resourceId) {
-					const response = await fetch("/api/resources/remote", {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ url: candidate.url }),
-					});
-					if (!response.ok) throw new Error(await responseError(response));
-					resourceId = ((await response.json()) as ResourceState).resource_id;
+				if (includeInCourse) {
+					try {
+						const response = await fetch("/api/sources/from-url", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({
+								url,
+								...(candidate.title
+									? { label: candidate.title.slice(0, 200) }
+									: {}),
+							}),
+						});
+						if (!response.ok) throw new Error(await responseError(response));
+						await reloadSources();
+					} finally {
+						await reloadResources();
+					}
+					return;
 				}
-				const latest = await reloadResources();
-				if (!includeInCourse) return;
-				const resource = latest.find((item) => item.resource_id === resourceId);
-				if (resource?.status !== "ready") {
-					throw new Error(
-						"Saved to your Library. Add it to the course once it has finished downloading.",
-					);
-				}
-				await admit(resourceId, candidate.title ?? resourceName(resource));
+				if (candidateResource(resourcesRef.current, candidate)) return;
+				const response = await fetch("/api/resources/remote", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ url }),
+				});
+				if (!response.ok) throw new Error(await responseError(response));
+				await reloadResources();
 			},
 		);
 	}

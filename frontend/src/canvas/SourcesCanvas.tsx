@@ -17,13 +17,14 @@ import { type FormEvent, type ReactNode, useRef, useState } from "react";
 
 import { responseError } from "../api";
 import { DropZone, UploadList } from "../chat/StartSurface";
-import type {
-	Candidate,
-	DiscoveryResult,
-	GroupedSearchResult,
-	ReaderTarget,
-	ResourceState,
-	Source,
+import {
+	type Candidate,
+	candidateResource,
+	type DiscoveryResult,
+	type GroupedSearchResult,
+	type ReaderTarget,
+	type ResourceState,
+	type Source,
 } from "../models";
 import {
 	ConfirmDialog,
@@ -901,7 +902,7 @@ function DiscoverTab({
 					<input
 						type="search"
 						aria-label="Search for papers and repositories"
-						placeholder="Search arXiv, Crossref, GitHub, and Hugging Face"
+						placeholder="Search papers, GitHub, and Hugging Face"
 						value={query}
 						onChange={(event) => setQuery(event.target.value)}
 					/>
@@ -941,9 +942,7 @@ function DiscoverTab({
 								<CandidateRow
 									key={candidate.url}
 									candidate={candidate}
-									resource={resources.find(
-										(resource) => resource.location === candidate.url,
-									)}
+									resource={candidateResource(resources, candidate)}
 									sourceByResource={sourceByResource}
 									library={library}
 								/>
@@ -958,22 +957,29 @@ function DiscoverTab({
 	);
 }
 
-function CandidateRow({
+export function CandidateRow({
 	candidate,
 	resource,
 	sourceByResource,
 	library,
+	allowSave = true,
 }: {
 	candidate: Candidate;
 	resource: ResourceState | undefined;
 	sourceByResource: Map<string, Source>;
 	library: Library;
+	allowSave?: boolean;
 }) {
-	const busy = library.busy.get(candidate.url);
-	const error = library.errors.get(candidate.url);
-	const included = resource
-		? sourceByResource.has(resource.resource_id)
-		: false;
+	const source = resource
+		? sourceByResource.get(resource.resource_id)
+		: undefined;
+	const busy =
+		library.busy.get(candidate.url) ??
+		(resource ? library.busy.get(resource.resource_id) : undefined);
+	const error =
+		library.errors.get(candidate.url) ??
+		(resource ? library.errors.get(resource.resource_id) : undefined);
+	const included = source !== undefined;
 	const summary = candidate.summary
 		? candidate.summary.length > 280
 			? `${candidate.summary.slice(0, 280)}…`
@@ -998,8 +1004,15 @@ function CandidateRow({
 							{candidate.authors.length > 3 ? " et al." : ""}
 						</span>
 					) : null}
+					{candidate.venue ? <span>{candidate.venue}</span> : null}
 					{candidate.published_at ? (
 						<span>{candidate.published_at.slice(0, 10)}</span>
+					) : null}
+					{candidate.citation_count ? (
+						<span>
+							{candidate.citation_count.toLocaleString()} citation
+							{candidate.citation_count === 1 ? "" : "s"}
+						</span>
 					) : null}
 					{included ? (
 						<span className="state is-included">In this course</span>
@@ -1022,9 +1035,20 @@ function CandidateRow({
 					</p>
 				) : null}
 			</div>
-			{!included ? (
+			{source ? (
 				<div className="row-actions sources-candidate-actions">
-					{!resource ? (
+					<button
+						type="button"
+						className="btn btn-quiet btn-small"
+						disabled={Boolean(busy)}
+						onClick={() => void library.removeFromCourse(source.id)}
+					>
+						Remove from course
+					</button>
+				</div>
+			) : (
+				<div className="row-actions sources-candidate-actions">
+					{!resource && allowSave ? (
 						<button
 							type="button"
 							className="btn btn-quiet btn-small"
@@ -1043,7 +1067,7 @@ function CandidateRow({
 						Add to course
 					</button>
 				</div>
-			) : null}
+			)}
 		</li>
 	);
 }

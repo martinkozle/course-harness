@@ -2,13 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { type AgentInterrupt, streamAgentRun } from "./agentStream";
 import { responseError } from "./api";
-import type { CoursePlan, ModelCatalog } from "./models";
+import type { CoursePlan, ModelCatalog, ResearchCard } from "./models";
 import { errorMessage, isAbort } from "./ui";
 
 export type ChatMessage = {
 	id: string;
 	role: "user" | "assistant";
 	content: string;
+	research?: ResearchCard[];
 };
 
 export type Conversation = {

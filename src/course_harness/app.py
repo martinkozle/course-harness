@@ -200,6 +200,8 @@ from course_harness.workspaces import (
 
 STREAM_TERMINATION_CONFIRMATION_SECONDS = 0.5
 MAX_UPLOAD_FILENAME_LENGTH = 255
+# Long enough for docling to convert a typical paper on a CPU.
+REMOTE_CAPTURE_TIMEOUT_SECONDS = 300.0
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_MULTIPART_FIELD_BYTES = 64 * 1024
 # This covers the multipart boundary and a normal file disposition. The parser
@@ -1569,6 +1571,7 @@ def create_app(
                 cache_dir=cache_dir,
                 chat_store_path=chat_path,
                 vision=configuration.capabilities.vision,
+                capture_remote=None if is_reconciliation else capture_remote_resource,
                 before_mutation=None if is_reconciliation else protect_agent_mutation,
                 after_mutation=None if is_reconciliation else checkpoint_agent_mutation,
                 create_revision=(
@@ -2400,7 +2403,37 @@ def create_app(
     async def admit_source_route(
         request: sources_module.SourceAdmissionRequest,
     ) -> sources_module.Source:
+        return await admit_resource(require_workspace(), request.resource_id, request.label)
+
+    @app.post("/api/sources/from-url", response_model=sources_module.Source, status_code=201)
+    async def add_source_from_url(request: res.RemoteSourceRequest) -> sources_module.Source:
         active = require_workspace()
+        try:
+            state = await capture_remote_resource(request.url)
+        except TimeoutError as error:
+            raise HTTPException(
+                status_code=504,
+                detail="This is still downloading. It is saved to your Library; add it to the "
+                "course when it is ready.",
+            ) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        if state.status != "ready":
+            raise HTTPException(
+                status_code=422, detail=state.error or "This result could not be processed."
+            )
+        index = sources_module.read_sources_index(active)
+        existing = next(
+            (s for s in (index.sources if index else []) if s.resource_id == state.resource_id),
+            None,
+        )
+        if existing is not None:
+            return existing
+        return await admit_resource(active, state.resource_id, request.label)
+
+    async def admit_resource(
+        active: Path, resource_id: str, label: str | None
+    ) -> sources_module.Source:
         async with exclusive_mutation(active):
             expected_sources = capture_canonical_file(active, "sources.yaml")
             before_index = (
@@ -2419,8 +2452,8 @@ def create_app(
                     active,
                     data_dir,
                     cache_dir,
-                    request.resource_id,
-                    label=request.label,
+                    resource_id,
+                    label=label,
                     expected=expected_sources,
                 )
                 expected_index = before_index.model_copy(
@@ -2621,6 +2654,38 @@ def create_app(
                 remote_jobs.pop(resource_id, None)
 
         remote_jobs[resource_id] = asyncio.create_task(capture_and_process())
+
+    async def capture_remote_resource(
+        url: str, *, timeout: float = REMOTE_CAPTURE_TIMEOUT_SECONDS
+    ) -> res.ResourceState:
+        """Register a URL once, capture and process it, and wait until it settles.
+
+        A Resource that already holds this URL is reused; a failed earlier
+        capture is retried.
+        """
+        await res.validate_remote_url(url, host_resolver=remote_host_resolver)
+        async with resource_registry_lock:
+            index = res.read_library_index(library.registry_path(data_dir))
+            existing = next(
+                (r for r in index.resources if r.kind == "remote" and r.location == url), None
+            )
+            resource_id = (
+                existing.id
+                if existing is not None
+                else library.register_remote_reference(data_dir, url).resource_id
+            )
+        state = library.get_resource_state(data_dir, cache_dir, resource_id)
+        if state is not None and state.status == "ready":
+            return state
+        if resource_id not in remote_jobs:
+            schedule_remote_capture(resource_id, url, None)
+        job = remote_jobs.get(resource_id)
+        if job is not None:
+            await asyncio.wait_for(asyncio.shield(job), timeout)
+        state = library.get_resource_state(data_dir, cache_dir, resource_id)
+        if state is None:
+            raise ValueError("The Resource was removed from the Library while it was captured.")
+        return with_remote_job_state(state)
 
     @app.get("/api/resources", response_model=list[res.ResourceState])
     async def list_resources() -> list[res.ResourceState]:

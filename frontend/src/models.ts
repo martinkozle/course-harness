@@ -92,7 +92,65 @@ export type Candidate = {
 	media_type: string | null;
 	size_bytes: number | null;
 	published_at: string | null;
+	doi?: string | null;
+	arxiv_id?: string | null;
+	venue?: string | null;
+	citation_count?: number | null;
+	open_access_url?: string | null;
 };
+
+/** A Candidate a research tool returned in the Conversation. */
+export type ResearchCandidate = {
+	url: string;
+	title?: string;
+	authors?: string[];
+	published?: string;
+	venue?: string;
+	doi?: string;
+	arxiv_id?: string;
+	citations?: number;
+	open_access_url?: string;
+	provider?: string;
+	summary?: string;
+};
+
+export type ResearchCard = {
+	title: string;
+	candidates: ResearchCandidate[];
+	errors?: Record<string, string>;
+};
+
+export function candidateFromResearch(item: ResearchCandidate): Candidate {
+	return {
+		provider: item.provider ?? "",
+		provider_id: item.url,
+		title: item.title ?? null,
+		authors: item.authors ?? null,
+		summary: item.summary ?? null,
+		url: item.url,
+		media_type: null,
+		size_bytes: null,
+		published_at: item.published ?? null,
+		doi: item.doi ?? null,
+		arxiv_id: item.arxiv_id ?? null,
+		venue: item.venue ?? null,
+		citation_count: item.citations ?? null,
+		open_access_url: item.open_access_url ?? null,
+	};
+}
+
+/** The Library Resource captured for a Candidate, from either of its addresses. */
+export function candidateResource(
+	resources: ResourceState[],
+	candidate: Candidate,
+): ResourceState | undefined {
+	return resources.find(
+		(resource) =>
+			resource.location === candidate.url ||
+			(candidate.open_access_url != null &&
+				resource.location === candidate.open_access_url),
+	);
+}
 
 export type DiscoveryResult = {
 	provider: string;

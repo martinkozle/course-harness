@@ -91,6 +91,8 @@ async def test_runtime_diagnostics_are_available_unbound_and_read_only(tmp_path:
         "application/pdf",
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/xhtml+xml",
+        "text/html",
     ]
     assert body["parser"]["remediation"].startswith("Text, Markdown, CSV")
     assert body["renderer"]["name"] == "LibreOffice"

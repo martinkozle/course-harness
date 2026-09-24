@@ -622,6 +622,7 @@ function CourseWorkspace({
 						catalog={catalog}
 						course={course ?? null}
 						sources={sources}
+						resources={resources}
 						library={library}
 						canvasOpen={canvas !== null}
 						focusContext={focusContext}

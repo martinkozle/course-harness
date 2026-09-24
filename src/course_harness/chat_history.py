@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal, cast
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
@@ -24,12 +24,37 @@ from pydantic_ai.ui.ag_ui import AGUIAdapter
 
 from course_harness.workspaces import workspace_identity
 
+RESEARCH_KINDS = frozenset({"research_candidates", "connector_result"})
+
+
+class ResearchCandidate(BaseModel):
+    """A Candidate as shown in the Conversation; it grounds nothing until added."""
+
+    url: str
+    title: str | None = None
+    authors: list[str] | None = None
+    published: str | None = None
+    venue: str | None = None
+    doi: str | None = None
+    arxiv_id: str | None = None
+    citations: int | None = None
+    open_access_url: str | None = None
+    provider: str | None = None
+    summary: str | None = None
+
+
+class ResearchCard(BaseModel):
+    title: str
+    candidates: list[ResearchCandidate]
+    errors: dict[str, str] | None = None
+
 
 class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
     role: Literal["user", "assistant"]
     content: str
+    research: list[ResearchCard] | None = Field(default=None, exclude_if=lambda cards: not cards)
 
 
 class PendingApproval(BaseModel):
@@ -373,16 +398,41 @@ def read_chat_history(
 
 def _visible_messages(history: list[ModelMessage]) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
+    research: list[ResearchCard] = []
     for message in AGUIAdapter.dump_messages(history):
-        if (
+        if message.role == "tool" and isinstance(message.content, str):
+            card = _research_card(message.content)
+            if card is not None:
+                research.append(card)
+        elif (
             message.role in ("user", "assistant")
             and isinstance(message.content, str)
             and message.content
         ):
-            result.append(
-                ChatMessage(id=message.id, role=message.role, content=message.content).model_dump()
-            )
+            chat = ChatMessage(id=message.id, role=message.role, content=message.content)
+            if message.role == "assistant" and research:
+                chat.research, research = research, []
+            result.append(chat.model_dump())
     return result
+
+
+def _research_card(content: str) -> ResearchCard | None:
+    """Recover the Candidates a research tool returned, for display beside the reply."""
+    try:
+        payload = json.loads(content)
+        if not isinstance(payload, dict) or payload.get("kind") not in RESEARCH_KINDS:
+            return None
+        candidates = payload.get("links") or json.loads(payload["content"])
+        card = ResearchCard.model_validate(
+            {
+                "title": payload.get("title") or "Research results",
+                "candidates": candidates,
+                "errors": payload.get("errors"),
+            }
+        )
+    except ValueError, KeyError, TypeError:
+        return None
+    return card if card.candidates or card.errors else None
 
 
 def _without_images(history: list[ModelMessage]) -> list[ModelMessage]:

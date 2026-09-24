@@ -36,6 +36,7 @@ import type {
 	CoursePlan,
 	ModelCatalog,
 	PresentationSummary,
+	ResourceState,
 	Source,
 } from "../models";
 import { Menu, Notice } from "../ui";
@@ -50,6 +51,7 @@ import { type Library, MATERIAL_ACCEPT } from "../useLibrary";
 import { ApprovalCard } from "./ApprovalCard";
 import type { ConversationDialog } from "./ConversationDialogs";
 import { Markdown } from "./Markdown";
+import { ResearchResults } from "./ResearchResults";
 import { StartSurface } from "./StartSurface";
 
 type Props = {
@@ -57,6 +59,7 @@ type Props = {
 	catalog: ModelCatalog;
 	course: CoursePlan | null;
 	sources: Source[];
+	resources: ResourceState[];
 	library: Library;
 	presentations: PresentationSummary[];
 	lectureNumber: Map<string, number>;
@@ -85,6 +88,7 @@ export function ConversationPane({
 	catalog,
 	course,
 	sources,
+	resources,
 	library,
 	presentations,
 	lectureNumber,
@@ -312,6 +316,14 @@ export function ConversationPane({
 													Course Agent
 												</span>
 												<Markdown text={parts.body} />
+												{message.research?.length ? (
+													<ResearchResults
+														cards={message.research}
+														resources={resources}
+														sources={sources}
+														library={library}
+													/>
+												) : null}
 												{result && !isStreaming ? (
 													<RunResults
 														result={result}

@@ -20,11 +20,13 @@ classifiers = [
 dependencies = [
   "docling>=2.59",
   "fastapi",
+  # pydantic-ai 2.13 reads MCP SDK v1 field names; fastmcp 4 moved to SDK v2.
+  "fastmcp-slim[client]<4",
   "httpx",
   "httpx2",
   "keyring>=25.6",
   "pillow>=12.3.0",
-  "pydantic-ai-slim[ag-ui,anthropic,openai]",
+  "pydantic-ai-slim[ag-ui,anthropic,mcp,openai]",
   "python-multipart>=0.0.32",
   "python-pptx>=1.0.2",
   "pyyaml>=6.0.3",

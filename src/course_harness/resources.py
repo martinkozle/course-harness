@@ -13,7 +13,12 @@ from uuid import uuid4
 import httpx2
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from course_harness.docling_parser import OFFICE_MEDIA_TYPES, PDF_MEDIA_TYPE, convert_document
+from course_harness.docling_parser import (
+    HTML_MEDIA_TYPES,
+    OFFICE_MEDIA_TYPES,
+    PDF_MEDIA_TYPE,
+    convert_document,
+)
 
 ResourceKind = Literal["local-file", "upload", "remote"]
 ProcessingStatus = Literal["unprocessed", "processing", "ready", "failed", "retrying"]
@@ -91,6 +96,11 @@ class Candidate(BaseModel):
     media_type: str | None = None
     size_bytes: int | None = None
     published_at: str | None = None
+    doi: str | None = None
+    arxiv_id: str | None = None
+    venue: str | None = None
+    citation_count: int | None = None
+    open_access_url: str | None = None
 
 
 class DiscoveryRequest(BaseModel):
@@ -119,6 +129,12 @@ class RemoteFetchRequest(BaseModel):
     def has_safe_url_shape(self) -> RemoteFetchRequest:
         parse_remote_url(self.url)
         return self
+
+
+class RemoteSourceRequest(RemoteFetchRequest):
+    """A remote URL to capture, process, and admit to the Course in one step."""
+
+    label: str | None = Field(default=None, max_length=200)
 
 
 def parse_remote_url(value: str) -> SplitResult:
@@ -222,6 +238,7 @@ def redirect_target(current_url: str, location: str | None) -> str:
 MEDIA_TYPE_PROCESSORS: dict[str, str] = {
     PDF_MEDIA_TYPE: "docling",
     **dict.fromkeys(OFFICE_MEDIA_TYPES, "docling"),
+    **dict.fromkeys(HTML_MEDIA_TYPES, "docling"),
     "text/plain": "text",
     "text/markdown": "text",
     "text/x-markdown": "text",

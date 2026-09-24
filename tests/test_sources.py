@@ -859,12 +859,16 @@ async def test_agent_admit_source_wraps_malicious_label_as_untrusted_data(tmp_pa
         CourseAgentState,
         _build_course_agent,
     )
+    from course_harness.course_plan import CoursePlanInput, LectureInput, create_course_plan
 
+    plan = create_course_plan(
+        CoursePlanInput(title="Course", audience="Authors", lectures=[LectureInput(title="One")])
+    )
     agent = _build_course_agent(requires_approval=False)
     async with agent.run_stream(
         "Admit the selected Library Resource as a Course Source.",
         deps=CourseAgentDeps(
-            course_state=CourseAgentState(),
+            course_state=CourseAgentState(course=plan),
             workspace=workspace,
             data_dir=data_dir,
             cache_dir=cache_dir,

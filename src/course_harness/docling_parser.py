@@ -11,6 +11,7 @@ OFFICE_MEDIA_TYPES = {
     "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
 }
+HTML_MEDIA_TYPES = {"text/html": ".html", "application/xhtml+xml": ".xhtml"}
 
 
 def models_ready(cache_dir: Path) -> bool:
@@ -70,6 +71,9 @@ def convert_document(media_type: str, content: bytes, cache_dir: Path) -> tuple[
             allowed_formats=[InputFormat.PDF],
             format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)},
         )
+    elif media_type in HTML_MEDIA_TYPES:
+        extension = HTML_MEDIA_TYPES[media_type]
+        converter = DocumentConverter(allowed_formats=[InputFormat.HTML])
     else:
         extension = OFFICE_MEDIA_TYPES[media_type]
         converter = DocumentConverter(

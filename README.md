@@ -60,7 +60,8 @@ yourself.
 
 **Sources** accepts PDF, `.pptx`, and `.docx` Resources. Files added from the start screen or the
 **This course** tab are saved to your Library and included in the Course; the **Library** tab keeps
-files without including them, and **Discover** searches public paper and code indexes. Docling
+files without including them, and **Discover** searches public paper indexes (arXiv, Crossref,
+Semantic Scholar, and OpenAlex) and code indexes. Web pages are accepted as well. Docling
 extracts text, tables, and document structure for search and Source use, including text
 recognition for scanned PDFs. On the first PDF upload, Course Harness asks before downloading
 layout, table, and OCR models to the application cache outside the Course Workspace. Conversion
@@ -69,6 +70,14 @@ original files remain immutable Snapshots. **Settings → Diagnostics** also has
 models** control and **Rebuild search index**. If models are missing when you process or reprocess
 an existing PDF, the same prompt appears. Cancel leaves the Resource unchanged. The download shows
 progress across its layout, table, and OCR stages; stage progress is not a byte percentage.
+
+The Course Agent can research too. Ask it to find sources for a topic and it searches the same
+paper indexes. Its results appear under its reply; they are not Sources until they are added to
+the course, and only added Sources can be cited. For an open-ended request the agent adds the most
+relevant results itself and tells you which; for a narrow one it lists them and asks. Either way,
+**Add to course** and **Remove from course** on each result let you decide. The agent can only add
+an address that a search returned or that you gave it. A Course Plan must exist before Sources can
+be added.
 
 Each Workspace can keep multiple Conversations in that private application state. The navigator
 lists them; each row's menu renames, archives, or deletes one. A new Conversation stays an unsaved
