@@ -24,6 +24,7 @@ from course_harness.presentation import (
     TwoColumnSlide,
 )
 from course_harness.resources import image_dimensions
+from course_harness.slide_fit import fit_placeholder_text
 from course_harness.template_slots import (
     CONTENT_LIKE_TYPES,
     find_body_placeholder,
@@ -142,8 +143,10 @@ def _populate_title_slide(slide: TitleSlide, pptx_slide, slot_mappings: dict[str
     )
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
+        fit_placeholder_text(title_ph)
     if subtitle_ph and slide.subtitle:
         subtitle_ph.text_frame.text = slide.subtitle
+        fit_placeholder_text(subtitle_ph)
 
 
 def _populate_section_slide(slide: SectionSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
@@ -164,6 +167,7 @@ def _populate_bullets_slide(slide: BulletsSlide, pptx_slide, slot_mappings: dict
             p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
             p.text = bullet
             p.level = 0
+        fit_placeholder_text(body_ph, bulleted=True)
 
 
 def _populate_two_column_slide(
@@ -214,6 +218,7 @@ def _populate_big_statement_slide(
         title_ph.text_frame.text = slide.statement
         for paragraph in title_ph.text_frame.paragraphs:
             paragraph.alignment = PP_ALIGN.CENTER
+        fit_placeholder_text(title_ph)
 
 
 def _populate_closing_slide(slide: ClosingSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
@@ -225,6 +230,7 @@ def _populate_closing_slide(slide: ClosingSlide, pptx_slide, slot_mappings: dict
         title_ph.text_frame.text = slide.title
     if subtitle_ph and slide.text:
         subtitle_ph.text_frame.text = slide.text
+        fit_placeholder_text(subtitle_ph)
 
 
 def _populate_code_slide(slide: CodeSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
@@ -328,6 +334,7 @@ def _populate_quote_slide(slide: QuoteSlide, pptx_slide, slot_mappings: dict[str
             run.text = f"— {slide.attribution}"
             run.font.italic = True
             p.alignment = PP_ALIGN.CENTER
+        fit_placeholder_text(body_ph)
 
 
 def _add_citations(slide, pptx_slide) -> None:
