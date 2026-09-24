@@ -737,6 +737,28 @@ def save_model_preset(
     return preset
 
 
+def update_model_preset_capabilities(
+    store_path: Path,
+    model_id: str,
+    capabilities: ProviderCapabilities,
+    *,
+    credential_store: CredentialStore | None = None,
+) -> ModelCatalog:
+    """Record freshly verified capabilities for an existing Model Preset."""
+    catalog = read_model_catalog(store_path, credential_store=credential_store)
+    index = next((i for i, p in enumerate(catalog.model_presets) if p.id == model_id), None)
+    if index is None:
+        raise KeyError(model_id)
+    catalog.model_presets[index] = catalog.model_presets[index].model_copy(
+        update={
+            "capabilities": capabilities,
+            "diagnostics": provider_diagnostics(capabilities),
+        }
+    )
+    _write_catalog(store_path, catalog)
+    return catalog
+
+
 def select_model_preset(
     store_path: Path, model_id: str, *, credential_store: CredentialStore | None = None
 ) -> ModelCatalog:

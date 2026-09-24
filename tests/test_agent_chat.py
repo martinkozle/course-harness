@@ -2464,3 +2464,48 @@ async def test_agent_runs_use_the_active_conversation_history(tmp_path: Path) ->
         assert (await client.get("/api/chat")).json()["messages"][0][
             "content"
         ] == "Second thread topic"
+
+
+@pytest.mark.anyio
+async def test_a_saved_model_preset_can_be_checked_again(tmp_path: Path) -> None:
+    """Presets saved before vision was detected keep their stale capabilities until rechecked."""
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    provider_path = tmp_path / "provider"
+    account = save_provider_account(
+        provider_path,
+        ProviderAccountRequest(
+            name="Home llama.cpp",
+            kind="openai-compatible",
+            api_key=SecretStr("local-secret"),
+            base_url="http://blaze.home:8081/v1",
+            allow_insecure_http=True,
+        ),
+    )
+    stale = await _verified_capabilities(None)
+    preset = providers_module.save_model_preset(
+        provider_path,
+        providers_module.ModelPresetRequest(
+            name="Qwen", provider_account_id=account.id, model="qwen3.8-27b"
+        ),
+        stale,
+    )
+    checked: list[str] = []
+
+    async def vision_capabilities(request: ProviderConfigurationRequest) -> ProviderCapabilities:
+        checked.append(request.model)
+        return stale.model_copy(update={"vision": True})
+
+    app = create_app(
+        workspace, provider_store_path=provider_path, provider_validator=vision_capabilities
+    )
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        verified = await client.post(f"/api/models/{preset.id}/verify")
+        missing = await client.post("/api/models/model-000000000000/verify")
+
+    assert checked == ["qwen3.8-27b"]
+    rechecked = verified.json()["model_presets"][0]
+    assert rechecked["capabilities"]["vision"] is True
+    assert not any("Vision" in message for message in rechecked["diagnostics"])
+    assert missing.status_code == 404

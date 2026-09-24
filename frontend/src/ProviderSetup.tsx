@@ -1,4 +1,4 @@
-import { KeyRound, Plus, Trash2 } from "lucide-react";
+import { KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 
 import { responseError } from "./api";
@@ -65,6 +65,8 @@ export function ModelSettings({
 	);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [verifyingId, setVerifyingId] = useState<string | null>(null);
+	const [verified, setVerified] = useState<string | null>(null);
 
 	const showAccountForm = !hasAccounts || addingAccount;
 	const verificationDestination =
@@ -188,6 +190,38 @@ export function ModelSettings({
 		}
 	}
 
+	/** Re-check a saved Model Preset, e.g. after its server gained vision support. */
+	async function verifyPreset(presetId: string, name: string) {
+		setVerifyingId(presetId);
+		setError(null);
+		setVerified(null);
+		try {
+			const response = await fetch(
+				`/api/models/${encodeURIComponent(presetId)}/verify`,
+				{ method: "POST" },
+			);
+			if (!response.ok) throw new Error(await responseError(response));
+			const next = (await response.json()) as ModelCatalog;
+			onCatalogChange(next);
+			const preset = next.model_presets.find((item) => item.id === presetId);
+			setVerified(
+				`${name} was checked again${
+					preset?.capabilities.vision
+						? " and can look at images."
+						: ". It does not report image input."
+				}`,
+			);
+		} catch (caught) {
+			setError(
+				caught instanceof Error
+					? caught.message
+					: "The Model Preset could not be checked.",
+			);
+		} finally {
+			setVerifyingId(null);
+		}
+	}
+
 	async function replaceCredential(
 		event: FormEvent<HTMLFormElement>,
 		accountId: string,
@@ -251,6 +285,7 @@ export function ModelSettings({
 					<Notice tone="error">{error}</Notice>
 				</div>
 			) : null}
+			{verified ? <Notice role="status">{verified}</Notice> : null}
 
 			<section className="model-section" aria-labelledby="presets-heading">
 				<div className="canvas-section-head">
@@ -282,11 +317,29 @@ export function ModelSettings({
 										<span className="row-meta">
 											<span className="mono">{preset.model}</span>
 											<span>{account?.name ?? "Missing Provider Account"}</span>
+											<span>
+												{preset.capabilities.vision
+													? "Sees images"
+													: "Text only"}
+											</span>
 										</span>
 									</div>
 									{preset.id === catalog.selected_model_id ? (
 										<span className="state is-included">In use</span>
 									) : null}
+									<button
+										type="button"
+										className="icon-btn is-small"
+										aria-label={`Check ${preset.name} again`}
+										title="Check capabilities again"
+										disabled={busy || verifyingId !== null || !account}
+										onClick={() => void verifyPreset(preset.id, preset.name)}
+									>
+										<RefreshCw
+											aria-hidden="true"
+											className={verifyingId === preset.id ? "spin" : undefined}
+										/>
+									</button>
 								</li>
 							);
 						})}

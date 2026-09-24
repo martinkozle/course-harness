@@ -121,6 +121,7 @@ from course_harness.providers import (
     save_provider_account,
     save_provider_configuration,
     select_model_preset,
+    update_model_preset_capabilities,
     validate_provider_account,
     validate_provider_capabilities,
 )
@@ -1210,6 +1211,32 @@ def create_app(
             raise HTTPException(status_code=404, detail="Provider Account was not found") from error
         except (ProviderCapabilityError, ProviderValidationError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.post("/api/models/{model_id}/verify", response_model=ModelCatalog)
+    async def verify_model_preset(model_id: str) -> ModelCatalog:
+        require_workspace()
+        preset = next(
+            (p for p in read_model_catalog(provider_path).model_presets if p.id == model_id),
+            None,
+        )
+        if preset is None:
+            raise HTTPException(status_code=404, detail="Model Preset was not found")
+        try:
+            provider_request = provider_request_for_model(
+                provider_path,
+                ModelPresetRequest(
+                    name=preset.name,
+                    provider_account_id=preset.provider_account_id,
+                    model=preset.model,
+                ),
+            )
+            capabilities = await provider_validator(provider_request)
+            require_planning_capabilities(capabilities)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Provider Account was not found") from error
+        except (ProviderCapabilityError, ProviderValidationError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return update_model_preset_capabilities(provider_path, model_id, capabilities)
 
     @app.put("/api/models/selected", response_model=ModelCatalog)
     async def choose_model_preset(selection: ModelSelection) -> ModelCatalog:
