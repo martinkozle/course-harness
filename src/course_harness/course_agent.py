@@ -42,6 +42,7 @@ from course_harness.presentation import (
     Presentation,
     Slide,
     SlideCitation,
+    TextItems,
     list_presentations,
     read_presentation_for_lecture,
     serialize_presentation,
@@ -166,6 +167,15 @@ def _stored_by(name: str) -> str:
     return f"Only {', '.join(layouts)} Slides store this; leave it out for other layouts."
 
 
+_NO_MARKERS = (
+    "Write only the text: the template adds its own bullets, so do not start an item with "
+    "•, -, *, – or a number such as 1."
+)
+_COLUMN_ITEMS = (
+    "When the template gives the column a heading, the first item is that heading. " + _NO_MARKERS
+)
+
+
 class SlideChanges(BaseModel):
     """Slide content. Give only the fields you want to write: a field you leave out or give
     as null keeps its current value. Give an empty value ("" or []) to clear a field."""
@@ -177,9 +187,20 @@ class SlideChanges(BaseModel):
     purpose: str | None = None
     citations: list[SlideCitation] | None = None
     subtitle: str | None = Field(default=None, description=_stored_by("subtitle"))
-    bullets: list[str] | None = Field(default=None, description=_stored_by("bullets"))
-    left_content: str | None = Field(default=None, description=_stored_by("left_content"))
-    right_content: str | None = Field(default=None, description=_stored_by("right_content"))
+    bullets: TextItems | None = Field(
+        default=None,
+        description=f"One bullet per item. {_NO_MARKERS} {_stored_by('bullets')}",
+    )
+    left_content: TextItems | None = Field(
+        default=None,
+        description=f"The left column, one line per item. {_COLUMN_ITEMS} "
+        f"{_stored_by('left_content')}",
+    )
+    right_content: TextItems | None = Field(
+        default=None,
+        description=f"The right column, one line per item. {_COLUMN_ITEMS} "
+        f"{_stored_by('right_content')}",
+    )
     statement: str | None = Field(default=None, description=_stored_by("statement"))
     text: str | None = Field(default=None, description=_stored_by("text"))
     code: str | None = Field(default=None, description=_stored_by("code"))

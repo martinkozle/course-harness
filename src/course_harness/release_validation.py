@@ -275,9 +275,9 @@ def _has_substantive_content(slide: object) -> bool:
     if layout == "bullets":
         return any(str(item).strip() for item in getattr(slide, "bullets", []))
     if layout == "two_column":
-        return bool(
-            str(getattr(slide, "left_content", "") or "").strip()
-            or str(getattr(slide, "right_content", "") or "").strip()
+        return any(
+            str(item).strip()
+            for item in [*getattr(slide, "left_content", []), *getattr(slide, "right_content", [])]
         )
     if layout == "big_statement":
         return bool(str(getattr(slide, "statement", "") or "").strip())

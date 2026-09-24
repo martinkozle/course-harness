@@ -1,12 +1,47 @@
 import os
+import re
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import uuid4
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    ValidationError,
+    model_validator,
+)
 
 from course_harness.canonical_mutation import CanonicalFile, apply_canonical_mutation
+
+# A leading bullet or list number the Course Agent typed.  Templates add their own
+# bullets, so a typed one would show twice.  The marker must be followed by space so
+# that "-5 °C" or "1.5 million" keep their text.
+_LIST_MARKER = re.compile(r"^\s*(?:[•●▪◦‣∙·*\-–—]|\d{1,3}[.)])\s+")
+
+
+def strip_list_marker(item: str) -> str:
+    return _LIST_MARKER.sub("", item, count=1).strip()
+
+
+def clean_text_items(value: object) -> object:
+    """Normalize a text list: split a legacy string on newlines, drop blank items, and
+    remove typed bullet markers."""
+    if value is None:
+        return value
+    if isinstance(value, str):
+        value = value.splitlines()
+    if not isinstance(value, list):
+        return value
+    items = [strip_list_marker(item) if isinstance(item, str) else item for item in value]
+    return [item for item in items if item != ""]
+
+
+# One line per item, without bullet characters.  Plain strings still load, so
+# Presentations written before columns became lists keep working.
+TextItems = Annotated[list[str], BeforeValidator(clean_text_items)]
 
 
 class SlideCitation(BaseModel):
@@ -46,7 +81,7 @@ class SectionSlide(SlideBase):
 class BulletsSlide(SlideBase):
     layout: Literal["bullets"] = "bullets"
     title: str | None = None
-    bullets: list[str] = Field(default_factory=list)
+    bullets: TextItems = Field(default_factory=list)
     speaker_notes: str | None = None
     purpose: str | None = None
     citations: list[SlideCitation] = Field(default_factory=list)
@@ -55,8 +90,9 @@ class BulletsSlide(SlideBase):
 class TwoColumnSlide(SlideBase):
     layout: Literal["two_column"] = "two_column"
     title: str | None = None
-    left_content: str = ""
-    right_content: str = ""
+    # In templates whose columns have a heading placeholder, the first item is the heading.
+    left_content: TextItems = Field(default_factory=list)
+    right_content: TextItems = Field(default_factory=list)
     speaker_notes: str | None = None
     purpose: str | None = None
     citations: list[SlideCitation] = Field(default_factory=list)
@@ -321,9 +357,9 @@ class SlidePatchRequest(BaseModel):
     citations: list[SlideCitation] | None = None
     archived: bool | None = None
     subtitle: str | None = None
-    bullets: list[str] | None = None
-    left_content: str | None = None
-    right_content: str | None = None
+    bullets: TextItems | None = None
+    left_content: TextItems | None = None
+    right_content: TextItems | None = None
     statement: str | None = None
     text: str | None = None
     code: str | None = None
@@ -351,8 +387,8 @@ def fill_slide_layout_fields(
     elif layout == "bullets":
         result["bullets"] = getattr(cmd, "bullets", []) or []
     elif layout == "two_column":
-        result["left_content"] = getattr(cmd, "left_content", "") or ""
-        result["right_content"] = getattr(cmd, "right_content", "") or ""
+        result["left_content"] = getattr(cmd, "left_content", []) or []
+        result["right_content"] = getattr(cmd, "right_content", []) or []
     elif layout == "big_statement":
         result["statement"] = getattr(cmd, "statement", "") or ""
     elif layout == "closing":

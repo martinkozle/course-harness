@@ -121,8 +121,16 @@ const multiline = new Set<EditableField>([
 	"speaker_notes",
 ]);
 
+// Fields stored as one item per line; the template adds the bullets.
+const LIST_FIELDS = new Set<EditableField>([
+	"bullets",
+	"left_content",
+	"right_content",
+]);
+
 function fieldValue(slide: Slide, field: EditableField): string {
-	if (field === "bullets") return (slide.bullets ?? []).join("\n");
+	if (LIST_FIELDS.has(field))
+		return ((slide[field] as string[] | undefined) ?? []).join("\n");
 	return (slide[field] as string | undefined) ?? "";
 }
 
@@ -149,9 +157,9 @@ function slotContent(slide: Slide, slot: string): string | null {
 						slide.quote ??
 						slide.text)
 					: slot === "left"
-						? slide.left_content
+						? slide.left_content?.join("\n")
 						: slot === "right"
-							? slide.right_content
+							? slide.right_content?.join("\n")
 							: slot === "statement"
 								? slide.statement
 								: slot === "image"
@@ -1195,13 +1203,12 @@ function SlideEditor({
 		const body: Record<string, unknown> = {};
 		for (const field of fields) {
 			if (values[field] === fieldValue(slide, field)) continue;
-			body[field] =
-				field === "bullets"
-					? values[field]
-							.split("\n")
-							.map((line) => line.trim())
-							.filter(Boolean)
-					: values[field];
+			body[field] = LIST_FIELDS.has(field)
+				? values[field]
+						.split("\n")
+						.map((line) => line.trim())
+						.filter(Boolean)
+				: values[field];
 		}
 		if (Object.keys(body).length === 0) {
 			onCancel();
@@ -1317,7 +1324,11 @@ function SlideEditor({
 								}
 							/>
 						)}
-						{field === "bullets" ? <small>One bullet per line.</small> : null}
+						{field === "bullets" ? (
+							<small>One bullet per line. The template adds the bullets.</small>
+						) : LIST_FIELDS.has(field) ? (
+							<small>One item per line.</small>
+						) : null}
 					</div>
 				);
 			})}

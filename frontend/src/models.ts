@@ -183,8 +183,8 @@ export type Slide = {
 	title?: string;
 	subtitle?: string;
 	bullets?: string[];
-	left_content?: string;
-	right_content?: string;
+	left_content?: string[];
+	right_content?: string[];
 	statement?: string;
 	text?: string;
 	code?: string;

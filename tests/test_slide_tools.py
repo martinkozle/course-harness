@@ -32,6 +32,7 @@ from course_harness.presentation import (
     ImageSlide,
     Presentation,
     TitleSlide,
+    TwoColumnSlide,
     list_presentations,
     read_presentation_for_lecture,
     write_presentation,
@@ -320,3 +321,32 @@ def test_slide_tool_schema_names_the_layouts_that_store_each_field() -> None:
     assert "Only image, quote" not in schema["caption"]["description"]
     assert "Only image Slides store this" in schema["caption"]["description"]
     assert "description" not in schema["speaker_notes"]
+
+
+def test_agent_list_items_are_stored_without_typed_bullets(tmp_path: Path) -> None:
+    workspace, plan = _authored_course(tmp_path)
+    command = ReplacePresentationCommand(
+        lecture_id=plan.lectures[0].id,
+        slides=[
+            SlideCommand(id=BULLETS_ID, layout="bullets", bullets=["• Foo", "- Bar"]),
+            SlideCommand.model_validate(
+                {
+                    "layout": "two_column",
+                    "left_content": ["Before", "* Slow"],
+                    "right_content": "After",
+                }
+            ),
+        ],
+    )
+
+    presentation = apply_presentation_command(workspace, command, plan)
+
+    bullets, columns = presentation.slides[:2]
+    assert isinstance(bullets, BulletsSlide)
+    assert isinstance(columns, TwoColumnSlide)
+    assert bullets.bullets == ["Foo", "Bar"]
+    assert columns.left_content == ["Before", "Slow"]
+    assert columns.right_content == ["After"]
+    schema = SlideCommand.model_json_schema()["properties"]
+    assert "do not start an item with" in schema["bullets"]["description"]
+    assert "first item is that heading" in schema["left_content"]["description"]

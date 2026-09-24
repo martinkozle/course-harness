@@ -16,7 +16,7 @@ from course_harness.course_plan import (
     initialize_workspace_history,
 )
 from course_harness.export import export_presentation, validate_export_mapping
-from course_harness.presentation import BulletsSlide, Presentation
+from course_harness.presentation import BulletsSlide, Presentation, TwoColumnSlide
 from course_harness.template_profiles import (
     TemplateLayoutMapping,
     TemplateProfile,
@@ -85,6 +85,49 @@ def test_export_uses_corrected_template_slots(tmp_path: Path) -> None:
     assert placeholders[0] == "Mapped title"
     assert placeholders[1] == ""
     assert placeholders[2] == "Mapped body"
+
+
+def test_two_column_items_fill_heading_and_body_without_typed_bullets(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.pptx"
+    PPTXPresentation().save(str(template_path))
+    profile = TemplateProfile(
+        id="tpl-000000000001",
+        name="Comparison",
+        version=1,
+        template_filename="template.pptx",
+        slide_width=12_192_000,
+        slide_height=6_858_000,
+        slide_count=11,
+        layouts=[
+            TemplateLayoutMapping(
+                semantic_layout="two_column",
+                template_layout_index=4,
+                confidence=1,
+                rationale="Comparison layout with column headings",
+            )
+        ],
+    )
+    presentation = Presentation(
+        id="presentation-abc123def456",
+        lecture_id="lecture-abc123def456",
+        slides=[
+            TwoColumnSlide(
+                id="slide-abc123def456",
+                title="Before and after",
+                left_content=["Before", "• Slow builds", "- Manual steps"],
+                right_content=["After", "1. Cached builds"],
+            )
+        ],
+    )
+
+    exported = PPTXPresentation(BytesIO(export_presentation(presentation, profile, template_path)))
+
+    texts = [
+        shape.text_frame.text
+        for shape in exported.slides[0].placeholders
+        if shape.has_text_frame and shape.placeholder_format.idx != 0
+    ]
+    assert texts == ["Before", "Slow builds\nManual steps", "After", "Cached builds"]
 
 
 def test_calibration_deck_uses_corrected_template_slots(tmp_path: Path) -> None:

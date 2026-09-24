@@ -22,6 +22,7 @@ from course_harness.presentation import (
     SlideCitation,
     TitleSlide,
     TwoColumnSlide,
+    strip_list_marker,
 )
 from course_harness.resources import image_dimensions
 from course_harness.slide_fit import fit_placeholder_text
@@ -165,7 +166,7 @@ def _populate_bullets_slide(slide: BulletsSlide, pptx_slide, slot_mappings: dict
         tf.clear()
         for i, bullet in enumerate(slide.bullets):
             p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-            p.text = bullet
+            p.text = strip_list_marker(bullet)
             p.level = 0
         fit_placeholder_text(body_ph, bulleted=True)
 
@@ -178,34 +179,43 @@ def _populate_two_column_slide(
         title_ph.text_frame.text = slide.title
     left_ph = find_slot_placeholder(pptx_slide, slot_mappings, "left")
     right_ph = find_slot_placeholder(pptx_slide, slot_mappings, "right")
+    left_items = _list_items(slide.left_content)
+    right_items = _list_items(slide.right_content)
     if left_ph is not None or right_ph is not None:
         if left_ph is not None:
-            left_ph.text_frame.text = slide.left_content or ""
+            _write_column(left_ph, left_items)
         if right_ph is not None:
-            right_ph.text_frame.text = slide.right_content or ""
+            _write_column(right_ph, right_items)
         return
     groups = find_column_placeholder_groups(pptx_slide)
 
     for i, group in enumerate(groups):
-        content = slide.left_content if i == 0 else slide.right_content
-        if not content:
-            for ph in group:
-                ph.text_frame.text = ""
+        items = left_items if i == 0 else right_items
+        if len(group) == 1:
+            _write_column(group[0], items)
             continue
-        lines = content.strip().split("\n")
-        heading = lines[0]
-        body = "\n".join(lines[1:]) if len(lines) > 1 else ""
-        for j, ph in enumerate(group):
-            if j == 0:
-                ph.text_frame.text = heading
-            elif body:
-                tf = ph.text_frame
-                tf.clear()
-                for k, line in enumerate(body.split("\n")):
-                    p = tf.paragraphs[0] if k == 0 else tf.add_paragraph()
-                    p.text = line
-            else:
-                ph.text_frame.text = ""
+        # A heading placeholder above a body: the first item is the column heading.
+        heading, body = (items[0], items[1:]) if items else ("", [])
+        group[0].text_frame.text = heading
+        if heading:
+            fit_placeholder_text(group[0])
+        for ph in group[1:]:
+            _write_column(ph, body)
+            body = []
+
+
+def _list_items(items: list[str]) -> list[str]:
+    return [cleaned for item in items if (cleaned := strip_list_marker(item))]
+
+
+def _write_column(placeholder, lines: list[str]) -> None:
+    tf = placeholder.text_frame
+    tf.clear()
+    for k, line in enumerate(lines):
+        p = tf.paragraphs[0] if k == 0 else tf.add_paragraph()
+        p.text = line
+    if lines:
+        fit_placeholder_text(placeholder, bulleted=True)
 
 
 def _populate_big_statement_slide(

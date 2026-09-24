@@ -287,7 +287,7 @@ async def test_all_slide_layouts_created(tmp_path: Path) -> None:
         ]
         assert pres.slides[0].subtitle == "Sub"  # type: ignore
         assert pres.slides[2].bullets == ["A", "B"]  # type: ignore
-        assert pres.slides[3].left_content == "L"  # type: ignore
+        assert pres.slides[3].left_content == ["L"]  # type: ignore
         assert pres.slides[4].statement == "Big statement"  # type: ignore
         assert pres.slides[6].code == "print('hello')"  # type: ignore
         assert pres.slides[6].language == "python"  # type: ignore
@@ -654,3 +654,42 @@ async def test_patch_slide_ignores_cross_layout_fields(tmp_path: Path) -> None:
         updated = Presentation.model_validate(patch.json())
         assert updated.slides[0].title == "Still works"
         assert isinstance(updated.slides[0], TitleSlide)
+
+
+def test_two_column_content_written_as_a_string_still_loads() -> None:
+    slide = Presentation.model_validate(
+        {
+            "id": "presentation-0123456789ab",
+            "lecture_id": "lecture-0123456789ab",
+            "slides": [
+                {
+                    "id": "slide-0123456789ab",
+                    "layout": "two_column",
+                    "left_content": "Before\n\n- Slow builds\n- Manual steps",
+                    "right_content": "After",
+                }
+            ],
+        }
+    ).slides[0]
+
+    assert slide.left_content == ["Before", "Slow builds", "Manual steps"]  # type: ignore
+    assert slide.right_content == ["After"]  # type: ignore
+
+
+@pytest.mark.parametrize(
+    ("item", "stored"),
+    [
+        ("• Foo", "Foo"),
+        ("- Foo", "Foo"),
+        ("* Foo", "Foo"),
+        ("– Foo", "Foo"),
+        ("1. Foo", "Foo"),
+        ("2) Foo", "Foo"),
+        ("-5 °C is cold", "-5 °C is cold"),
+        ("1.5 million users", "1.5 million users"),
+    ],
+)
+def test_typed_list_markers_are_stripped(item: str, stored: str) -> None:
+    slide = BulletsSlide(id="slide-0123456789ab", bullets=[item])
+
+    assert slide.bullets == [stored]

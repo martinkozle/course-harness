@@ -114,6 +114,7 @@ from course_harness.presentation import (
     SlideCitation,
     SlideOrderRequest,
     SlidePatchRequest,
+    TextItems,
     list_presentations,
     read_presentation_for_lecture,
     reorder_slides,
@@ -440,9 +441,9 @@ class SlideRequest(BaseModel):
     citations: list[SlideCitation] = Field(default_factory=list)
     archived: bool = False
     subtitle: str | None = None
-    bullets: list[str] | None = None
-    left_content: str | None = None
-    right_content: str | None = None
+    bullets: TextItems | None = None
+    left_content: TextItems | None = None
+    right_content: TextItems | None = None
     statement: str | None = None
     text: str | None = None
     code: str | None = None
