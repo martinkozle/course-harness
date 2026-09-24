@@ -6,8 +6,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pptx import Presentation as PPTXPresentation
+from pptx.dml.color import RGBColor
 from pptx.enum.shapes import PP_PLACEHOLDER
 from pptx.enum.text import PP_ALIGN
+from pptx.opc.constants import RELATIONSHIP_TYPE as RT
+from pptx.oxml import parse_xml
+from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 
 from course_harness.presentation import (
@@ -55,9 +59,15 @@ DEFAULT_LAYOUT_MAPPING: dict[str, int] = {
 }
 
 CITATION_FONT_SIZE = Pt(9)
-CITATION_BOX_HEIGHT = Inches(0.45)
-CITATION_BOX_TOP = Inches(7.0)
-SLIDE_WIDTH = Inches(13.333)
+CITATION_STRIP_HEIGHT = Inches(0.35)
+CITATION_MARGIN = Inches(0.4)
+# Readable on both light and dark backgrounds when the background colour is unknown.
+CITATION_NEUTRAL_COLOR = RGBColor(0x80, 0x80, 0x80)
+CITATION_ON_LIGHT_COLOR = RGBColor(0x59, 0x59, 0x59)
+CITATION_ON_DARK_COLOR = RGBColor(0xBF, 0xBF, 0xBF)
+# Keep at least this much of a placeholder when making room for the Sources line.
+MIN_RESERVED_BODY_HEIGHT = Inches(0.5)
+MONOSPACE_FONT = "Courier New"
 
 
 class ExportError(Exception):
@@ -104,6 +114,11 @@ def export_presentation(
             )
 
         pptx_slide = prs.slides.add_slide(slide_layouts[layout_index])
+        # A deck without a slide size uses PowerPoint's default 16:9 size.
+        strip = _citation_strip(prs.slide_width or Inches(13.333), prs.slide_height or Inches(7.5))
+        if slide.citations:
+            # Before populating, so text fitting measures the shortened placeholders.
+            _end_placeholders_above(pptx_slide, strip[1])
         if isinstance(slide, ImageSlide):
             image = (
                 image_resolver(slide.image_source_id)
@@ -113,7 +128,7 @@ def export_presentation(
             _populate_image_slide(slide, pptx_slide, slot_mapping.get("image", {}), image)
         else:
             _populate_slide(slide, pptx_slide, slot_mapping.get(slide.layout, {}))
-        _add_citations(slide, pptx_slide)
+        _add_citations(slide, pptx_slide, strip)
         _add_speaker_notes(slide, pptx_slide)
 
     buffer = BytesIO()
@@ -251,14 +266,31 @@ def _populate_code_slide(slide: CodeSlide, pptx_slide, slot_mappings: dict[str, 
     if body_ph and slide.code:
         tf = body_ph.text_frame
         tf.clear()
-        header = slide.language or "code"
-        p = tf.paragraphs[0]
-        p.text = f"[{header}]"
-        for line in slide.code.split("\n"):
-            p = tf.add_paragraph()
-            p.text = line
-            for run in p.runs:
-                run.font.name = "Courier New"
+        for i, line in enumerate(slide.code.split("\n")):
+            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+            _remove_bullet(p)
+            run = p.add_run()
+            run.text = line
+            run.font.name = MONOSPACE_FONT
+        fit_placeholder_text(body_ph, monospace=True)
+
+
+def _remove_bullet(paragraph) -> None:
+    """Code lines are not list items, so drop the template's bullet and hanging indent."""
+    p_pr = paragraph._p.get_or_add_pPr()
+    p_pr.set("marL", "0")
+    p_pr.set("indent", "0")
+    for tag in ("a:buNone", "a:buAutoNum", "a:buChar", "a:buBlip"):
+        for existing in p_pr.findall(qn(tag)):
+            p_pr.remove(existing)
+    bu_none = p_pr.makeelement(qn("a:buNone"), {})
+    # Bullet elements come before tab stops, default run properties and extensions.
+    later = {qn("a:tabLst"), qn("a:defRPr"), qn("a:extLst")}
+    successor = next((child for child in p_pr if child.tag in later), None)
+    if successor is not None:
+        successor.addprevious(bu_none)
+    else:
+        p_pr.append(bu_none)
 
 
 def _populate_image_slide(
@@ -347,16 +379,36 @@ def _populate_quote_slide(slide: QuoteSlide, pptx_slide, slot_mappings: dict[str
         fit_placeholder_text(body_ph)
 
 
-def _add_citations(slide, pptx_slide) -> None:
+def _citation_strip(slide_width: int, slide_height: int) -> tuple[int, int, int, int]:
+    """The Sources line's box: a thin strip along the bottom, inside the slide margin."""
+    top = slide_height - CITATION_MARGIN - CITATION_STRIP_HEIGHT
+    return (CITATION_MARGIN, top, slide_width - 2 * CITATION_MARGIN, CITATION_STRIP_HEIGHT)
+
+
+def _end_placeholders_above(pptx_slide, strip_top: int) -> None:
+    """Shorten placeholders that reach into the Sources strip so text never covers it."""
+    for placeholder in pptx_slide.placeholders:
+        left, top, width, height = (
+            placeholder.left,
+            placeholder.top,
+            placeholder.width,
+            placeholder.height,
+        )
+        if None in (left, top, width, height) or top + height <= strip_top:
+            continue
+        if strip_top - top < MIN_RESERVED_BODY_HEIGHT:
+            continue
+        placeholder.left, placeholder.top, placeholder.width = left, top, width
+        placeholder.height = strip_top - top
+
+
+def _add_citations(slide, pptx_slide, strip: tuple[int, int, int, int]) -> None:
     if not slide.citations:
         return
-    left = Inches(0.5)
-    top = CITATION_BOX_TOP
-    width = SLIDE_WIDTH - Inches(1.0)
-    height = CITATION_BOX_HEIGHT
-    textbox = pptx_slide.shapes.add_textbox(left, top, width, height)
+    textbox = pptx_slide.shapes.add_textbox(*strip)
     tf = textbox.text_frame
     tf.word_wrap = True
+    color = _citation_color(pptx_slide)
     p = tf.paragraphs[0]
     p.text = "Sources: "
     for i, citation in enumerate(slide.citations):
@@ -364,12 +416,78 @@ def _add_citations(slide, pptx_slide) -> None:
             p.add_run().text = ", "
         run = p.add_run()
         run.text = citation.label
-        run.font.size = CITATION_FONT_SIZE
         if citation.url:
             run.hyperlink.address = citation.url
     for paragraph in tf.paragraphs:
         for run in paragraph.runs:
             run.font.size = CITATION_FONT_SIZE
+            run.font.color.rgb = color
+
+
+def _citation_color(pptx_slide) -> RGBColor:
+    luminance = _background_luminance(pptx_slide)
+    if luminance is None:
+        return CITATION_NEUTRAL_COLOR
+    return CITATION_ON_LIGHT_COLOR if luminance >= 0.5 else CITATION_ON_DARK_COLOR
+
+
+# How a master's colour map names theme colours when a background refers to them.
+_DEFAULT_COLOR_MAP = {"bg1": "lt1", "tx1": "dk1", "bg2": "lt2", "tx2": "dk2"}
+
+
+def _background_luminance(pptx_slide) -> float | None:
+    """The relative luminance (0–1) of a solid slide background, or None when unknown.
+
+    The background comes from the slide, else its layout, else its master. Gradient and
+    picture backgrounds are unknown.
+    """
+    layout = pptx_slide.slide_layout
+    master = layout.slide_master
+    for owner in (pptx_slide, layout, master):
+        bg = owner._element.find(f"{qn('p:cSld')}/{qn('p:bg')}")
+        if bg is None:
+            continue
+        bg_pr = bg.find(qn("p:bgPr"))
+        color = bg_pr.find(qn("a:solidFill")) if bg_pr is not None else bg.find(qn("p:bgRef"))
+        if color is None:
+            return None
+        hex_value = _color_hex(color, master)
+        return _luminance(hex_value) if hex_value else None
+    return None
+
+
+def _color_hex(fill, master) -> str | None:
+    for child in fill:
+        if child.tag == qn("a:srgbClr"):
+            return child.get("val")
+        if child.tag == qn("a:sysClr"):
+            return child.get("lastClr")
+        if child.tag == qn("a:schemeClr"):
+            return _theme_color(master, child.get("val", ""))
+    return None
+
+
+def _theme_color(master, name: str) -> str | None:
+    color_map = master._element.find(qn("p:clrMap"))
+    mapped = (color_map.get(name) if color_map is not None else None) or _DEFAULT_COLOR_MAP.get(
+        name, name
+    )
+    try:
+        theme_part = master.part.part_related_by(RT.THEME)
+    except KeyError:
+        return None
+    theme = parse_xml(theme_part.blob)
+    scheme = theme.find(f"{qn('a:themeElements')}/{qn('a:clrScheme')}")
+    entry = scheme.find(qn(f"a:{mapped}")) if scheme is not None else None
+    return _color_hex(entry, master) if entry is not None else None
+
+
+def _luminance(hex_value: str) -> float | None:
+    try:
+        red, green, blue = (int(hex_value[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    except ValueError:
+        return None
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
 
 
 def _add_speaker_notes(slide, pptx_slide) -> None:

@@ -6,6 +6,9 @@ from pathlib import Path
 import httpx2
 import pytest
 from pptx import Presentation as PPTXPresentation
+from pptx.oxml import parse_xml
+from pptx.oxml.ns import nsdecls, qn
+from pptx.util import Emu, Inches
 
 from course_harness.app import create_app
 from course_harness.course_plan import (
@@ -16,7 +19,13 @@ from course_harness.course_plan import (
     initialize_workspace_history,
 )
 from course_harness.export import export_presentation, validate_export_mapping
-from course_harness.presentation import BulletsSlide, Presentation, TwoColumnSlide
+from course_harness.presentation import (
+    BulletsSlide,
+    CodeSlide,
+    Presentation,
+    SlideCitation,
+    TwoColumnSlide,
+)
 from course_harness.template_profiles import (
     TemplateLayoutMapping,
     TemplateProfile,
@@ -796,3 +805,125 @@ async def test_export_empty_presentation(tmp_path: Path) -> None:
     assert response.status_code == 200
     pptx = PPTXPresentation(BytesIO(response.content))
     assert len(pptx.slides) == 0
+
+
+def _cited_deck(*slides) -> Presentation:
+    return Presentation(
+        id="presentation-abc123def456",
+        lecture_id="lecture-abc123def456",
+        slides=list(slides),
+    )
+
+
+def _cited_bullets() -> BulletsSlide:
+    return BulletsSlide(
+        id="slide-abc123def456",
+        title="Cited",
+        bullets=["A claim"],
+        citations=[
+            SlideCitation(source_id="source-0123456789ab", label="Paper", url="https://x.org")
+        ],
+    )
+
+
+def _template(tmp_path: Path, width: int, height: int, *, background: str | None = None):
+    prs = PPTXPresentation()
+    prs.slide_width, prs.slide_height = Emu(width), Emu(height)
+    if background is not None:
+        c_sld = prs.slide_master._element.find(qn("p:cSld"))
+        c_sld.insert(
+            0,
+            parse_xml(
+                f'<p:bg {nsdecls("p", "a")}><p:bgPr><a:solidFill><a:srgbClr val="{background}"/>'
+                "</a:solidFill><a:effectLst/></p:bgPr></p:bg>"
+            ),
+        )
+    path = tmp_path / "template.pptx"
+    prs.save(str(path))
+    profile = TemplateProfile(
+        id="tpl-000000000001",
+        name="Sized",
+        version=1,
+        template_filename="template.pptx",
+        slide_width=width,
+        slide_height=height,
+        slide_count=11,
+        layouts=[
+            TemplateLayoutMapping(
+                semantic_layout=layout,
+                template_layout_index=index,
+                confidence=1,
+                rationale="Default layouts",
+            )
+            for layout, index in (("bullets", 1), ("code", 1))
+        ],
+    )
+    return profile, path
+
+
+def _sources_box(slide):
+    return next(
+        shape
+        for shape in slide.shapes
+        if shape.has_text_frame and shape.text_frame.text.startswith("Sources:")
+    )
+
+
+@pytest.mark.parametrize(
+    ("width", "height"),
+    [(Inches(10), Inches(7.5)), (Inches(13.333), Inches(7.5))],
+    ids=["4:3", "16:9"],
+)
+def test_sources_line_lies_inside_the_slide_and_the_body_ends_above_it(
+    tmp_path: Path, width: int, height: int
+) -> None:
+    profile, path = _template(tmp_path, width, height)
+
+    exported = PPTXPresentation(
+        BytesIO(export_presentation(_cited_deck(_cited_bullets()), profile, path))
+    )
+
+    slide = exported.slides[0]
+    box = _sources_box(slide)
+    assert box.left >= 0 and box.top >= 0
+    assert box.left + box.width <= width
+    assert box.top + box.height <= height
+    body = next(ph for ph in slide.placeholders if ph.placeholder_format.idx == 1)
+    assert body.top + body.height <= box.top
+    run = next(r for r in box.text_frame.paragraphs[0].runs if r.text == "Paper")
+    assert run.hyperlink.address == "https://x.org"
+
+
+def test_sources_line_colour_contrasts_with_the_background(tmp_path: Path) -> None:
+    colours = {}
+    for name, background in (("light", "FFFFFF"), ("dark", "101820")):
+        profile, path = _template(tmp_path, Inches(13.333), Inches(7.5), background=background)
+        exported = PPTXPresentation(
+            BytesIO(export_presentation(_cited_deck(_cited_bullets()), profile, path))
+        )
+        colours[name] = {
+            str(run.font.color.rgb)
+            for run in _sources_box(exported.slides[0]).text_frame.paragraphs[0].runs
+        }
+
+    assert colours["light"] == {"595959"}
+    assert colours["dark"] == {"BFBFBF"}
+
+
+def test_code_slide_shows_only_the_code_in_a_monospace_font() -> None:
+    deck = _cited_deck(
+        CodeSlide(
+            id="slide-abc123def456",
+            title="Code",
+            code="def hello():\n    return 1",
+            language="python",
+        )
+    )
+
+    exported = PPTXPresentation(BytesIO(export_presentation(deck)))
+
+    body = next(ph for ph in exported.slides[0].placeholders if ph.placeholder_format.idx == 1)
+    paragraphs = body.text_frame.paragraphs
+    assert [p.text for p in paragraphs] == ["def hello():", "    return 1"]
+    assert all(run.font.name == "Courier New" for p in paragraphs for run in p.runs)
+    assert all(p._p.pPr.find(qn("a:buNone")) is not None for p in paragraphs)
