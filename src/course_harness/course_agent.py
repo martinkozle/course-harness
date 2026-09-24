@@ -348,7 +348,8 @@ class CourseAgentDeps:
     # Reads the saved Paper Search Keys, by provider, when a search runs.
     paper_search_keys: Callable[[], Mapping[str, str]] | None = None
     before_mutation: Callable[[], None] | None = None
-    after_mutation: Callable[[], None] | None = None
+    # Receives the exact canonical bytes a completed mutation wrote (None = deleted).
+    after_mutation: Callable[[Mapping[str, bytes | None]], None] | None = None
     create_revision: Callable[[str], str] | None = None
     reconciliation_context: ReconciliationContext | None = None
     apply_reconciliation: Callable[[ReconciliationApplyRequest], str] | None = None
@@ -638,9 +639,13 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         if ctx.deps.before_mutation is not None:
             ctx.deps.before_mutation()
 
-    def confirm_mutation(ctx: RunContext[CourseAgentDeps]) -> None:
+    def confirm_mutation(
+        ctx: RunContext[CourseAgentDeps], written: Mapping[str, bytes | None]
+    ) -> None:
         if ctx.deps.after_mutation is not None:
-            ctx.deps.after_mutation()
+            ctx.deps.after_mutation(written)
+        for path, content in written.items():
+            _record_agent_output(ctx.deps, path, content)
 
     mutation_guidance = (
         "Propose every authoritative change with replace_course_plan; the Course Author must "
@@ -740,8 +745,7 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             command,
             expected=_agent_precondition(ctx.deps, "course.yaml"),
         )
-        confirm_mutation(ctx)
-        _record_agent_output(ctx.deps, "course.yaml", serialize_course_plan(plan))
+        confirm_mutation(ctx, {"course.yaml": serialize_course_plan(plan)})
         ctx.deps.course_state = CourseAgentState(
             course=plan,
             sources=ctx.deps.course_state.sources,
@@ -1110,19 +1114,17 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
                 label=label,
                 expected=_agent_precondition(ctx.deps, "sources.yaml"),
             )
-            confirm_mutation(ctx)
+            sources = [*ctx.deps.course_state.sources, source]
+            confirm_mutation(
+                ctx, {"sources.yaml": serialize_sources_index(SourcesIndex(sources=sources))}
+            )
         except ValueError as error:
             return ToolReturn(return_value=f"Could not admit source: {error}")
 
         ctx.deps.course_state = CourseAgentState(
             course=ctx.deps.course_state.course,
-            sources=[*ctx.deps.course_state.sources, source],
+            sources=sources,
             presentations=ctx.deps.course_state.presentations,
-        )
-        _record_agent_output(
-            ctx.deps,
-            "sources.yaml",
-            serialize_sources_index(SourcesIndex(sources=ctx.deps.course_state.sources)),
         )
         return ToolReturn(
             return_value=_untrusted_source_data(
@@ -1265,8 +1267,7 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             updated,
             expected=_agent_precondition(ctx.deps, presentation_path),
         )
-        confirm_mutation(ctx)
-        _record_agent_output(ctx.deps, presentation_path, serialize_presentation(updated))
+        confirm_mutation(ctx, {presentation_path: serialize_presentation(updated)})
         ctx.deps.course_state = CourseAgentState(
             course=ctx.deps.course_state.course,
             sources=ctx.deps.course_state.sources,
@@ -1432,8 +1433,7 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
                     updated,
                     expected=_agent_precondition(ctx.deps, presentation_path),
                 )
-                confirm_mutation(ctx)
-                _record_agent_output(ctx.deps, presentation_path, serialize_presentation(updated))
+                confirm_mutation(ctx, {presentation_path: serialize_presentation(updated)})
                 ctx.deps.course_state = CourseAgentState(
                     course=ctx.deps.course_state.course,
                     sources=ctx.deps.course_state.sources,
@@ -1483,8 +1483,7 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             updated,
             expected=_agent_precondition(ctx.deps, presentation_path),
         )
-        confirm_mutation(ctx)
-        _record_agent_output(ctx.deps, presentation_path, serialize_presentation(updated))
+        confirm_mutation(ctx, {presentation_path: serialize_presentation(updated)})
         ctx.deps.course_state = CourseAgentState(
             course=ctx.deps.course_state.course,
             sources=ctx.deps.course_state.sources,
@@ -1535,21 +1534,25 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
                 expected=ctx.deps.canonical_preconditions,
                 image_resolver=image_resolver(ctx),
             )
-            confirm_mutation(ctx)
+            updated_plan = read_course_plan(ctx.deps.workspace)
+            written: dict[str, bytes | None] = {
+                f"presentations/{pres.id}.yaml": serialize_presentation(pres)
+            }
+            # course.yaml is rewritten only when the Lecture is first linked to its Presentation.
+            if updated_plan is not None and not any(
+                lec.id == command.lecture_id and lec.presentation_id == pres.id
+                for lec in ctx.deps.course_state.course.lectures
+            ):
+                written["course.yaml"] = serialize_course_plan(updated_plan)
+            confirm_mutation(ctx, written)
         except ValueError as error:
             return ToolReturn(return_value=str(error))
 
-        updated_plan = read_course_plan(ctx.deps.workspace)
         ctx.deps.course_state = CourseAgentState(
             course=updated_plan,
             sources=ctx.deps.course_state.sources,
             presentations=list_presentations(ctx.deps.workspace),
         )
-        _record_agent_output(
-            ctx.deps, f"presentations/{pres.id}.yaml", serialize_presentation(pres)
-        )
-        if updated_plan is not None:
-            _record_agent_output(ctx.deps, "course.yaml", serialize_course_plan(updated_plan))
         supplied = {cmd.id for cmd in command.slides if cmd.id is not None}
         newly_archived = [
             s.id
@@ -1615,9 +1618,9 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
                 "course.yaml": serialize_course_plan(updated_plan),
             },
         )
-        confirm_mutation(ctx)
-        _record_agent_output(ctx.deps, presentation_path, None)
-        _record_agent_output(ctx.deps, "course.yaml", serialize_course_plan(updated_plan))
+        confirm_mutation(
+            ctx, {presentation_path: None, "course.yaml": serialize_course_plan(updated_plan)}
+        )
         ctx.deps.course_state = CourseAgentState(
             course=updated_plan,
             sources=ctx.deps.course_state.sources,

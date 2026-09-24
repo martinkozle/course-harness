@@ -313,7 +313,9 @@ export function ReleaseCanvas({
 					}
 				>
 					{currentState?.drift !== "clean"
-						? "Course files changed outside the app. Review them before publishing."
+						? currentState?.interrupted_run
+							? "The Course Agent stopped before it finished. Review its changes before publishing."
+							: "Course files changed outside the app. Review them before publishing."
 						: !currentState?.validation.valid
 							? "The course has issues to review before it can be published."
 							: "Save your recent changes as a Course Revision before publishing."}

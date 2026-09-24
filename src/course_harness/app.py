@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import subprocess
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
 from pathlib import Path
@@ -1611,11 +1611,17 @@ def create_app(
                 raise RuntimeError("Course Agent run boundary was unavailable")
             mark_run_mutation(active, run_snapshot)
 
-        def checkpoint_agent_mutation() -> None:
+        def checkpoint_agent_mutation(written: Mapping[str, bytes | None]) -> None:
             nonlocal run_snapshot
             if run_snapshot is None:
                 raise RuntimeError("Course Agent run boundary was unavailable")
             run_snapshot = checkpoint_run_mutation(active, run_snapshot)
+            if run_provenance_permitted and written:
+                # Trust each completed edit now, so an interrupted run leaves only
+                # its unfinished work as Workspace Drift. Bytes that no longer match
+                # what the agent wrote stay Drift for review.
+                with suppress(ValueError):
+                    record_app_authored_entries(active, dict(written))
 
         def close_run_boundary() -> None:
             nonlocal run_boundary_closed

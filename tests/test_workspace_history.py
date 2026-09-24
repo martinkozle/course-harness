@@ -986,6 +986,44 @@ def test_abandoned_run_preserves_unattributed_invalid_external_drift(tmp_path: P
     assert not (workspace / ".git" / history.RUN_BOUNDARY_FILE).exists()
 
 
+def test_interrupted_run_marks_the_drift_it_left_until_it_changes(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    initialize_repository(workspace)
+    write_valid_course(workspace, "Baseline")
+    create_revision(workspace, RevisionCreateRequest(summary="Initial Course"))
+    record_app_authored_state(workspace)
+
+    snapshot = begin_run_boundary(workspace)
+    mark_run_mutation(workspace, snapshot)
+    write_valid_course(workspace, "Unfinished agent work")
+    history._ACTIVE_RUNS.clear()
+
+    interrupted = read_current_state(workspace)
+    assert interrupted.drift == "drift"
+    assert interrupted.interrupted_run is True
+
+    write_valid_course(workspace, "Edited in another editor")
+    edited = read_current_state(workspace)
+    assert edited.drift == "drift"
+    assert edited.interrupted_run is False
+
+
+def test_outside_edits_are_not_marked_as_an_interrupted_run(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    initialize_repository(workspace)
+    write_valid_course(workspace, "Baseline")
+    create_revision(workspace, RevisionCreateRequest(summary="Initial Course"))
+    record_app_authored_state(workspace)
+
+    write_valid_course(workspace, "Edited in another editor")
+    state = read_current_state(workspace)
+
+    assert state.drift == "drift"
+    assert state.interrupted_run is False
+
+
 def test_run_checkpoint_preserves_external_invalid_drift_after_agent_work(tmp_path: Path) -> None:
     workspace = tmp_path / "course"
     workspace.mkdir()

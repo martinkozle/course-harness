@@ -47,6 +47,8 @@ TRANSACTION_FILE = "course-harness-transaction"
 RUN_BOUNDARY_FILE = "course-harness-run-boundary"
 PROVENANCE_FILE = "course-harness-provenance.json"
 PROVENANCE_PENDING_FILE = "course-harness-provenance-pending.json"
+# The Workspace Drift identity left behind when a Course Agent run ended without closing.
+INTERRUPTED_RUN_FILE = "course-harness-interrupted-run"
 MAX_RECONCILIATION_FILE_BYTES = 128_000
 MAX_RECONCILIATION_TOTAL_BYTES = 512_000
 OID_PATTERN = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
@@ -104,6 +106,8 @@ class CurrentState(BaseModel):
     drift: Literal["unknown", "clean", "drift"] = "unknown"
     drift_id: str | None = None
     drift_changes: list[CurrentStateEntry] = Field(default_factory=list)
+    # True while the Drift is exactly what an interrupted Course Agent run left behind.
+    interrupted_run: bool = False
 
 
 class RevisionCreateRequest(BaseModel):
@@ -770,11 +774,14 @@ def read_current_state(workspace: Path) -> CurrentState:
         )
     current = _fingerprints(blobs)
     changes = _fingerprint_changes(baseline, current)
+    drift_id = _drift_id(baseline, current) if changes else None
     return state.model_copy(
         update={
             "drift": "clean" if not changes else "drift",
-            "drift_id": _drift_id(baseline, current) if changes else None,
+            "drift_id": drift_id,
             "drift_changes": changes,
+            "interrupted_run": drift_id is not None
+            and _read_private_record(workspace, INTERRUPTED_RUN_FILE) == drift_id,
         }
     )
 
@@ -1900,9 +1907,25 @@ def _recover_abandoned_run(workspace: Path) -> None:
         return
     _require_commit(workspace, snapshot)
     # A crash cannot prove that invalid bytes came from the agent rather than an
-    # external editor. Preserve them as Workspace Drift for reviewed recovery.
+    # external editor. Preserve them as Workspace Drift for reviewed recovery, and
+    # remember that this exact Drift appeared when the run was interrupted.
+    _mark_interrupted_run_drift(workspace)
     _delete_recovery_ref(workspace, ref, snapshot)
     _clear_private_record(workspace, RUN_BOUNDARY_FILE)
+
+
+def _mark_interrupted_run_drift(workspace: Path) -> None:
+    baseline = _read_provenance(workspace)
+    if baseline is None:
+        return
+    current = _fingerprints(_capture_canonical_blobs(workspace))
+    if not _fingerprint_changes(baseline, current):
+        return
+    _write_blob(
+        workspace / ".git",
+        INTERRUPTED_RUN_FILE,
+        f"{_drift_id(baseline, current)}\n".encode("ascii"),
+    )
 
 
 def _write_transaction(

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 from collections.abc import AsyncIterator
@@ -1604,6 +1605,65 @@ async def test_live_openrouter_smoke_uses_only_an_explicitly_free_model(
     assert stream_status == 200
     assert '"type":"RUN_FINISHED"' in stream_body
     assert created.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_completed_agent_edits_are_trusted_before_the_run_ends(tmp_path: Path) -> None:
+    """An interrupted run must not leave its finished edits looking like outside changes."""
+    workspace = tmp_path / "checkpoint-course"
+    workspace.mkdir()
+    trusted_mid_run: list[dict[str, dict[str, str]] | None] = []
+
+    async def planning_then_interrupted(
+        messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        tool_has_returned = any(
+            isinstance(message, ModelRequest)
+            and any(isinstance(part, ToolReturnPart) for part in message.parts)
+            for message in messages
+        )
+        if not tool_has_returned:
+            command = {
+                "title": "Checkpointed",
+                "audience": "Engineers",
+                "lectures": [{"title": "Start"}],
+            }
+            yield {
+                0: DeltaToolCall(
+                    name="replace_course_plan",
+                    json_args=json.dumps({"command": command}),
+                    tool_call_id="checkpoint-plan",
+                )
+            }
+            return
+        trusted_mid_run.append(history._read_provenance(workspace))
+        yield "Almost done"
+
+    app = create_app(
+        workspace,
+        provider_store_path=tmp_path / "user-data" / "provider",
+        chat_store_path=tmp_path / "user-data" / "chat",
+        agent_model=FunctionModel(stream_function=planning_then_interrupted),
+        provider_validator=_verified_capabilities,
+    )
+    run_input = {
+        "threadId": "course-agent",
+        "runId": "checkpoint-run",
+        "state": {},
+        "messages": [{"id": "checkpoint-user", "role": "user", "content": "Plan a Course."}],
+        "tools": [],
+        "context": [],
+        "forwardedProps": {},
+    }
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        stream_status, _body = await _post_stream(app, "/api/agent", run_input)
+
+    assert stream_status == 200
+    written = (workspace / "course.yaml").read_bytes()
+    assert trusted_mid_run and trusted_mid_run[0] is not None
+    assert trusted_mid_run[0]["course.yaml"]["sha256"] == hashlib.sha256(written).hexdigest()
 
 
 @pytest.mark.anyio

@@ -243,6 +243,9 @@ export function HistoryCanvas({
 
 	const unresolvedDrift =
 		state !== null && (state.drift === "drift" || state.drift === "unknown");
+	const interruptedRun = state?.interrupted_run === true;
+	const changesName = interruptedRun ? "these changes" : "outside changes";
+	const theChanges = interruptedRun ? "these changes" : "the outside changes";
 
 	async function mutate(
 		key: string,
@@ -402,7 +405,9 @@ export function HistoryCanvas({
 										<h2 id="history-drift-heading">
 											{state.drift === "unknown"
 												? "This course has no recorded history yet"
-												: "Course files changed outside the app"}
+												: interruptedRun
+													? "The Course Agent stopped before it finished"
+													: "Course files changed outside the app"}
 										</h2>
 									</div>
 									<p>
@@ -435,7 +440,7 @@ export function HistoryCanvas({
 										>
 											<div className="field">
 												<label htmlFor="drift-summary">
-													Describe the outside changes
+													Describe {theChanges}
 												</label>
 												<input
 													id="drift-summary"
@@ -457,7 +462,7 @@ export function HistoryCanvas({
 													Boolean(mutating)
 												}
 											>
-												Accept outside changes
+												Accept {changesName}
 											</button>
 										</form>
 									) : (
@@ -750,7 +755,7 @@ export function HistoryCanvas({
 								: `Undo changes to ${confirmation.item.object}?`
 							: confirmation.kind === "restore"
 								? "Restore this Course Revision?"
-								: "Accept outside changes?"
+								: `Accept ${changesName}?`
 					}
 					confirmLabel={
 						confirmation.kind === "revert"
@@ -782,7 +787,7 @@ export function HistoryCanvas({
 						</p>
 					) : (
 						<p>
-							This records the outside changes as a Course Revision named “
+							This records {theChanges} as a Course Revision named “
 							{driftSummary.trim()}”.
 						</p>
 					)}

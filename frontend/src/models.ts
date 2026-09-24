@@ -331,6 +331,8 @@ export type CurrentState = {
 	drift: "unknown" | "clean" | "drift";
 	drift_id: string | null;
 	drift_changes: CurrentStateFile[];
+	// The Drift is exactly what an interrupted Course Agent run left behind.
+	interrupted_run: boolean;
 };
 
 export type CourseRevision = {

@@ -15,7 +15,9 @@ export function DriftBanner({
 			<p>
 				{state.drift === "unknown"
 					? "This course has no recorded history yet. Review its files before you continue."
-					: "Course files changed outside the app."}
+					: state.interrupted_run
+						? "The Course Agent stopped before it finished. Review the changes it left."
+						: "Course files changed outside the app."}
 			</p>
 			<button type="button" className="btn btn-small" onClick={onReview}>
 				Review changes
