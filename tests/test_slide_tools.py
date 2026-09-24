@@ -251,7 +251,7 @@ async def test_agent_updates_one_field_of_a_slide_and_sees_the_saved_result(
         tmp_path,
         [
             ("update_slide", {"slide_id": BULLETS_ID, "changes": {"title": "The N×M problem"}}),
-            ("update_slide", {"slide_id": BULLETS_ID, "changes": {"speaker_notes": None}}),
+            ("update_slide", {"slide_id": BULLETS_ID, "changes": {"speaker_notes": ""}}),
             ("update_slide", {"slide_id": TITLE_ID, "changes": {"caption": "Not a title field"}}),
         ],
     )
@@ -265,3 +265,58 @@ async def test_agent_updates_one_field_of_a_slide_and_sees_the_saved_result(
     assert bullets.speaker_notes is None
     assert '"title": "The N\\u00d7M problem"' in returns[0] or "The N×M problem" in returns[0]
     assert "title Slides do not store caption" in returns[2]
+
+
+@pytest.mark.anyio
+async def test_null_fields_keep_content_and_are_ignored_where_a_layout_does_not_store_them(
+    tmp_path: Path,
+) -> None:
+    """The model sent every other layout's fields as null, retried a rejected update over
+    and over, and erased a subtitle it meant to leave alone."""
+    workspace, plan = _authored_course(tmp_path)
+    changes = {
+        "purpose": "Open the lecture.",
+        "subtitle": None,
+        "caption": None,
+        "quote": "",
+        "attribution": None,
+        "bullets": [],
+    }
+
+    returns = await _run(
+        workspace, tmp_path, [("update_slide", {"slide_id": TITLE_ID, "changes": changes})]
+    )
+
+    stored = read_presentation_for_lecture(workspace, plan.lectures[0].id)
+    assert stored is not None
+    title = stored.slides[0]
+    assert isinstance(title, TitleSlide)
+    assert (title.purpose, title.subtitle) == ("Open the lecture.", "Why it exists")
+    assert returns[0].startswith("Saved Slide")
+
+
+@pytest.mark.anyio
+async def test_empty_values_clear_slide_fields(tmp_path: Path) -> None:
+    workspace, plan = _authored_course(tmp_path)
+
+    await _run(
+        workspace,
+        tmp_path,
+        [("update_slide", {"slide_id": BULLETS_ID, "changes": {"title": "", "bullets": []}})],
+    )
+
+    stored = read_presentation_for_lecture(workspace, plan.lectures[0].id)
+    assert stored is not None
+    bullets = stored.slides[1]
+    assert isinstance(bullets, BulletsSlide)
+    assert (bullets.title, bullets.bullets) == (None, [])
+    assert bullets.speaker_notes == "Start with the pain."
+
+
+def test_slide_tool_schema_names_the_layouts_that_store_each_field() -> None:
+    schema = SlideCommand.model_json_schema()["properties"]
+
+    assert "Only code Slides store this" in schema["language"]["description"]
+    assert "Only image, quote" not in schema["caption"]["description"]
+    assert "Only image Slides store this" in schema["caption"]["description"]
+    assert "description" not in schema["speaker_notes"]

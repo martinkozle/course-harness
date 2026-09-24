@@ -109,7 +109,7 @@ class CurrentState(BaseModel):
 class RevisionCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    summary: str = Field(min_length=1, max_length=240)
+    summary: str = Field(min_length=1, max_length=MAX_REVISION_SUMMARY_CHARACTERS)
 
     @field_validator("summary")
     @classmethod
@@ -160,7 +160,7 @@ class ReconciliationApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     drift_id: str = Field(min_length=64, max_length=64)
-    summary: str = Field(min_length=1, max_length=240)
+    summary: str = Field(min_length=1, max_length=MAX_REVISION_SUMMARY_CHARACTERS)
     entries: list[ReconciliationFile] = Field(min_length=1)
 
     @field_validator("summary")

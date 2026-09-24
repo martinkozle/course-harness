@@ -24,8 +24,11 @@ from course_harness import providers as providers_module
 from course_harness import workspace_history as history
 from course_harness.app import create_app
 from course_harness.course_agent import (
+    CourseAgentDeps,
+    CourseAgentState,
     CoursePlanLectureCommand,
     ReplaceCoursePlanCommand,
+    _build_course_agent,
     apply_course_plan_command,
     build_provider_model,
 )
@@ -2509,3 +2512,32 @@ async def test_a_saved_model_preset_can_be_checked_again(tmp_path: Path) -> None
     assert rechecked["capabilities"]["vision"] is True
     assert not any("Vision" in message for message in rechecked["diagnostics"])
     assert missing.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_revision_tools_tell_the_model_the_summary_length_limit(tmp_path: Path) -> None:
+    """The model learned the 240-character limit only by failing twice."""
+    schemas: dict[str, dict[str, Any]] = {}
+
+    async def stream(
+        _messages: list[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        schemas.update({tool.name: tool.parameters_json_schema for tool in info.function_tools})
+        yield "Done."
+
+    agent = _build_course_agent(requires_approval=False)
+    async with agent.run_stream(
+        "Hello",
+        deps=CourseAgentDeps(
+            course_state=CourseAgentState(),
+            workspace=tmp_path,
+            data_dir=tmp_path / "data",
+            cache_dir=tmp_path / "cache",
+        ),
+        model=FunctionModel(stream_function=stream),
+    ) as streamed:
+        await streamed.get_output()
+
+    summary = schemas["create_course_revision"]["properties"]["summary"]
+    assert summary["maxLength"] == history.MAX_REVISION_SUMMARY_CHARACTERS
+    assert "at most 240 characters" in summary["description"]

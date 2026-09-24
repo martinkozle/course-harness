@@ -4,7 +4,7 @@ import subprocess
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from uuid import uuid4
 
 import httpx
@@ -57,10 +57,23 @@ from course_harness.sources import (
     serialize_sources_index,
 )
 from course_harness.workspace_history import (
+    MAX_REVISION_SUMMARY_CHARACTERS,
     ReconciliationApplyRequest,
     ReconciliationContext,
     ReconciliationFile,
 )
+
+RevisionSummary = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=MAX_REVISION_SUMMARY_CHARACTERS,
+        description=(
+            f"One line of at most {MAX_REVISION_SUMMARY_CHARACTERS} characters, "
+            "such as one short sentence."
+        ),
+    ),
+]
 
 RESEARCH_CANDIDATES_KIND = "research_candidates"
 CONNECTOR_RESULT_KIND = "connector_result"
@@ -143,8 +156,19 @@ class ReplaceCoursePlanCommand(BaseModel):
     replace_all_lectures: bool = False
 
 
+def _stored_by(name: str) -> str:
+    """Name the layouts that store a Slide field, so the tool schema says where it belongs."""
+    layouts = [
+        layout
+        for layout, cls in SLIDE_CLASSES_BY_LAYOUT.items()
+        if name in cls.model_fields  # type: ignore[ty:unresolved-attribute]
+    ]
+    return f"Only {', '.join(layouts)} Slides store this; leave it out for other layouts."
+
+
 class SlideChanges(BaseModel):
-    """Slide content. Only the fields that are given are written."""
+    """Slide content. Give only the fields you want to write: a field you leave out or give
+    as null keeps its current value. Give an empty value ("" or []) to clear a field."""
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -152,22 +176,24 @@ class SlideChanges(BaseModel):
     speaker_notes: str | None = None
     purpose: str | None = None
     citations: list[SlideCitation] | None = None
-    subtitle: str | None = None
-    bullets: list[str] | None = None
-    left_content: str | None = None
-    right_content: str | None = None
-    statement: str | None = None
-    text: str | None = None
-    code: str | None = None
-    language: str | None = None
+    subtitle: str | None = Field(default=None, description=_stored_by("subtitle"))
+    bullets: list[str] | None = Field(default=None, description=_stored_by("bullets"))
+    left_content: str | None = Field(default=None, description=_stored_by("left_content"))
+    right_content: str | None = Field(default=None, description=_stored_by("right_content"))
+    statement: str | None = Field(default=None, description=_stored_by("statement"))
+    text: str | None = Field(default=None, description=_stored_by("text"))
+    code: str | None = Field(default=None, description=_stored_by("code"))
+    language: str | None = Field(default=None, description=_stored_by("language"))
     image_source_id: str | None = Field(
         default=None,
-        pattern=r"^source-[0-9a-f]{12}$",
-        description="The admitted image Source an image Slide shows.",
+        pattern=r"^(source-[0-9a-f]{12})?$",
+        description=(
+            f"The admitted image Source an image Slide shows. {_stored_by('image_source_id')}"
+        ),
     )
-    caption: str | None = None
-    quote: str | None = None
-    attribution: str | None = None
+    caption: str | None = Field(default=None, description=_stored_by("caption"))
+    quote: str | None = Field(default=None, description=_stored_by("quote"))
+    attribution: str | None = Field(default=None, description=_stored_by("attribution"))
 
 
 NON_CONTENT_FIELDS = frozenset({"id", "layout", "archived", "image_url"})
@@ -212,8 +238,12 @@ def build_slide(
 ) -> Slide:
     """Apply the fields given in ``changes`` on top of an existing Slide.
 
-    Fields that are not given keep their current value, so a revision can never
-    silently erase content it did not mention.
+    Fields that are not given, or given as null, keep their current value, so a
+    revision can never silently erase content it did not mention.  Models commonly
+    send every schema field with null for "not set", so null means "keep" and an
+    empty value ("" or []) means "clear".  Empty fields the layout does not store
+    are ignored for the same reason; only real content there is rejected, so it is
+    never silently dropped.
     """
     if layout not in SLIDE_CLASSES_BY_LAYOUT:
         raise ValueError(
@@ -221,15 +251,20 @@ def build_slide(
         )
     cls = SLIDE_CLASSES_BY_LAYOUT[layout]
     allowed = layout_fields(layout)
-    given = changes.model_fields_set - NON_CONTENT_FIELDS
-    unused = sorted(given - set(allowed))
+    given = {
+        name
+        for name in changes.model_fields_set - NON_CONTENT_FIELDS
+        if getattr(changes, name) is not None
+    }
+    unused = sorted(name for name in given - set(allowed) if getattr(changes, name))
     if unused:
         raise ValueError(
             f"{layout} Slides do not store {', '.join(unused)}. "
-            f"{layout} Slides accept: {', '.join(allowed)}. Put notes for the Course Author "
-            "in speaker_notes or in your reply."
+            f"{layout} Slides accept: {', '.join(allowed)}. Leave the other fields out. Put "
+            "notes for the Course Author in speaker_notes or in your reply."
         )
-    image_source_id = changes.image_source_id if "image_source_id" in given else None
+    given &= set(allowed)
+    image_source_id = changes.image_source_id or None if "image_source_id" in given else None
     if image_source_id is not None and (
         image_resolver is not None and image_resolver(image_source_id) is None
     ):
@@ -246,9 +281,7 @@ def build_slide(
     model_fields = cls.model_fields  # type: ignore[ty:unresolved-attribute]
     for name in given:
         value = getattr(changes, name)
-        values[name] = (
-            model_fields[name].get_default(call_default_factory=True) if value is None else value
-        )
+        values[name] = value or model_fields[name].get_default(call_default_factory=True)
     if isinstance(changes, SlideCommand) and "archived" in changes.model_fields_set:
         values["archived"] = changes.archived
     return cls(id=identity, **values)
@@ -685,7 +718,9 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         )
 
     @agent.tool(requires_approval=requires_approval)
-    async def create_course_revision(ctx: RunContext[CourseAgentDeps], summary: str) -> ToolReturn:
+    async def create_course_revision(
+        ctx: RunContext[CourseAgentDeps], summary: RevisionSummary
+    ) -> ToolReturn:
         """Create one meaningful Course Revision with a concise summary."""
         if ctx.deps.create_revision is None:
             return ToolReturn(return_value="Course Revision service is unavailable.")
@@ -1205,9 +1240,9 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         changes: SlideChanges,
         layout: str | None = None,
     ) -> ToolReturn:
-        """Change one Slide. Only the fields you give are written; every other field
-        keeps its current value. Give a field as null to clear it. Set layout only to
-        change the Slide's layout. Returns the saved Slide."""
+        """Change one Slide. Only the fields you give are written; a field you leave out
+        or give as null keeps its current value. Give an empty value ("" or []) to clear
+        a field. Set layout only to change the Slide's layout. Returns the saved Slide."""
         found = next(
             (
                 (pres, slide)
@@ -1585,7 +1620,7 @@ def create_reconciliation_agent() -> Agent[CourseAgentDeps, str]:
     @agent.tool(requires_approval=True)
     async def apply_reconciliation_patch(
         ctx: RunContext[CourseAgentDeps],
-        summary: str,
+        summary: RevisionSummary,
         entries: list[ReconciliationFile],
     ) -> ToolReturn:
         """Propose a bounded canonical-file patch that resolves the supplied Workspace Drift."""
