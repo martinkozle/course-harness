@@ -350,3 +350,27 @@ def test_agent_list_items_are_stored_without_typed_bullets(tmp_path: Path) -> No
     schema = SlideCommand.model_json_schema()["properties"]
     assert "do not start an item with" in schema["bullets"]["description"]
     assert "first item is that heading" in schema["left_content"]["description"]
+
+
+@pytest.mark.anyio
+async def test_slide_tools_report_the_layout_check(tmp_path: Path) -> None:
+    workspace, plan = _authored_course(tmp_path)
+    crammed = [
+        "Every host application needs its own custom integration for every tool it wants "
+        "to call, which multiplies the maintenance work"
+    ] * 12
+
+    returns = await _run(
+        workspace,
+        tmp_path,
+        [
+            ("update_slide", {"slide_id": BULLETS_ID, "changes": {"bullets": crammed}}),
+            ("update_slide", {"slide_id": BULLETS_ID, "changes": {"bullets": ["Short"]}}),
+            ("lint_slides", {"lecture_id": plan.lectures[0].id}),
+        ],
+    )
+
+    assert f"- {BULLETS_ID} bullets ~" in returns[0]
+    assert "even at min size" in returns[0]
+    assert "Layout check: every Slide fits its template." in returns[1]
+    assert returns[2] == "Layout check: every Slide fits its template."

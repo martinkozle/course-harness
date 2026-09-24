@@ -1760,6 +1760,7 @@ def create_app(
                 cache_dir=cache_dir,
                 chat_store_path=chat_path,
                 vision=configuration.capabilities.vision,
+                templates_data_dir=templates_data,
                 capture_remote=None if is_reconciliation else capture_remote_resource,
                 paper_search_keys=paper_search_key_store.keys,
                 before_mutation=None if is_reconciliation else protect_agent_mutation,

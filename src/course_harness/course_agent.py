@@ -1,5 +1,6 @@
 import enum
 import json
+import logging
 import subprocess
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -50,6 +51,7 @@ from course_harness.presentation import (
     write_presentation,
 )
 from course_harness.resources import Candidate, ResourceState
+from course_harness.slide_lint import CONTENT_LIMITS_GUIDE, format_findings, lint_slides
 from course_harness.sources import (
     Source,
     SourceImageResolver,
@@ -57,12 +59,20 @@ from course_harness.sources import (
     pinned_image_resolver,
     serialize_sources_index,
 )
+from course_harness.template_profiles import (
+    BUILTIN_DEFAULT_ID,
+    TemplateProfile,
+    profile_dir,
+    resolve_profile,
+)
 from course_harness.workspace_history import (
     MAX_REVISION_SUMMARY_CHARACTERS,
     ReconciliationApplyRequest,
     ReconciliationContext,
     ReconciliationFile,
 )
+
+logger = logging.getLogger(__name__)
 
 RevisionSummary = Annotated[
     str,
@@ -331,6 +341,8 @@ class CourseAgentDeps:
     chat_store_path: Path | None = None
     # Whether the active Model Preset accepts image input.
     vision: bool = False
+    # Where Template Profiles live, so Slide checks measure the Course's template.
+    templates_data_dir: Path | None = None
     # Captures a remote URL into the Library and waits until it is processed.
     capture_remote: Callable[[str], Awaitable[ResourceState]] | None = None
     # Reads the saved Paper Search Keys, by provider, when a search runs.
@@ -343,6 +355,19 @@ class CourseAgentDeps:
     # Captured when a run begins.  Agent state is a snapshot, so a canonical
     # mutation may only replace the exact file it was based on.
     canonical_preconditions: dict[str, CanonicalFile] | None = None
+
+
+def _active_template(deps: CourseAgentDeps) -> tuple[TemplateProfile | None, Path | None]:
+    """The Course's Template Profile and file, or the built-in default without one."""
+    course = deps.course_state.course
+    if deps.templates_data_dir is None or course is None or course.template_profile_id is None:
+        return None, None
+    profile = resolve_profile(
+        deps.templates_data_dir, course.template_profile_id, course.template_profile_version
+    )
+    if profile.id == BUILTIN_DEFAULT_ID:
+        return profile, None
+    return profile, profile_dir(deps.templates_data_dir, profile.id) / "template.pptx"
 
 
 def _agent_precondition(deps: CourseAgentDeps, path: str) -> CanonicalFile:
@@ -667,9 +692,12 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             "create a Presentation or restructure a whole deck. Each tool returns the saved "
             "Slides, so you do not need read_slide to confirm a change. Nine slide layouts "
             "are available, and each stores only its own fields: "
-            f"{LAYOUT_FIELD_GUIDE}. Start with skeleton outlines (layout, title, purpose) and "
-            "fill in content progressively as the Course Author gives direction. Every content "
-            "Slide should cite Course Sources. Slide titles should be concise (1-6 words). "
+            f"{LAYOUT_FIELD_GUIDE}. {CONTENT_LIMITS_GUIDE} Every tool that changes Slides "
+            "ends with a layout check against the Course's template; fix each problem it "
+            "reports (shorten, split, or move detail to speaker_notes) before moving on, and "
+            "use lint_slides to check a whole Presentation. Start with skeleton outlines "
+            "(layout, title, purpose) and fill in content progressively as the Course Author "
+            "gives direction. Every content Slide should cite Course Sources. "
             "Use delete_presentation only when the Course Author explicitly asks to remove a "
             "Presentation. Archived Slides are preserved at the end and survive replanning; "
             "only replace_all_slides removes them.\n\n"
@@ -1150,6 +1178,16 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
                 lines.append(f"  {sid} [{layout}] {title}{arch_mark}")
         return "\n".join(lines)
 
+    @agent.tool(name="lint_slides")
+    async def lint_slides_tool(ctx: RunContext[CourseAgentDeps], lecture_id: str) -> str:
+        """Check every active Slide of a Lecture's Presentation against the Course's
+        template: text that overflows even at the smallest font size, too many or too
+        long items, and empty slots a layout needs."""
+        pres = read_presentation_for_lecture(ctx.deps.workspace, lecture_id)
+        if pres is None:
+            return f"No Presentation exists for lecture {lecture_id}."
+        return layout_check(ctx, pres.slides)
+
     @agent.tool
     async def list_slides(ctx: RunContext[CourseAgentDeps], lecture_id: str) -> ToolReturn:
         """List all slides in a Presentation for a specific lecture."""
@@ -1251,6 +1289,15 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             ),
         ]
 
+    def layout_check(ctx: RunContext[CourseAgentDeps], slides: list[Slide]) -> str:
+        """The linter's findings for Slides just saved, as text for the tool result."""
+        try:
+            profile, template_path = _active_template(ctx.deps)
+            return format_findings(lint_slides(slides, profile, template_path))
+        except Exception:
+            logger.warning("The Slide layout check failed", exc_info=True)
+            return "Layout check unavailable."
+
     def image_resolver(ctx: RunContext[CourseAgentDeps]) -> SourceImageResolver:
         return pinned_image_resolver(ctx.deps.course_state.sources, ctx.deps.data_dir)
 
@@ -1288,7 +1335,10 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         )
         save_presentation(ctx, updated)
         return ToolReturn(
-            return_value=f"Saved Slide {slide_id}:\n{json_str(slide.model_dump(mode='json'))}",
+            return_value=(
+                f"Saved Slide {slide_id}:\n{json_str(slide.model_dump(mode='json'))}\n\n"
+                f"{layout_check(ctx, [slide])}"
+            ),
             metadata=presentation_changed(ctx, updated, f"Updated Slide {slide_id}"),
         )
 
@@ -1355,7 +1405,8 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         return ToolReturn(
             return_value=(
                 f"Added {len(new_slides)} Slide(s); the Presentation now has "
-                f"{len(active) + len(new_slides)} active Slides.\n{json_str(inserted)}"
+                f"{len(active) + len(new_slides)} active Slides.\n{json_str(inserted)}\n\n"
+                f"{layout_check(ctx, new_slides)}"
             ),
             metadata=presentation_changed(ctx, updated, f"Added {len(new_slides)} Slide(s)"),
         )
@@ -1515,6 +1566,7 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
                     if newly_archived
                     else "."
                 )
+                + f"\n\n{layout_check(ctx, pres.slides)}"
             ),
             metadata=[
                 ActivitySnapshotEvent(
