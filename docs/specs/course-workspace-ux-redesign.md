@@ -4,6 +4,8 @@ Status: first implementation round complete (see [section 12](#12-implementation
 
 Date: 2026-09-23. Companion: [browser audit](../research/course-workspace-ux-audit.md).
 
+Follow-up: [2026-09-24 implementation review](../research/course-workspace-ux-followup.md) records confirmed draft-protection gaps, a narrow-screen toolbar issue, and a prioritized next round after the owner's accepted refinements.
+
 ## 1. Product direction
 
 Course Harness should feel like a place where you build a Course with an agent. Open your material, discuss what to teach, inspect the Course Plan, work on a Presentation, and follow a Citation back to its Evidence without losing your conversation.
