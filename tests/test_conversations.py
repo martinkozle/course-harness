@@ -1,7 +1,10 @@
 """Conversation behavior at the HTTP and persisted chat seams."""
 
+import asyncio
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 import httpx2
 import pytest
@@ -13,13 +16,20 @@ from pydantic_ai.messages import (
     ToolCallPart,
     UserPromptPart,
 )
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from course_harness.app import create_app
 from course_harness.chat_history import (
     chat_session_path,
+    clean_generated_title,
+    fallback_title,
+    list_conversations,
+    propose_conversation_title,
     read_chat_history,
     save_chat_history,
+    update_conversation,
 )
+from course_harness.providers import ProviderCapabilities
 
 
 @pytest.mark.anyio
@@ -239,3 +249,154 @@ async def test_legacy_chat_file_migrates_once(tmp_path: Path) -> None:
         transport=httpx2.ASGITransport(app=reopened), base_url="http://test"
     ) as client:
         assert (await client.get("/api/conversations")).json()["active_id"] == catalog["active_id"]
+
+
+async def _verified_capabilities(_request: object) -> ProviderCapabilities:
+    return ProviderCapabilities(
+        tool_calling=True,
+        structured_output=True,
+        streaming=True,
+        context_window=131_072,
+        vision=False,
+    )
+
+
+async def _replying_model(_messages: list[ModelMessage], _info: AgentInfo) -> AsyncIterator[str]:
+    yield "Noted."
+
+
+def _titled_app(tmp_path: Path, title_model: FunctionModel | None = None) -> Any:
+    workspace = tmp_path / "course"
+    workspace.mkdir(exist_ok=True)
+    return create_app(
+        workspace,
+        provider_store_path=tmp_path / "provider",
+        chat_store_path=tmp_path / "chat",
+        agent_model=FunctionModel(stream_function=_replying_model),
+        title_model=title_model,
+        provider_validator=_verified_capabilities,
+    )
+
+
+async def _send(client: httpx2.AsyncClient, content: str) -> None:
+    await client.put(
+        "/api/provider",
+        json={"kind": "openrouter", "model": "openai/gpt-oss-20b:free", "api_key": "secret"},
+    )
+    response = await client.post(
+        "/api/agent",
+        headers={"accept": "text/event-stream"},
+        json={
+            "threadId": (await client.get("/api/conversations")).json()["active_id"],
+            "runId": "title-run",
+            "state": {},
+            "messages": [{"id": "user-1", "role": "user", "content": content}],
+            "tools": [],
+            "context": [],
+            "forwardedProps": {"mode": "autonomous"},
+        },
+    )
+    assert response.status_code == 200
+
+
+async def _active_summary(client: httpx2.AsyncClient) -> dict[str, Any]:
+    catalog = (await client.get("/api/conversations")).json()
+    return next(item for item in catalog["conversations"] if item["id"] == catalog["active_id"])
+
+
+def test_fallback_title_cuts_the_first_message_at_a_word_boundary() -> None:
+    assert fallback_title("  Plan a\n lecture  ") == "Plan a lecture"
+    long = "Design an introductory course on causal inference for practising data scientists"
+    title = fallback_title(long)
+    assert title == "Design an introductory course on causal inference for…"
+    assert len(title) <= 61
+    assert fallback_title("x" * 100) == "x" * 60 + "…"
+
+
+def test_generated_titles_are_cleaned_to_one_plain_line() -> None:
+    assert clean_generated_title('Title: "Causal Inference Basics."\nextra') == (
+        "Causal Inference Basics"
+    )
+    assert clean_generated_title("  \n ") == ""
+
+
+@pytest.mark.anyio
+async def test_first_message_names_the_conversation_without_a_title_model(
+    tmp_path: Path,
+) -> None:
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=_titled_app(tmp_path)), base_url="http://test"
+    ) as client:
+        await _send(
+            client,
+            '[Attachment: resource-0123456789ab image/png "a.png"]\n\n'
+            "[Context: Focus on Lecture 2]\n\nOutline the confounding lecture",
+        )
+        summary = await _active_summary(client)
+        assert summary["title"] == "Outline the confounding lecture"
+        assert summary["title_source"] == "query"
+
+        await _send(client, "Now add exercises")
+        assert (await _active_summary(client))["title"] == "Outline the confounding lecture"
+
+
+@pytest.mark.anyio
+async def test_title_model_refines_the_fallback_title(tmp_path: Path) -> None:
+    prompts: list[str] = []
+
+    def titling(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        prompts.append(str(_user_prompt(messages)))
+        return ModelResponse(parts=[TextPart(content='"Confounding Lecture Outline."')])
+
+    app = _titled_app(tmp_path, FunctionModel(function=titling))
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await _send(client, "Outline the confounding lecture")
+        for _ in range(100):
+            summary = await _active_summary(client)
+            if summary["title_source"] == "generated":
+                break
+            await asyncio.sleep(0.01)
+    assert summary["title"] == "Confounding Lecture Outline"
+    assert prompts == ["Outline the confounding lecture"]
+
+
+def _user_prompt(messages: list[ModelMessage]) -> object:
+    request = messages[-1]
+    assert isinstance(request, ModelRequest)
+    return next(part.content for part in request.parts if isinstance(part, UserPromptPart))
+
+
+def test_automatic_titles_never_replace_a_title_the_author_chose(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    store = tmp_path / "chat"
+    conversation_id = list_conversations(store, workspace).active_id
+    assert propose_conversation_title(store, workspace, conversation_id, "Plan it", "query")
+    update_conversation(store, workspace, conversation_id, title="My name")
+    assert not propose_conversation_title(
+        store, workspace, conversation_id, "Planning Session", "generated"
+    )
+    summary = list_conversations(store, workspace).conversations[0]
+    assert (summary.title, summary.title_source) == ("My name", "author")
+
+
+def test_stored_titles_without_a_source_keep_author_renames(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    store = tmp_path / "chat"
+    list_conversations(store, workspace)
+    index_path = next(store.glob("*/index.json"))
+    index = json.loads(index_path.read_text())
+    first = index["conversations"][0]
+    del first["title_source"]
+    index["conversations"].append({**first, "id": "renamed", "title": "Week one"})
+    index_path.write_text(json.dumps(index))
+    (index_path.parent / "renamed.json").write_text(
+        (index_path.parent / f"{first['id']}.json").read_text()
+    )
+    sources = {
+        item.title: item.title_source for item in list_conversations(store, workspace).conversations
+    }
+    assert sources == {"Conversation 1": "default", "Week one": "author"}

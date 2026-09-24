@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import subprocess
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
@@ -47,8 +48,11 @@ from course_harness.chat_history import (
     compact_conversation,
     create_conversation,
     delete_conversation,
+    fallback_title,
     list_conversations,
+    needs_title,
     preview_compaction,
+    propose_conversation_title,
     read_chat_history,
     read_chat_transcript,
     read_conversation_transcript,
@@ -71,6 +75,7 @@ from course_harness.connectors import (
     ConnectorView,
     ResolvedConnector,
 )
+from course_harness.conversation_titles import generate_conversation_title
 from course_harness.course_agent import (
     AgentMode,
     CourseAgentDeps,
@@ -224,6 +229,7 @@ from course_harness.workspaces import (
 
 STREAM_TERMINATION_CONFIRMATION_SECONDS = 0.5
 MAX_UPLOAD_FILENAME_LENGTH = 255
+CONVERSATION_TITLE_TIMEOUT_SECONDS = 60.0
 # Long enough for docling to convert a typical paper on a CPU.
 REMOTE_CAPTURE_TIMEOUT_SECONDS = 300.0
 # Less readable text than this suggests a page that renders its content with scripts.
@@ -234,6 +240,35 @@ MAX_MULTIPART_FIELD_BYTES = 64 * 1024
 # below remains the authoritative per-file limit, because Content-Length is
 # optional and includes multipart framing.
 MAX_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+
+
+_MESSAGE_ATTACHMENT_LINE = re.compile(r'\[Attachment: resource-[0-9a-f]{12} \S+ ".*"\]')
+_MESSAGE_CONTEXT_PREFIX = re.compile(r"\[Context: .+?\]\n\n", re.DOTALL)
+
+
+def _latest_user_text(messages: object) -> str:
+    """The Course Author's words in the newest AG-UI user message, without UI prefixes."""
+    if not isinstance(messages, list):
+        return ""
+    for message in reversed(messages):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            content = "\n".join(
+                str(part.get("text", ""))
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        if not isinstance(content, str):
+            return ""
+        lines = content.split("\n")
+        while lines and _MESSAGE_ATTACHMENT_LINE.fullmatch(lines[0]):
+            lines.pop(0)
+        body = "\n".join(lines).lstrip("\n")
+        prefix = _MESSAGE_CONTEXT_PREFIX.match(body)
+        return (body[prefix.end() :] if prefix else body).strip()
+    return ""
 
 
 def _upload_too_large() -> HTTPException:
@@ -447,6 +482,7 @@ def create_app(
     templates_cache_path: Path | None = None,
     release_data_path: Path | None = None,
     agent_model: Model | None = None,
+    title_model: Model | None = None,
     provider_validator: ProviderCapabilityValidator = validate_provider_capabilities,
     provider_model_lister: Callable[
         [Path, str], Awaitable[list[ModelSuggestion]]
@@ -467,6 +503,7 @@ def create_app(
     app = FastAPI(title="Course Harness")
     background_render_tasks: set[asyncio.Task[None]] = set()
     deferred_agent_cleanup_tasks: set[asyncio.Task[None]] = set()
+    conversation_title_tasks: set[asyncio.Task[None]] = set()
 
     def finish_background_render(task: asyncio.Task[None]) -> None:
         background_render_tasks.discard(task)
@@ -481,6 +518,36 @@ def create_app(
             task.result()
         except BaseException as error:
             logger.warning("Deferred Course Agent cleanup failed: %s", error)
+
+    def finish_conversation_title(task: asyncio.Task[None]) -> None:
+        conversation_title_tasks.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            logger.warning("Conversation title generation failed: %s", task.exception())
+
+    def title_new_conversation(
+        workspace: Path, conversation_id: str, first_message: str, model: Model | None
+    ) -> None:
+        """Name a fresh Conversation from its first message, then refine it with the model."""
+        placeholder = fallback_title(first_message)
+        if not placeholder or not needs_title(chat_path, workspace, conversation_id):
+            return
+        propose_conversation_title(chat_path, workspace, conversation_id, placeholder, "query")
+        if model is None:
+            return
+
+        async def refine() -> None:
+            title = await asyncio.wait_for(
+                generate_conversation_title(model, first_message),
+                timeout=CONVERSATION_TITLE_TIMEOUT_SECONDS,
+            )
+            if title:
+                propose_conversation_title(
+                    chat_path, workspace, conversation_id, title, "generated"
+                )
+
+        task = asyncio.create_task(refine())
+        conversation_title_tasks.add(task)
+        task.add_done_callback(finish_conversation_title)
 
     def schedule_template_background_render(
         profile: tpl.TemplateProfile,
@@ -1589,6 +1656,7 @@ def create_app(
         try:
             body = await request.body()
             props: dict[str, object] = {}
+            first_message = ""
             try:
                 body_json = json.loads(body) if body else {}
                 if isinstance(body_json, dict):
@@ -1605,6 +1673,7 @@ def create_app(
                             status_code=409,
                             detail=("Active conversation changed; reload before sending."),
                         )
+                    first_message = _latest_user_text(body_json.get("messages"))
                     forwarded = body_json.get("forwardedProps", {})
                     if isinstance(forwarded, dict):
                         props = cast(dict[str, object], forwarded)
@@ -1718,6 +1787,15 @@ def create_app(
                     save_chat_history(chat_path, active, completed.all_messages(), conversation_id)
 
             model = agent_model or build_provider_model(configuration, api_key)
+            if not history:
+                # An injected agent model stands in for the provider, so only an injected
+                # title model may be asked for a title alongside it.
+                title_new_conversation(
+                    active,
+                    conversation_id,
+                    first_message,
+                    title_model or (model if agent_model is None else None),
+                )
             active_agent = (
                 reconciliation_agent
                 if is_reconciliation

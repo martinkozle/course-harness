@@ -4,12 +4,13 @@ import dataclasses
 import hashlib
 import json
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
@@ -25,6 +26,13 @@ from pydantic_ai.ui.ag_ui import AGUIAdapter
 from course_harness.workspaces import workspace_identity
 
 RESEARCH_KINDS = frozenset({"research_candidates", "connector_result"})
+FALLBACK_TITLE_LENGTH = 60
+MAX_TITLE_LENGTH = 80
+_DEFAULT_TITLE = re.compile(r"Conversation \d+")
+
+TitleSource = Literal["default", "query", "generated", "author"]
+# A title may only be replaced by a source of equal or higher rank; an author's rename always wins.
+_TITLE_RANK: dict[str, int] = {"default": 0, "query": 1, "generated": 2, "author": 3}
 
 
 class ResearchCandidate(BaseModel):
@@ -70,10 +78,21 @@ class ChatTranscript(BaseModel):
 class ConversationSummary(BaseModel):
     id: str
     title: str
+    title_source: TitleSource = "default"
     created_at: str
     updated_at: str
     archived: bool = False
     has_pending_approval: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _infer_legacy_title_source(cls, data: object) -> object:
+        """Treat a stored title without a source as a rename unless it is a numbered default."""
+        if isinstance(data, dict) and "title_source" not in data:
+            title = str(data.get("title", ""))
+            source = "default" if _DEFAULT_TITLE.fullmatch(title) else "author"
+            return {**data, "title_source": source}
+        return data
 
 
 class ConversationCatalog(BaseModel):
@@ -231,6 +250,7 @@ def create_conversation(
                 if not label:
                     raise ValueError("Conversation title cannot be empty")
                 item.title = label
+                item.title_source = "author"
                 item.updated_at = _now()
                 _update_metadata(index, item)
             if index["active_id"] != item.id or title is not None:
@@ -243,7 +263,11 @@ def create_conversation(
     if not label:
         raise ValueError("Conversation title cannot be empty")
     metadata = ConversationSummary(
-        id=conversation_id, title=label, created_at=timestamp, updated_at=timestamp
+        id=conversation_id,
+        title=label,
+        title_source="author" if title else "default",
+        created_at=timestamp,
+        updated_at=timestamp,
     )
     _atomic_write(_thread_path(store_path, workspace, conversation_id), _empty_thread())
     index["conversations"] = [
@@ -288,12 +312,59 @@ def update_conversation(
         if not title:
             raise ValueError("Conversation title cannot be empty")
         item.title = title
+        item.title_source = "author"
     if archived is not None:
         item.archived = archived
     item.updated_at = _now()
     _update_metadata(index, item)
     _atomic_write(_index_path(store_path, workspace), index)
     return list_conversations(store_path, workspace)
+
+
+def fallback_title(query: str, limit: int = FALLBACK_TITLE_LENGTH) -> str:
+    """The Course Author's first message on one line, cut at a word boundary."""
+    text = " ".join(query.split())
+    if len(text) <= limit:
+        return text
+    cut = text[: limit + 1].rsplit(" ", 1)[0] if " " in text[: limit + 1] else text[:limit]
+    return cut.rstrip(" ,;:.-") + "…"
+
+
+def clean_generated_title(raw: str) -> str:
+    """Normalize a model-proposed title; an empty result means it is unusable."""
+    lines = [line for line in raw.strip().splitlines() if line.strip()]
+    text = " ".join(lines[0].split()) if lines else ""
+    text = re.sub(r"^(title\s*:\s*)", "", text, flags=re.IGNORECASE)
+    text = text.strip("\"'`*#“”‘’ ").rstrip(".")
+    return fallback_title(text, MAX_TITLE_LENGTH) if text else ""
+
+
+def needs_title(store_path: Path, workspace: Path, conversation_id: str) -> bool:
+    """Whether a Conversation still carries its numbered placeholder title."""
+    return _find(_catalog(store_path, workspace), conversation_id).title_source == "default"
+
+
+def propose_conversation_title(
+    store_path: Path,
+    workspace: Path,
+    conversation_id: str,
+    title: str,
+    source: TitleSource,
+) -> bool:
+    """Apply an automatic title unless a higher-ranked title is already in place."""
+    title = title.strip()
+    index = _catalog(store_path, workspace)
+    try:
+        item = _find(index, conversation_id)
+    except KeyError:
+        return False
+    if not title or _TITLE_RANK[source] < _TITLE_RANK[item.title_source]:
+        return False
+    item.title = title
+    item.title_source = source
+    _update_metadata(index, item)
+    _atomic_write(_index_path(store_path, workspace), index)
+    return True
 
 
 def delete_conversation(
