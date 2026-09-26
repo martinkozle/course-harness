@@ -48,6 +48,20 @@ test("Course Author creates a Course through chat and revises its Course Plan", 
 	await expect(
 		settings.getByLabel("New API key for My OpenRouter"),
 	).not.toBeVisible();
+
+	// A server that does not report the model's context size asks for it instead.
+	await settings.getByRole("button", { name: "Add Model Preset" }).click();
+	await settings.getByLabel("Preset name").fill("Team vLLM");
+	await settings.getByLabel("Model ID").fill("vllm/unreported-context");
+	await settings.getByRole("button", { name: "Save Model Preset" }).click();
+	await expect(
+		settings.getByText("did not report a context window"),
+	).toBeVisible();
+	await settings.getByLabel("Context size (tokens)").fill("32768");
+	await settings.getByRole("button", { name: "Save Model Preset" }).click();
+	await expect(settings.getByText("Team vLLM")).toBeVisible();
+	await expect(settings.getByText("32K context")).toBeVisible();
+	await expect(settings.getByLabel("Context size (tokens)")).toBeHidden();
 	await settings.getByRole("button", { name: "Close" }).click();
 	await expect(settings).toBeHidden();
 
@@ -220,7 +234,7 @@ test("Course Author creates a Course through chat and revises its Course Plan", 
 		.getByRole("button", { name: "Delete", exact: true })
 		.click();
 	await expect(
-		modelSettings.getByText("This will also delete 1 attached Model Preset."),
+		modelSettings.getByText("This will also delete 2 attached Model Presets."),
 	).toBeVisible();
 	await modelSettings.getByRole("button", { name: "Delete account" }).click();
 	await expect(

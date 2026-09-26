@@ -46,6 +46,8 @@ class ProviderConfigurationRequest(BaseModel):
     api_key: SecretStr = Field(min_length=1)
     base_url: str | None = None
     allow_insecure_http: bool = False
+    # Used only when the provider does not report the model's context window itself.
+    context_window: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def endpoint_matches_provider(self) -> ProviderConfigurationRequest:
@@ -124,6 +126,7 @@ class ModelPresetRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     provider_account_id: str = Field(min_length=1)
     model: str = Field(min_length=1, max_length=300)
+    context_window: int | None = Field(default=None, ge=1)
 
 
 class ModelPreset(BaseModel):
@@ -135,6 +138,8 @@ class ModelPreset(BaseModel):
     model: str
     capabilities: ProviderCapabilities
     diagnostics: list[str]
+    # The context window the Course Author entered because the provider reported none.
+    entered_context_window: int | None = None
 
 
 class ModelCatalog(BaseModel):
@@ -177,6 +182,12 @@ class ProviderCapabilityError(ValueError):
 
 class ProviderValidationError(ValueError):
     """The provider or model could not be verified."""
+
+
+class ContextWindowUnknownError(ProviderValidationError):
+    """The provider did not report a context window and none was entered."""
+
+    code = "context_window_unknown"
 
 
 class ProviderAccountInUseError(ValueError):
@@ -380,7 +391,7 @@ async def _validate_provider_capabilities(
             )
             response.raise_for_status()
             metadata = response.json()["data"]
-            return _capabilities_from_metadata(metadata)
+            return _capabilities_from_metadata(metadata, context_window=request.context_window)
 
         if request.kind == "anthropic":
             response = await client.get(
@@ -424,7 +435,7 @@ async def _validate_provider_capabilities(
             raise ProviderValidationError(
                 "The OpenAI-compatible endpoint did not report the selected model."
             )
-        capabilities = _capabilities_from_metadata(metadata)
+        capabilities = _capabilities_from_metadata(metadata, context_window=request.context_window)
         if not capabilities.vision and (
             _listing_reports_vision(listing, request.model)
             or await _server_props_report_vision(client, request.base_url, request.model, headers)
@@ -529,7 +540,13 @@ async def _server_props_report_vision(
     return isinstance(modalities, dict) and modalities.get("vision") is True
 
 
-def _capabilities_from_metadata(metadata: object) -> ProviderCapabilities:
+def _capabilities_from_metadata(
+    metadata: object, *, context_window: int | None = None
+) -> ProviderCapabilities:
+    """Read capabilities from a model listing entry.
+
+    ``context_window`` fills in for a provider that does not report one.
+    """
     if not isinstance(metadata, dict):
         raise ProviderValidationError("The provider returned invalid model metadata.")
     parameters = metadata.get("supported_parameters", [])
@@ -549,14 +566,22 @@ def _capabilities_from_metadata(metadata: object) -> ProviderCapabilities:
     if not isinstance(capabilities, dict):
         capabilities = {}
     meta = metadata.get("meta", {})
-    context_window = (
+    reported = (
         metadata.get("context_length")
         or metadata.get("context_window")
+        # vLLM
+        or metadata.get("max_model_len")
+        # LM Studio
+        or metadata.get("max_context_length")
+        # llama.cpp
         or (meta.get("n_ctx") if isinstance(meta, dict) else None)
     )
-    if not isinstance(context_window, int) or context_window < 1:
-        raise ProviderValidationError(
-            "The provider did not report a usable context window for the selected model."
+    if isinstance(reported, int) and not isinstance(reported, bool) and reported >= 1:
+        context_window = reported
+    if context_window is None:
+        raise ContextWindowUnknownError(
+            "The provider did not report a context window for this model. "
+            "Enter the model's context size to continue."
         )
     return ProviderCapabilities(
         tool_calling="tools" in parameters or capabilities.get("tools") is True,
@@ -719,6 +744,11 @@ def save_model_preset(
     *,
     credential_store: CredentialStore | None = None,
 ) -> ModelPreset:
+    """Save a verified Model Preset.
+
+    The entered context window is kept only when the provider did not report one, so a
+    later capability check can reuse it.
+    """
     catalog = read_model_catalog(store_path, credential_store=credential_store)
     if all(account.id != request.provider_account_id for account in catalog.provider_accounts):
         raise KeyError(request.provider_account_id)
@@ -729,6 +759,11 @@ def save_model_preset(
         model=request.model,
         capabilities=capabilities,
         diagnostics=provider_diagnostics(capabilities),
+        entered_context_window=(
+            request.context_window
+            if capabilities.context_window == request.context_window
+            else None
+        ),
     )
     catalog.model_presets.append(preset)
     if catalog.selected_model_id is None:
@@ -869,6 +904,7 @@ def provider_request_for_model(
         api_key=SecretStr(api_key),
         base_url=account.base_url if account.kind == "openai-compatible" else None,
         allow_insecure_http=account.base_url.startswith("http://"),
+        context_window=request.context_window,
     )
 
 

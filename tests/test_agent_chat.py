@@ -35,6 +35,7 @@ from course_harness.course_agent import (
 )
 from course_harness.course_plan import read_course_plan, write_course_plan
 from course_harness.providers import (
+    ContextWindowUnknownError,
     ModelSuggestion,
     ProviderAccountRequest,
     ProviderCapabilities,
@@ -869,6 +870,104 @@ async def test_llamacpp_vision_is_read_from_its_model_listing_or_server_props(
         capabilities = await validate_provider_capabilities(request, http_client=client)
 
     assert capabilities.vision is vision
+
+
+def _vllm_provider(*, max_model_len: int | None) -> httpx2.MockTransport:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/v1/models":
+            entry: dict[str, object] = {"id": "Qwen/Qwen3-32B", "owned_by": "vllm"}
+            if max_model_len is not None:
+                entry["max_model_len"] = max_model_len
+            return httpx2.Response(200, json={"object": "list", "data": [entry]})
+        if request.url.path == "/props":
+            return httpx2.Response(404)
+        tool_call = {"type": "function", "function": {"name": "add_numbers", "arguments": "{}"}}
+        return httpx2.Response(200, json={"choices": [{"message": {"tool_calls": [tool_call]}}]})
+
+    return httpx2.MockTransport(handler)
+
+
+def _vllm_request(context_window: int | None = None) -> ProviderConfigurationRequest:
+    return ProviderConfigurationRequest(
+        kind="openai-compatible",
+        model="Qwen/Qwen3-32B",
+        api_key=SecretStr("local-secret"),
+        base_url="https://vllm.example/v1",
+        context_window=context_window,
+    )
+
+
+@pytest.mark.anyio
+async def test_vllm_reports_its_context_window_as_max_model_len() -> None:
+    async with httpx2.AsyncClient(transport=_vllm_provider(max_model_len=40_960)) as client:
+        capabilities = await validate_provider_capabilities(_vllm_request(), http_client=client)
+
+    assert capabilities.context_window == 40_960
+
+
+@pytest.mark.anyio
+async def test_an_entered_context_window_fills_in_when_the_provider_reports_none() -> None:
+    async with httpx2.AsyncClient(transport=_vllm_provider(max_model_len=None)) as client:
+        with pytest.raises(ContextWindowUnknownError):
+            await validate_provider_capabilities(_vllm_request(), http_client=client)
+        capabilities = await validate_provider_capabilities(
+            _vllm_request(context_window=32_768), http_client=client
+        )
+
+    assert capabilities.context_window == 32_768
+
+
+@pytest.mark.anyio
+async def test_a_reported_context_window_wins_over_an_entered_one() -> None:
+    async with httpx2.AsyncClient(transport=_vllm_provider(max_model_len=40_960)) as client:
+        capabilities = await validate_provider_capabilities(
+            _vllm_request(context_window=32_768), http_client=client
+        )
+
+    assert capabilities.context_window == 40_960
+
+
+@pytest.mark.anyio
+async def test_a_model_preset_asks_for_and_keeps_an_unreported_context_window(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    provider_path = tmp_path / "provider"
+    account = save_provider_account(
+        provider_path,
+        ProviderAccountRequest(
+            name="Team vLLM",
+            kind="openai-compatible",
+            api_key=SecretStr("local-secret"),
+            base_url="https://vllm.example/v1",
+        ),
+    )
+    entered: list[int | None] = []
+
+    async def validator(request: ProviderConfigurationRequest) -> ProviderCapabilities:
+        entered.append(request.context_window)
+        async with httpx2.AsyncClient(transport=_vllm_provider(max_model_len=None)) as client:
+            return await validate_provider_capabilities(request, http_client=client)
+
+    app = create_app(workspace, provider_store_path=provider_path, provider_validator=validator)
+    preset = {"name": "Qwen", "provider_account_id": account.id, "model": "Qwen/Qwen3-32B"}
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        unknown = await client.post("/api/models", json=preset)
+        too_small = await client.post("/api/models", json=preset | {"context_window": 8_192})
+        saved = await client.post("/api/models", json=preset | {"context_window": 32_768})
+        verified = await client.post(f"/api/models/{saved.json()['id']}/verify")
+
+    assert unknown.status_code == 422
+    assert unknown.json()["detail"]["code"] == "context_window_unknown"
+    assert too_small.status_code == 422
+    assert "16,384" in too_small.json()["detail"]
+    assert saved.status_code == 201
+    assert saved.json()["capabilities"]["context_window"] == 32_768
+    assert saved.json()["entered_context_window"] == 32_768
+    assert verified.status_code == 200
+    assert entered == [None, 8_192, 32_768, 32_768]
 
 
 @pytest.mark.anyio

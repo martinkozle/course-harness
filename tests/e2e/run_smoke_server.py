@@ -14,16 +14,31 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 from course_harness.app import create_app
 from course_harness.course_plan import read_course_plan
 from course_harness.presentation import read_presentation_for_lecture
-from course_harness.providers import ProviderCapabilities
+from course_harness.providers import (
+    ContextWindowUnknownError,
+    ProviderCapabilities,
+    ProviderConfigurationRequest,
+)
 from course_harness.sources import read_sources_index
 
+# A model whose server, like some vLLM deployments, does not report its context window.
+UNREPORTED_CONTEXT_MODEL = "vllm/unreported-context"
 
-async def verified_capabilities(_request: object) -> ProviderCapabilities:
+
+async def verified_capabilities(request: ProviderConfigurationRequest) -> ProviderCapabilities:
+    context_window = 131_072
+    if request.model == UNREPORTED_CONTEXT_MODEL:
+        if request.context_window is None:
+            raise ContextWindowUnknownError(
+                "The provider did not report a context window for this model. "
+                "Enter the model's context size to continue."
+            )
+        context_window = request.context_window
     return ProviderCapabilities(
         tool_calling=True,
         structured_output=True,
         streaming=True,
-        context_window=131_072,
+        context_window=context_window,
         vision=False,
     )
 

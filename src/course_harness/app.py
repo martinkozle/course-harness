@@ -123,6 +123,7 @@ from course_harness.presentation import (
     write_presentation,
 )
 from course_harness.providers import (
+    ContextWindowUnknownError,
     ModelCatalog,
     ModelPreset,
     ModelPresetRequest,
@@ -270,6 +271,13 @@ def _latest_user_text(messages: object) -> str:
         prefix = _MESSAGE_CONTEXT_PREFIX.match(body)
         return (body[prefix.end() :] if prefix else body).strip()
     return ""
+
+
+def _capability_http_error(error: ValueError) -> HTTPException:
+    """Report a failed model check; a missing context window carries a code the form reads."""
+    if isinstance(error, ContextWindowUnknownError):
+        return HTTPException(status_code=422, detail={"code": error.code, "message": str(error)})
+    return HTTPException(status_code=422, detail=str(error))
 
 
 def _upload_too_large() -> HTTPException:
@@ -1251,7 +1259,7 @@ def create_app(
             capabilities = await provider_validator(request)
             require_planning_capabilities(capabilities)
         except (ProviderCapabilityError, ProviderValidationError) as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+            raise _capability_http_error(error) from error
         save_provider_configuration(provider_path, request, capabilities)
         return provider_status(provider_path)
 
@@ -1325,7 +1333,7 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Provider Account was not found") from error
         except (ProviderCapabilityError, ProviderValidationError) as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+            raise _capability_http_error(error) from error
 
     @app.post("/api/models/{model_id}/verify", response_model=ModelCatalog)
     async def verify_model_preset(model_id: str) -> ModelCatalog:
@@ -1343,6 +1351,7 @@ def create_app(
                     name=preset.name,
                     provider_account_id=preset.provider_account_id,
                     model=preset.model,
+                    context_window=preset.entered_context_window,
                 ),
             )
             capabilities = await provider_validator(provider_request)
@@ -1350,7 +1359,7 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Provider Account was not found") from error
         except (ProviderCapabilityError, ProviderValidationError) as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+            raise _capability_http_error(error) from error
         return update_model_preset_capabilities(provider_path, model_id, capabilities)
 
     @app.put("/api/models/selected", response_model=ModelCatalog)

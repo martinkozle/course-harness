@@ -1,7 +1,7 @@
 import { KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 
-import { responseError } from "./api";
+import { responseError, responseErrorDetail } from "./api";
 import type { ModelCatalog, ProviderKind } from "./models";
 import { Notice } from "./ui";
 
@@ -12,11 +12,13 @@ type ModelSuggestion = {
 	context_window: number | null;
 };
 
+function contextLabel(tokens: number): string {
+	return `${Math.round(tokens / 1024)}K context`;
+}
+
 function suggestionDetail(suggestion: ModelSuggestion): string {
 	return [
-		suggestion.context_window
-			? `${Math.round(suggestion.context_window / 1024)}K context`
-			: null,
+		suggestion.context_window ? contextLabel(suggestion.context_window) : null,
 		suggestion.vision ? "vision" : null,
 	]
 		.filter(Boolean)
@@ -49,6 +51,9 @@ export function ModelSettings({
 		hasAccounts && catalog.model_presets.length === 0 ? "Course planning" : "",
 	);
 	const [model, setModel] = useState("");
+	// Shown once the provider turns out not to report the model's context window.
+	const [askContextWindow, setAskContextWindow] = useState(false);
+	const [contextWindow, setContextWindow] = useState("");
 	const [providerId, setProviderId] = useState(
 		catalog.provider_accounts[0]?.id ?? "",
 	);
@@ -171,12 +176,20 @@ export function ModelSettings({
 					name: presetName.trim(),
 					provider_account_id: providerId,
 					model: model.trim(),
+					context_window:
+						askContextWindow && contextWindow ? Number(contextWindow) : null,
 				}),
 			});
-			if (!response.ok) throw new Error(await responseError(response));
+			if (!response.ok) {
+				const detail = await responseErrorDetail(response);
+				if (detail.code === "context_window_unknown") setAskContextWindow(true);
+				throw new Error(detail.message);
+			}
 			await reloadCatalog();
 			setPresetName("");
 			setModel("");
+			setAskContextWindow(false);
+			setContextWindow("");
 			setAddingPreset(false);
 			onPresetSaved?.();
 		} catch (caught) {
@@ -322,6 +335,15 @@ export function ModelSettings({
 													? "Sees images"
 													: "Text only"}
 											</span>
+											<span
+												title={
+													preset.entered_context_window
+														? "You entered this context size"
+														: undefined
+												}
+											>
+												{contextLabel(preset.capabilities.context_window)}
+											</span>
 										</span>
 									</div>
 									{preset.id === catalog.selected_model_id ? (
@@ -424,6 +446,30 @@ export function ModelSettings({
 								</>
 							) : null}
 						</div>
+						{askContextWindow ? (
+							<div className="field">
+								<label htmlFor="provider-context-window">
+									Context size (tokens)
+								</label>
+								<input
+									id="provider-context-window"
+									type="number"
+									inputMode="numeric"
+									min={16384}
+									step={1}
+									value={contextWindow}
+									onChange={(event) => setContextWindow(event.target.value)}
+									placeholder="32768"
+									required
+									aria-describedby="provider-context-window-help"
+								/>
+								<small id="provider-context-window-help">
+									{selectedProviderAccount?.name ?? "This provider"} does not
+									report how much context the model accepts. Enter the size the
+									server runs it with, such as vLLM’s --max-model-len.
+								</small>
+							</div>
+						) : null}
 						<p
 							className="field-help"
 							id="preset-network-disclosure"
@@ -444,7 +490,11 @@ export function ModelSettings({
 									type="button"
 									className="btn"
 									disabled={busy}
-									onClick={() => setAddingPreset(false)}
+									onClick={() => {
+										setAskContextWindow(false);
+										setContextWindow("");
+										setAddingPreset(false);
+									}}
 								>
 									Cancel
 								</button>

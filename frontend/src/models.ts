@@ -22,6 +22,7 @@ export type ModelPreset = {
 	model: string;
 	capabilities: ProviderCapabilities;
 	diagnostics: string[];
+	entered_context_window?: number | null;
 };
 
 export type ModelCatalog = {
