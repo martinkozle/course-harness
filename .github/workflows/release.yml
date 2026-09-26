@@ -36,6 +36,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # uv cannot install from a shallow clone, which the Git smoke test does.
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v10.2.0

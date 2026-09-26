@@ -18,9 +18,11 @@ def _available_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def _wait_for(url: str, *, timeout: float = 600) -> bytes:
+def _wait_for(url: str, process: subprocess.Popen[str], *, timeout: float = 600) -> bytes:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(f"Exited with status {process.returncode} before serving {url}")
         try:
             with urllib.request.urlopen(url, timeout=1) as response:  # noqa: S310
                 if response.status == 200:
@@ -37,35 +39,31 @@ def _run_server(
     environment: dict[str, str],
     label: str,
 ) -> None:
-    process = subprocess.Popen(
-        command,
-        cwd=cwd,
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    terminated_by_verifier = False
-    try:
-        port = int(command[command.index("--port") + 1])
-        health = _wait_for(f"http://127.0.0.1:{port}/api/health")
-        if health != b'{"status":"ok"}':
-            raise RuntimeError(f"Unexpected health response from {label}: {health!r}")
-        index = _wait_for(f"http://127.0.0.1:{port}/")
-        if b"Course Harness" not in index:
-            raise RuntimeError(f"{label} did not serve the production frontend")
-    finally:
-        if process.poll() is None:
-            terminated_by_verifier = True
-            process.terminate()
+    # A file rather than a pipe: nothing reads the output while uv installs and the server runs,
+    # and a full pipe would block the process.
+    with tempfile.TemporaryFile("w+") as log:
+        process = subprocess.Popen(
+            command, cwd=cwd, env=environment, stdout=log, stderr=subprocess.STDOUT, text=True
+        )
         try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=5)
-    if not terminated_by_verifier and process.returncode != 0:
-        output = process.stdout.read() if process.stdout is not None else ""
-        raise RuntimeError(f"{label} exited unexpectedly:\n{output}")
+            port = int(command[command.index("--port") + 1])
+            health = _wait_for(f"http://127.0.0.1:{port}/api/health", process)
+            if health != b'{"status":"ok"}':
+                raise RuntimeError(f"Unexpected health response: {health!r}")
+            index = _wait_for(f"http://127.0.0.1:{port}/", process)
+            if b"Course Harness" not in index:
+                raise RuntimeError("Did not serve the production frontend")
+        except (RuntimeError, TimeoutError) as error:
+            log.seek(0)
+            raise RuntimeError(f"{label} failed: {error}\n{log.read()}") from error
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
 
 
 def _install_tool(
@@ -94,7 +92,10 @@ def _install_tool(
     )
     bin_directory = Path(
         subprocess.check_output(
-            ["uv", "tool", "dir", "--bin"], cwd=temporary, env=environment, text=True
+            ["uv", "tool", "dir", "--bin", "--color", "never"],
+            cwd=temporary,
+            env=environment,
+            text=True,
         ).strip()
     )
     executable_name = "course-harness.exe" if os.name == "nt" else "course-harness"
