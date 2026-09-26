@@ -10,6 +10,11 @@ Issues are tracked as uncommitted local Markdown under `.scratch/`. See `docs/ag
 
 This is a single-context repository using root `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.
 
+### Releases
+
+Releases to PyPI and GitHub Releases follow `.agents/skills/release/SKILL.md`. GitHub Actions
+publishes on a `v*` tag; never upload from a local machine.
+
 ## Architecture invariants
 
 - A running application may be unbound only in the restricted Workspace Launcher; after selection,
