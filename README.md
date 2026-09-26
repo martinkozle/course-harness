@@ -109,5 +109,17 @@ the current commit, all in isolated temporary environments:
 uv run python scripts/verify_distribution.py
 ```
 
+The Release workflow runs these checks on every push to `main`. To publish a version:
+
+```bash
+uv version --bump minor   # or patch/major; updates pyproject.toml and uv.lock
+git commit -am "Release 0.2.0" && git push
+```
+
+Then create a GitHub Release with a new tag `v0.2.0` on that commit (or push the tag with
+`git tag v0.2.0 && git push origin v0.2.0`). The tag must match the package version. The workflow
+publishes to PyPI through trusted publishing and attaches the wheel and source distribution to the
+Release.
+
 Without Nix, install Python 3.14, uv, Bun 1.3 or newer, Node.js, and Chromium, then use the same
 commands.
