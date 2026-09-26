@@ -5,158 +5,73 @@ human-readable Course Workspace.
 
 ## Install and launch
 
-Course Harness requires Python 3.14. Run the published package without a permanent installation:
+Install [uv](https://docs.astral.sh/uv/). It downloads Python 3.14 if you do not have it.
 
 ```bash
-uvx --python 3.14 --torch-backend cpu course-harness
+uvx --torch-backend cpu course-harness
 ```
 
 Or install it as a command-line tool:
 
 ```bash
-uv tool install --python 3.14 --torch-backend cpu course-harness
+uv tool install --torch-backend cpu course-harness
 course-harness
 ```
 
-`--torch-backend cpu` installs the CPU build of PyTorch, which local document conversion uses.
-Without it, uv installs the default CUDA build on Linux, which downloads several gigabytes of GPU
-libraries.
+`--torch-backend cpu` installs the CPU build of PyTorch for local document conversion. Without it,
+uv installs the CUDA build on Linux, which downloads several gigabytes of GPU libraries.
 
-The package contains the production web interface. Course Authors do not need Node.js, Bun, Nix,
-Docker, a database, or a paid model provider to launch the Workspace Launcher. LibreOffice is
-optional and enables high-fidelity slide thumbnails when its `libreoffice` or `soffice` executable
-is available on `PATH`; semantic previews remain available without it.
-
-To try an unreleased revision directly from GitHub:
+To run the latest revision from GitHub (no flag needed; the CPU build is selected automatically):
 
 ```bash
-uvx --python 3.14 --torch-backend cpu --from git+https://github.com/martinkozle/course-harness.git course-harness
+uvx --from git+https://github.com/martinkozle/course-harness.git course-harness
 ```
 
-The command starts one loopback-only process, opens `http://127.0.0.1:8765`, and shows the
-Workspace Launcher. Use the operating-system folder chooser to create or open a Course Workspace.
-Pass an explicit path (including `.`) to bypass the launcher, `--no-browser` to avoid opening the
-application automatically, or `--port <number>` to choose another local port:
+The command opens `http://127.0.0.1:8765` with the Workspace Launcher, where you create or open a
+Course Workspace. Useful options:
 
 ```bash
-course-harness /path/to/course-workspace
+course-harness /path/to/course-workspace  # open a Workspace directly (`.` works too)
+course-harness --no-browser               # do not open the browser
+course-harness --port 9000                # use another local port
 ```
 
-Run `course-harness --version` to check the installed build.
+Optional: install LibreOffice (`libreoffice` or `soffice` on `PATH`) for high-fidelity slide
+thumbnails.
 
-Course Harness stores canonical Course state in readable Workspace files. Runtime caches,
-application state, and provider credentials stay in platform-native user locations outside Course
-Workspaces. Provider credentials use a safe operating-system keyring when one is available and a
-private application file otherwise; the in-app runtime diagnostics show the active storage mode,
-exact runtime locations, and available capabilities.
+## What it does
 
-For an OpenAI-compatible provider on another local machine, enter its API base URL (for example,
-`http://blaze.home:8081/v1`) and select **Allow HTTP to another host**. HTTPS and loopback HTTP
-work without this opt-in. Remote HTTP sends the API key and Course requests without encryption;
-use it only on a network you trust.
+- **Sources**: add PDF, `.pptx`, `.docx`, and web pages, or discover papers through arXiv,
+  Crossref, Semantic Scholar, and OpenAlex. Documents are converted locally with Docling; the
+  layout and OCR models are downloaded on first use, after you confirm.
+- **Course Agent**: plans the Course, researches sources, and writes Lectures. Only Sources added
+  to the Course can be cited.
+- **Connectors**: web search and page reading through remote MCP servers. Exa is set up by default
+  and works without a key.
+- **History**: save and restore Course Revisions, publish Releases, and export Lectures to
+  PowerPoint.
 
-After you open a Course, the workspace has three parts: a navigator on the left (Course Plan,
-Sources, the numbered Lectures, Conversations, History, and Settings), the conversation with the
-Course Agent, and a canvas that shows whatever you open. A new Course starts with your material:
-drop papers, notes, or slides onto the start screen, discover papers, or reuse files from your
-Library, then tell the agent what the Course should teach. You can also write the Course Plan
-yourself.
+Canonical Course state lives in readable files in the Course Workspace. Caches, conversations, and
+credentials live in platform-native user locations outside it; credentials go to the operating
+system keyring when one is available. **Settings → Diagnostics** shows the exact locations.
 
-**Sources** accepts PDF, `.pptx`, and `.docx` Resources. Files added from the start screen or the
-**This course** tab are saved to your Library and included in the Course; the **Library** tab keeps
-files without including them, and **Discover** searches public paper indexes (arXiv, Crossref,
-Semantic Scholar, and OpenAlex) and code indexes. Web pages are accepted as well. Docling
-extracts text, tables, and document structure for search and Source use, including text
-recognition for scanned PDFs. On the first PDF upload, Course Harness asks before downloading
-layout, table, and OCR models to the application cache outside the Course Workspace. Conversion
-runs locally and stores a structured Docling result alongside the searchable Markdown. The
-original files remain immutable Snapshots. **Settings → Diagnostics** also has a **Download PDF
-models** control and **Rebuild search index**. If models are missing when you process or reprocess
-an existing PDF, the same prompt appears. Cancel leaves the Resource unchanged. The download shows
-progress across its layout, table, and OCR stages; stage progress is not a byte percentage.
+To use an OpenAI-compatible provider on another machine over plain HTTP, select **Allow HTTP to
+another host**. The API key and Course content are then sent unencrypted, so use it only on a
+network you trust.
 
-The Course Agent can research too. Ask it to find sources for a topic and it searches the same
-paper indexes. Its results appear under its reply; they are not Sources until they are added to
-the course, and only added Sources can be cited. For an open-ended request the agent adds the most
-relevant results itself and tells you which; for a narrow one it lists them and asks. Either way,
-**Add to course** and **Remove from course** on each result let you decide. The agent can only add
-an address that a search returned or that you gave it. A Course Plan must exist before Sources can
-be added.
+## Development
 
-Paper search works without keys. Semantic Scholar's keyless requests share a public rate limit
-that is often busy; add your own key under **Settings → Research → Paper search** and it is sent
-as `x-api-key` on every Semantic Scholar request, from both Discover and the Course Agent. The key
-is stored like provider keys, never in a Course Workspace.
-
-**Settings → Research** adds web search through Connectors. A Connector is a remote MCP server whose tools the
-Course Agent may use; **Exa** is set up by default and works without a key at Exa's free,
-rate-limited tier. Put an Exa API key in its `x-api-key` header to raise the limits, or delete Exa
-and add another search service with its own URL and headers. Header values and URLs marked secret
-are stored like provider keys, in the operating-system keyring or a private file, never in a Course
-Workspace. **Test** lists a Connector's tools so you can choose which the agent may use and which
-one reads pages. Your requests, including search queries, are sent to each enabled Connector. When
-a site blocks a direct download or renders its text with scripts, Course Harness reads the page
-through that page reader instead and records which Connector read it. Only HTTPS Connectors, or
-HTTP to this computer, are accepted.
-
-Each Workspace can keep multiple Conversations in that private application state. The navigator
-lists them; each row's menu renames, archives, or deletes one. A new Conversation stays an unsaved
-draft until you send its first message, and an unsent message is kept per Conversation while you
-switch. **Summarize earlier context** in the Conversation menu shows an editable summary for
-review before using it as the earlier context for future model runs. The full transcript remains
-visible. Resolve any pending agent approval before summarizing, archiving, or deleting its
-Conversation. An existing single transcript is migrated automatically when that Workspace's
-Conversations are first opened.
-
-**History** lists changes since the last Course Revision, lets you save a named revision or restore
-an earlier one, and holds published Course Releases. **Publish release** in the canvas bar prepares
-a new Release; **Export PowerPoint** on a Lecture downloads a file from the current work without
-publishing anything.
-
-## Development requirements
-
-- [Nix](https://nixos.org/) with flakes enabled
-
-No Docker daemon, database server, or external service is needed for the initial Workspace
-experience.
-
-## Enter the development environment
+Development uses [Nix](https://nixos.org/) with flakes. The flake pins Python, uv, Bun, Node.js,
+Chromium, and Git; `uv.lock` and `bun.lock` pin application packages.
 
 ```bash
-nix develop
+nix develop   # or `direnv allow` once with nix-direnv
 ```
 
-The checked-in flake pins Python, uv, Bun, Node.js, Chromium, and Git. Python packages remain pinned
-by `uv.lock`, while frontend packages remain pinned by `bun.lock`.
+Entering the shell installs the pre-commit and pre-push hooks (Biome, Ruff, ty, nixfmt, uv lock
+freshness, and hygiene checks). Their configuration lives in `flake.nix`.
 
-If you use direnv with nix-direnv, install and hook direnv into your login shell first, then allow
-the checked-in `.envrc` once:
-
-```bash
-direnv allow
-```
-
-After that, entering the repository activates the flake automatically. Restart terminal tools such
-as Codex after activation so they inherit the development environment:
-
-```bash
-codex
-```
-
-Without direnv, launch Codex directly through the shell with `nix develop -c codex`.
-
-Entering the development shell also installs the repository's generated pre-commit and pre-push
-Git hooks. They cover Biome, Ruff linting and formatting, ty, nixfmt, uv lock freshness, syntax
-checks, and common repository hygiene checks. Vendored agent skills and generated frontend bundles
-are excluded. Run the same hooks across the full repository with:
-
-```bash
-pre-commit run --all-files
-```
-
-The hook configuration lives in `flake.nix`; `.pre-commit-config.yaml` is generated and ignored.
-
-## Launch from a development checkout
+Launch from a checkout:
 
 ```bash
 uv sync --locked
@@ -165,64 +80,34 @@ bun run build
 uv run course-harness
 ```
 
-The last command launches the checkout. Pass a Workspace path to bypass the launcher:
-
-```bash
-uv run course-harness /path/to/course-workspace
-```
-
-Course Harness rejects missing paths, files, symbolic links, and the filesystem root as unsafe
-Workspace choices. It does not expose a general filesystem API.
-
-## Development
-
-For frontend hot reload, start the API and Vite in separate terminals:
+For frontend hot reload, run the API and Vite side by side; Vite serves `http://127.0.0.1:5173`
+and proxies `/api`:
 
 ```bash
 uv run course-harness /path/to/course-workspace --no-browser
 bun run dev
 ```
 
-Vite serves the development UI at `http://127.0.0.1:5173` and proxies `/api` to Course Harness.
-
-Run focused and full checks with:
+Checks:
 
 ```bash
 pre-commit run --all-files
-nix flake check
-uv run pytest tests/test_app.py
-uv run pytest tests/test_cli.py
-uv run ruff check .
-uv run ruff format --check .
-uv run ty check
+uv run pytest
 bun run lint
 bun run typecheck
 bun run build
-bun run test:e2e
-uv run pytest
+bun run test:e2e   # Playwright smoke journey
 ```
 
-Build and smoke-test the wheel in an isolated temporary environment with:
+Outside Nix, install the Playwright browser once with `bunx playwright install --with-deps chromium`
+or set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`.
+
+Build the wheel and smoke-test it through `uvx`, `uv tool install`, and a `git+file://` install of
+the current commit, all in isolated temporary environments:
 
 ```bash
 uv run python scripts/verify_distribution.py
 ```
 
-This verifies the wheel metadata and bundled React assets, launches the wheel through `uvx`,
-installs and launches that same wheel with `uv tool install` in a temporary isolated tool home,
-and launches the current committed revision through a direct `uvx` `git+file://` URL. Each launch
-checks both the health endpoint and production interface. Release publication is a separate
-explicit step; building and verifying locally never uploads an artifact or changes your real uv
-tool installation.
-
-`bun run test:e2e` builds the production frontend, launches Course Harness on a verified-empty
-smoke Workspace under the ignored local cache, and runs the Playwright journey. Inside Nix, the test
-uses the flake-pinned Chromium. Outside Nix, install the Playwright browser once with
-`bunx playwright install --with-deps chromium`, or set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to a
-compatible Chromium executable.
-
-## Without Nix
-
-Nix is the supported development environment, but the application remains usable without it.
-Install Python 3.14, uv, Bun 1.3 or newer, Node.js, and Chromium, then follow the same uv and Bun
-commands above. No Nix store paths are recorded in `package.json` or application configuration.
+Without Nix, install Python 3.14, uv, Bun 1.3 or newer, Node.js, and Chromium, then use the same
+commands.

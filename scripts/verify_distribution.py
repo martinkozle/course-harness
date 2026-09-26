@@ -201,8 +201,7 @@ def main() -> None:
                 "uvx",
                 "--python",
                 "3.14",
-                "--torch-backend",
-                "cpu",
+                # The Git install must pick CPU torch from tool.uv.sources on its own.
                 "--no-cache",
                 "--from",
                 f"git+{repository.as_uri()}",
