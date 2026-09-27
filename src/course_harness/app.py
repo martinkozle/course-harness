@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import subprocess
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
@@ -122,12 +123,20 @@ from course_harness.presentation import (
     slide_by_id,
     write_presentation,
 )
+from course_harness.provider_detection import (
+    DetectedCredential,
+    DetectedCredentialAddRequest,
+    DetectedCredentialUnavailableError,
+    detect_credentials,
+    detected_account_request,
+)
 from course_harness.providers import (
     ContextWindowUnknownError,
     ModelCatalog,
     ModelPreset,
     ModelPresetRequest,
     ModelSuggestion,
+    PromptCachingUnknownError,
     ProviderAccount,
     ProviderAccountCredentialRequest,
     ProviderAccountInUseError,
@@ -274,8 +283,8 @@ def _latest_user_text(messages: object) -> str:
 
 
 def _capability_http_error(error: ValueError) -> HTTPException:
-    """Report a failed model check; a missing context window carries a code the form reads."""
-    if isinstance(error, ContextWindowUnknownError):
+    """Report a failed model check; a question for the author carries a code the form reads."""
+    if isinstance(error, (ContextWindowUnknownError, PromptCachingUnknownError)):
         return HTTPException(status_code=422, detail={"code": error.code, "message": str(error)})
     return HTTPException(status_code=422, detail=str(error))
 
@@ -497,6 +506,7 @@ def create_app(
         [Path, str], Awaitable[list[ModelSuggestion]]
     ] = list_provider_models,
     provider_account_validator: ProviderAccountValidator = validate_provider_account,
+    credential_environ: Mapping[str, str] | None = None,
     remote_host_resolver: res.RemoteHostResolver = res.resolve_remote_host,
     connector_connect: ConnectorConnect | None = None,
     precompute_template_backgrounds: bool = True,
@@ -1255,6 +1265,8 @@ def create_app(
     @app.put("/api/provider", response_model=ProviderStatus, response_model_exclude_none=True)
     async def configure_provider(request: ProviderConfigurationRequest) -> ProviderStatus:
         require_workspace()
+        if request.api_key is None:
+            raise HTTPException(status_code=422, detail="An API key is required")
         try:
             capabilities = await provider_validator(request)
             require_planning_capabilities(capabilities)
@@ -1276,6 +1288,44 @@ def create_app(
         except ProviderValidationError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return save_provider_account(provider_path, request)
+
+    def credential_environment() -> Mapping[str, str]:
+        return os.environ if credential_environ is None else credential_environ
+
+    @app.get("/api/provider-detections", response_model=list[DetectedCredential])
+    async def detected_credentials() -> list[DetectedCredential]:
+        require_workspace()
+        return detect_credentials(
+            credential_environment(), read_model_catalog(provider_path).provider_accounts
+        )
+
+    @app.post(
+        "/api/provider-detections/{detection_id}",
+        response_model=ProviderAccount,
+        status_code=201,
+    )
+    async def add_detected_credential(
+        detection_id: str, request: DetectedCredentialAddRequest
+    ) -> ProviderAccount:
+        require_workspace()
+        try:
+            account_request = detected_account_request(
+                credential_environment(),
+                read_model_catalog(provider_path).provider_accounts,
+                detection_id,
+                request,
+            )
+        except DetectedCredentialUnavailableError as error:
+            raise HTTPException(
+                status_code=404, detail="That detected credential is no longer available"
+            ) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        try:
+            await provider_account_validator(account_request)
+        except ProviderValidationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return save_provider_account(provider_path, account_request, detected_from=detection_id)
 
     @app.patch("/api/provider-accounts/{account_id}/credential", response_model=ProviderAccount)
     async def rotate_provider_account_credential(
@@ -1352,6 +1402,7 @@ def create_app(
                     provider_account_id=preset.provider_account_id,
                     model=preset.model,
                     context_window=preset.entered_context_window,
+                    prompt_caching=preset.entered_prompt_caching,
                 ),
             )
             capabilities = await provider_validator(provider_request)
@@ -1803,7 +1854,10 @@ def create_app(
                     completed = cast(AgentRunResult[str], result)
                     save_chat_history(chat_path, active, completed.all_messages(), conversation_id)
 
-            model = agent_model or build_provider_model(configuration, api_key)
+            try:
+                model = agent_model or build_provider_model(configuration, api_key)
+            except ProviderValidationError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
             if not history:
                 # An injected agent model stands in for the provider, so only an injected
                 # title model may be asked for a title alongside it.
@@ -3610,7 +3664,10 @@ def create_app(
                     detail="Configure a model provider before using AI suggestion.",
                 )
             configuration, api_key = selected_model
-            model = build_provider_model(configuration, api_key)
+            try:
+                model = build_provider_model(configuration, api_key)
+            except ProviderValidationError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
         try:
             suggestions = await suggest_mappings_with_llm(inspection, model)
         except Exception as error:

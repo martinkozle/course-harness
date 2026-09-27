@@ -217,6 +217,18 @@
 	border-top: 1px dashed var(--rule);
 }
 
+.model-detected > * + * {
+	margin-top: 8px;
+}
+
+.model-detected-options {
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.model-detected-disclosure {
+	padding: 0 16px 12px;
+}
+
 .model-delete-confirmation {
 	background: var(--danger-soft);
 	border-radius: 0 0 var(--radius-m) var(--radius-m);

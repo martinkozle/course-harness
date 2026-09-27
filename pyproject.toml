@@ -26,7 +26,7 @@ dependencies = [
   "httpx2",
   "keyring>=25.6",
   "pillow>=12.3.0",
-  "pydantic-ai-slim[ag-ui,anthropic,mcp,openai]",
+  "pydantic-ai-slim[ag-ui,anthropic,bedrock,mcp,openai]",
   "python-multipart>=0.0.32",
   "python-pptx>=1.0.2",
   "pyyaml>=6.0.3",

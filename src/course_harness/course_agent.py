@@ -1737,12 +1737,21 @@ def _own_provider_http_client(provider: Any, client: httpx.AsyncClient) -> Any:
     return provider
 
 
-def build_provider_model(configuration: object, api_key: str) -> Model:
+def build_provider_model(configuration: object, api_key: str | None) -> Model:
+    """Build the model for a verified configuration, caching prompts wherever it can.
+
+    ``api_key`` is ``None`` only for a Bedrock account that uses AWS credentials.
+    """
     from course_harness.providers import ProviderConfiguration
 
     configured = ProviderConfiguration.model_validate(configuration)
+    # None means the preset predates the check; caching is then left to the model profile.
+    caching = configured.capabilities.prompt_caching is not False
+    if configured.kind == "bedrock":
+        return _build_bedrock_model(configured, api_key, caching=caching)
+    assert api_key is not None
     if configured.kind == "openrouter":
-        from pydantic_ai.models.openrouter import OpenRouterModel
+        from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
         from pydantic_ai.providers.openrouter import OpenRouterProvider
 
         client = _isolated_model_http_client()
@@ -1750,9 +1759,19 @@ def build_provider_model(configuration: object, api_key: str) -> Model:
         return OpenRouterModel(
             configured.model,
             provider=_own_provider_http_client(provider, client),
+            # Downstream providers without explicit cache control ignore these.
+            settings=(
+                OpenRouterModelSettings(
+                    openrouter_cache_instructions=True,
+                    openrouter_cache_tool_definitions=True,
+                    openrouter_cache_messages=True,
+                )
+                if caching
+                else None
+            ),
         )
     if configured.kind == "anthropic":
-        from pydantic_ai.models.anthropic import AnthropicModel
+        from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
         from pydantic_ai.providers.anthropic import AnthropicProvider
 
         client = _isolated_model_http_client()
@@ -1760,14 +1779,62 @@ def build_provider_model(configuration: object, api_key: str) -> Model:
         return AnthropicModel(
             configured.model,
             provider=_own_provider_http_client(provider, client),
+            settings=(
+                AnthropicModelSettings(
+                    anthropic_cache=True,
+                    anthropic_cache_instructions=True,
+                    anthropic_cache_tool_definitions=True,
+                )
+                if caching
+                else None
+            ),
         )
 
     from pydantic_ai.models.openai import OpenAIChatModel
     from pydantic_ai.providers.openai import OpenAIProvider
 
+    # OpenAI caches long prompt prefixes by itself; there is nothing to mark.
     client = _isolated_model_http_client()
     provider = OpenAIProvider(base_url=configured.base_url, api_key=api_key, http_client=client)
     return OpenAIChatModel(
         configured.model,
         provider=_own_provider_http_client(provider, client),
+    )
+
+
+def _build_bedrock_model(configured: Any, api_key: str | None, *, caching: bool) -> Model:
+    """Bedrock only caches at explicit cache points, so they are always requested."""
+    from pydantic_ai.models.bedrock import BedrockConverseModel, BedrockModelSettings
+    from pydantic_ai.profiles import merge_profile
+    from pydantic_ai.providers.bedrock import BedrockModelProfile, BedrockProvider
+
+    from course_harness.bedrock import BedrockError
+    from course_harness.providers import ProviderValidationError
+
+    try:
+        client = configured.bedrock_access(api_key).client(
+            "bedrock-runtime", read_timeout=600, connect_timeout=5
+        )
+    except BedrockError as error:
+        raise ProviderValidationError(str(error)) from error
+    profile = BedrockProvider.model_profile(configured.model)
+    if configured.capabilities.prompt_caching is True and not (profile or {}).get(
+        "bedrock_supports_prompt_caching"
+    ):
+        # The Course Author confirmed caching for a model ID, such as an application
+        # inference profile ARN, that does not reveal its model family.
+        profile = merge_profile(profile, BedrockModelProfile(bedrock_supports_prompt_caching=True))
+    return BedrockConverseModel(
+        configured.model,
+        provider=BedrockProvider(bedrock_client=client),
+        profile=profile,
+        settings=(
+            BedrockModelSettings(
+                bedrock_cache_instructions=True,
+                bedrock_cache_tool_definitions=True,
+                bedrock_cache_messages=True,
+            )
+            if caching
+            else None
+        ),
     )

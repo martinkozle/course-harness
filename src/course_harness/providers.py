@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from collections.abc import Awaitable, Callable
@@ -12,11 +13,28 @@ from uuid import uuid4
 import httpx2
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
+from course_harness import bedrock
+from course_harness.bedrock import BedrockAccess, BedrockCredentialSource, BedrockError
 from course_harness.credential_store import CredentialStore, CredentialStoreError
 from course_harness.product_connectors import product_connector_client
 from course_harness.runtime_paths import RuntimePaths
 
-ProviderKind = Literal["openrouter", "openai-compatible", "anthropic"]
+ProviderKind = Literal["openrouter", "openai", "openai-compatible", "anthropic", "bedrock"]
+# Only Bedrock can use credentials that the AWS SDK resolves instead of a stored key.
+CredentialSource = BedrockCredentialSource
+
+PROVIDER_LABELS: dict[ProviderKind, str] = {
+    "openrouter": "OpenRouter",
+    "openai": "OpenAI",
+    "openai-compatible": "OpenAI-compatible",
+    "anthropic": "Anthropic",
+    "bedrock": "Amazon Bedrock",
+}
+FIXED_BASE_URLS: dict[ProviderKind, str] = {
+    "openrouter": "https://openrouter.ai/api/v1",
+    "openai": "https://api.openai.com/v1",
+    "anthropic": "https://api.anthropic.com",
+}
 
 
 class ProviderCapabilities(BaseModel):
@@ -27,6 +45,78 @@ class ProviderCapabilities(BaseModel):
     streaming: bool
     context_window: int = Field(ge=1)
     vision: bool
+    # Whether prompts can be cached; None when neither the provider nor the author said.
+    prompt_caching: bool | None = None
+
+
+class ProviderAccess(BaseModel):
+    """Where a provider is reached and which credential it uses, shared by every request."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    kind: ProviderKind
+    api_key: SecretStr | None = Field(default=None, min_length=1)
+    base_url: str | None = None
+    allow_insecure_http: bool = False
+    credential_source: CredentialSource = "stored-key"
+    region: str | None = None
+    aws_profile: str | None = None
+
+    @model_validator(mode="after")
+    def endpoint_matches_provider(self) -> ProviderAccess:
+        if self.kind in FIXED_BASE_URLS and self.base_url is not None:
+            raise ValueError(
+                f"{PROVIDER_LABELS[self.kind]} uses its fixed API endpoint; omit base_url"
+            )
+        if self.kind == "bedrock":
+            if self.base_url is not None:
+                raise ValueError("Amazon Bedrock is addressed by region; omit base_url")
+            if self.region is None or not bedrock.AWS_REGION_PATTERN.fullmatch(self.region):
+                raise ValueError("Amazon Bedrock requires an AWS region, such as us-east-1")
+        elif self.region is not None:
+            raise ValueError("Only Amazon Bedrock takes a region")
+        if self.kind == "openai-compatible" and self.base_url is None:
+            raise ValueError("An OpenAI-compatible provider requires base_url")
+        if self.credential_source == "stored-key":
+            if self.api_key is None:
+                raise ValueError("An API key is required")
+            if self.aws_profile is not None:
+                raise ValueError("An AWS profile is only used without a stored API key")
+        else:
+            if self.kind != "bedrock":
+                raise ValueError("Only Amazon Bedrock can use AWS credentials")
+            if self.api_key is not None:
+                raise ValueError("AWS credentials are not stored; omit api_key")
+            if (self.credential_source == "aws-profile") != (self.aws_profile is not None):
+                raise ValueError("An AWS profile name is required exactly for aws-profile")
+            if self.aws_profile is not None and not bedrock.AWS_PROFILE_PATTERN.fullmatch(
+                self.aws_profile
+            ):
+                raise ValueError("The AWS profile name is invalid")
+        if self.base_url is not None:
+            validate_provider_url(self.base_url, allow_insecure_http=self.allow_insecure_http)
+        return self
+
+    def resolved_base_url(self) -> str:
+        if self.kind == "bedrock":
+            assert self.region is not None
+            return bedrock.bedrock_endpoint(self.region)
+        if self.kind in FIXED_BASE_URLS:
+            return FIXED_BASE_URLS[self.kind]
+        assert self.base_url is not None
+        return self.base_url.rstrip("/")
+
+    def secret(self) -> str | None:
+        return self.api_key.get_secret_value() if self.api_key is not None else None
+
+    def bedrock_access(self) -> BedrockAccess:
+        assert self.kind == "bedrock" and self.region is not None
+        return BedrockAccess(
+            region=self.region,
+            credential_source=self.credential_source,
+            api_key=self.secret(),
+            aws_profile=self.aws_profile,
+        )
 
 
 class ProviderConfiguration(BaseModel):
@@ -36,73 +126,41 @@ class ProviderConfiguration(BaseModel):
     model: str = Field(min_length=1, max_length=300)
     base_url: str
     capabilities: ProviderCapabilities
+    credential_source: CredentialSource = "stored-key"
+    region: str | None = None
+    aws_profile: str | None = None
 
-
-class ProviderConfigurationRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    kind: ProviderKind
-    model: str = Field(min_length=1, max_length=300)
-    api_key: SecretStr = Field(min_length=1)
-    base_url: str | None = None
-    allow_insecure_http: bool = False
-    # Used only when the provider does not report the model's context window itself.
-    context_window: int | None = Field(default=None, ge=1)
-
-    @model_validator(mode="after")
-    def endpoint_matches_provider(self) -> ProviderConfigurationRequest:
-        if self.kind == "openrouter" and self.base_url is not None:
-            raise ValueError("OpenRouter uses its fixed API endpoint; omit base_url")
-        if self.kind == "anthropic" and self.base_url is not None:
-            raise ValueError("Anthropic uses its direct API endpoint; omit base_url")
-        if self.kind == "openai-compatible" and self.base_url is None:
-            raise ValueError("An OpenAI-compatible provider requires base_url")
-        if self.base_url is not None:
-            validate_provider_url(self.base_url, allow_insecure_http=self.allow_insecure_http)
-        return self
-
-    def configuration(self, capabilities: ProviderCapabilities) -> ProviderConfiguration:
-        if self.kind == "openrouter":
-            base_url = "https://openrouter.ai/api/v1"
-        elif self.kind == "anthropic":
-            base_url = "https://api.anthropic.com"
-        else:
-            assert self.base_url is not None
-            base_url = self.base_url.rstrip("/")
-        return ProviderConfiguration(
-            kind=self.kind,
-            model=self.model,
-            base_url=base_url,
-            capabilities=capabilities,
+    def bedrock_access(self, api_key: str | None) -> BedrockAccess:
+        assert self.kind == "bedrock" and self.region is not None
+        return BedrockAccess(
+            region=self.region,
+            credential_source=self.credential_source,
+            api_key=api_key,
+            aws_profile=self.aws_profile,
         )
 
 
-class ProviderAccountRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+class ProviderConfigurationRequest(ProviderAccess):
+    model: str = Field(min_length=1, max_length=300)
+    # Used only when the provider does not report the model's context window itself.
+    context_window: int | None = Field(default=None, ge=1)
+    # Used only when the model ID does not tell whether the model supports prompt caching.
+    prompt_caching: bool | None = None
 
+    def configuration(self, capabilities: ProviderCapabilities) -> ProviderConfiguration:
+        return ProviderConfiguration(
+            kind=self.kind,
+            model=self.model,
+            base_url=self.resolved_base_url(),
+            capabilities=capabilities,
+            credential_source=self.credential_source,
+            region=self.region,
+            aws_profile=self.aws_profile,
+        )
+
+
+class ProviderAccountRequest(ProviderAccess):
     name: str = Field(min_length=1, max_length=100)
-    kind: ProviderKind
-    api_key: SecretStr = Field(min_length=1)
-    base_url: str | None = None
-    allow_insecure_http: bool = False
-
-    @model_validator(mode="after")
-    def endpoint_matches_provider(self) -> ProviderAccountRequest:
-        if self.kind in {"openrouter", "anthropic"} and self.base_url is not None:
-            raise ValueError(f"{self.kind} uses its fixed API endpoint; omit base_url")
-        if self.kind == "openai-compatible" and self.base_url is None:
-            raise ValueError("An OpenAI-compatible provider requires base_url")
-        if self.base_url is not None:
-            validate_provider_url(self.base_url, allow_insecure_http=self.allow_insecure_http)
-        return self
-
-    def resolved_base_url(self) -> str:
-        if self.kind == "openrouter":
-            return "https://openrouter.ai/api/v1"
-        if self.kind == "anthropic":
-            return "https://api.anthropic.com"
-        assert self.base_url is not None
-        return self.base_url.rstrip("/")
 
 
 class ProviderAccountCredentialRequest(BaseModel):
@@ -118,6 +176,26 @@ class ProviderAccount(BaseModel):
     name: str
     kind: ProviderKind
     base_url: str
+    credential_source: CredentialSource = "stored-key"
+    region: str | None = None
+    aws_profile: str | None = None
+    # The Detected Credential this account was added from, if any.
+    detected_from: str | None = None
+
+    @property
+    def stores_credential(self) -> bool:
+        return self.credential_source == "stored-key"
+
+    def access(self, api_key: str | None) -> ProviderAccess:
+        return ProviderAccess(
+            kind=self.kind,
+            api_key=SecretStr(api_key) if api_key is not None else None,
+            base_url=self.base_url if self.kind == "openai-compatible" else None,
+            allow_insecure_http=self.base_url.startswith("http://"),
+            credential_source=self.credential_source,
+            region=self.region,
+            aws_profile=self.aws_profile,
+        )
 
 
 class ModelPresetRequest(BaseModel):
@@ -127,6 +205,7 @@ class ModelPresetRequest(BaseModel):
     provider_account_id: str = Field(min_length=1)
     model: str = Field(min_length=1, max_length=300)
     context_window: int | None = Field(default=None, ge=1)
+    prompt_caching: bool | None = None
 
 
 class ModelPreset(BaseModel):
@@ -140,6 +219,8 @@ class ModelPreset(BaseModel):
     diagnostics: list[str]
     # The context window the Course Author entered because the provider reported none.
     entered_context_window: int | None = None
+    # The prompt caching choice the Course Author made because the model ID did not tell.
+    entered_prompt_caching: bool | None = None
 
 
 class ModelCatalog(BaseModel):
@@ -162,7 +243,7 @@ class ProviderStatus(BaseModel):
 class CredentialStorageStatus(BaseModel):
     """Non-secret credential storage information for runtime diagnostics."""
 
-    mode: Literal["os-keyring", "private-json-file", "unavailable", "unconfigured"]
+    mode: Literal["os-keyring", "private-json-file", "aws-sdk", "unavailable", "unconfigured"]
     location: str
 
 
@@ -188,6 +269,12 @@ class ContextWindowUnknownError(ProviderValidationError):
     """The provider did not report a context window and none was entered."""
 
     code = "context_window_unknown"
+
+
+class PromptCachingUnknownError(ProviderValidationError):
+    """The model ID does not tell whether prompt caching works, and nobody said."""
+
+    code = "prompt_caching_unknown"
 
 
 class ProviderAccountInUseError(ValueError):
@@ -298,9 +385,10 @@ def save_provider_configuration(
             configuration.model_dump(mode="json"),
             mode=0o600,
         )
-        _credential_store(store_path, credential_store).write(
-            "provider-legacy", request.api_key.get_secret_value()
-        )
+        secret = request.secret()
+        if secret is None:
+            raise CredentialStoreError("A single-provider configuration needs a stored API key.")
+        _credential_store(store_path, credential_store).write("provider-legacy", secret)
     except (CredentialStoreError, OSError) as error:
         try:
             _restore_private_file(configuration_path, previous_configuration)
@@ -329,7 +417,14 @@ async def validate_provider_account(
 async def _validate_provider_account(
     request: ProviderAccountRequest, client: httpx2.AsyncClient
 ) -> None:
-    api_key = request.api_key.get_secret_value()
+    if request.kind == "bedrock":
+        try:
+            await asyncio.to_thread(bedrock.verify_access, request.bedrock_access())
+        except BedrockError as error:
+            raise ProviderValidationError(str(error)) from error
+        return
+    api_key = request.secret()
+    assert api_key is not None, "only Bedrock uses credentials that are not stored"
     try:
         if request.kind == "openrouter":
             response = await client.get(
@@ -375,7 +470,10 @@ async def _validate_provider_capabilities(
     request: ProviderConfigurationRequest,
     client: httpx2.AsyncClient,
 ) -> ProviderCapabilities:
-    api_key = request.api_key.get_secret_value()
+    if request.kind == "bedrock":
+        return await _validate_bedrock_capabilities(request)
+    api_key = request.secret()
+    assert api_key is not None, "only Bedrock uses credentials that are not stored"
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
         if request.kind == "openrouter":
@@ -391,7 +489,12 @@ async def _validate_provider_capabilities(
             )
             response.raise_for_status()
             metadata = response.json()["data"]
-            return _capabilities_from_metadata(metadata, context_window=request.context_window)
+            capabilities = _capabilities_from_metadata(
+                metadata, context_window=request.context_window
+            )
+            return capabilities.model_copy(
+                update={"prompt_caching": _openrouter_reports_caching(metadata)}
+            )
 
         if request.kind == "anthropic":
             response = await client.get(
@@ -420,6 +523,38 @@ async def _validate_provider_capabilities(
                 streaming=True,
                 context_window=200_000,
                 vision=request.model.startswith("claude-"),
+                prompt_caching=True,
+            )
+
+        if request.kind == "openai":
+            response = await client.get(
+                f"{FIXED_BASE_URLS['openai']}/models/{request.model}", headers=headers
+            )
+            if response.status_code == 404:
+                raise ProviderValidationError("OpenAI did not report that model for this API key.")
+            response.raise_for_status()
+            known = _known_openai_model(request.model)
+            context_window = (known[0] if known else None) or request.context_window
+            if context_window is None:
+                raise ContextWindowUnknownError(
+                    "Course Harness does not know this OpenAI model's context window. "
+                    "Enter the model's context size to continue."
+                )
+            tool_calling = known is not None or await _probe_openai_tool_calling(
+                client,
+                FIXED_BASE_URLS["openai"],
+                request.model,
+                headers,
+                token_limit_field="max_completion_tokens",
+            )
+            return ProviderCapabilities(
+                tool_calling=tool_calling,
+                structured_output=known is not None,
+                streaming=True,
+                context_window=context_window,
+                vision=known[1] if known else False,
+                # OpenAI caches long prompt prefixes automatically.
+                prompt_caching=True,
             )
 
         assert request.base_url is not None
@@ -443,57 +578,7 @@ async def _validate_provider_capabilities(
             capabilities = capabilities.model_copy(update={"vision": True})
         if capabilities.tool_calling:
             return capabilities
-        tool_response = await client.post(
-            f"{request.base_url.rstrip('/')}/chat/completions",
-            headers=headers,
-            json={
-                "model": request.model,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": "Call add_numbers with a=1 and b=2. Return only the tool call.",
-                    }
-                ],
-                "tools": [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "add_numbers",
-                            "description": "Add two integers.",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "a": {"type": "integer"},
-                                    "b": {"type": "integer"},
-                                },
-                                "required": ["a", "b"],
-                            },
-                        },
-                    }
-                ],
-                "tool_choice": "required",
-                "max_tokens": 256,
-                "stream": False,
-            },
-        )
-        if tool_response.status_code >= 400:
-            raise ProviderValidationError(
-                "The OpenAI-compatible endpoint did not accept a tool-call verification request."
-            )
-        result = tool_response.json()
-        choices = result.get("choices", []) if isinstance(result, dict) else []
-        message = (
-            choices[0].get("message", {})
-            if isinstance(choices, list) and choices and isinstance(choices[0], dict)
-            else {}
-        )
-        tool_calls = message.get("tool_calls", []) if isinstance(message, dict) else []
-        if not isinstance(tool_calls, list) or not any(
-            isinstance(call, dict)
-            and isinstance(call.get("function"), dict)
-            and call["function"].get("name") == "add_numbers"
-            for call in tool_calls
-        ):
+        if not await _probe_openai_tool_calling(client, request.base_url, request.model, headers):
             raise ProviderValidationError(
                 "The selected model did not return a tool call; "
                 "Course planning requires tool calling."
@@ -507,7 +592,135 @@ async def _validate_provider_capabilities(
         ) from error
 
 
+async def _probe_openai_tool_calling(
+    client: httpx2.AsyncClient,
+    base_url: str,
+    model: str,
+    headers: dict[str, str],
+    *,
+    token_limit_field: str = "max_tokens",
+) -> bool:
+    """Ask an OpenAI-style endpoint for one tool call.
+
+    OpenAI itself only accepts ``max_completion_tokens`` for its recent models.
+    """
+    tool_response = await client.post(
+        f"{base_url.rstrip('/')}/chat/completions",
+        headers=headers,
+        json={
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Call add_numbers with a=1 and b=2. Return only the tool call.",
+                }
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "add_numbers",
+                        "description": "Add two integers.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "a": {"type": "integer"},
+                                "b": {"type": "integer"},
+                            },
+                            "required": ["a", "b"],
+                        },
+                    },
+                }
+            ],
+            "tool_choice": "required",
+            token_limit_field: 256,
+            "stream": False,
+        },
+    )
+    if tool_response.status_code >= 400:
+        raise ProviderValidationError(
+            "The OpenAI-compatible endpoint did not accept a tool-call verification request."
+        )
+    result = tool_response.json()
+    choices = result.get("choices", []) if isinstance(result, dict) else []
+    message = (
+        choices[0].get("message", {})
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict)
+        else {}
+    )
+    tool_calls = message.get("tool_calls", []) if isinstance(message, dict) else []
+    return isinstance(tool_calls, list) and any(
+        isinstance(call, dict)
+        and isinstance(call.get("function"), dict)
+        and call["function"].get("name") == "add_numbers"
+        for call in tool_calls
+    )
+
+
 VISION_CAPABILITY_NAMES = frozenset({"vision", "multimodal"})
+
+# (context window, vision) of OpenAI model families that support tools and structured output.
+_OPENAI_MODELS: tuple[tuple[str, int, bool], ...] = (
+    ("gpt-5-chat", 128_000, True),
+    ("gpt-5", 400_000, True),
+    ("gpt-4.1", 1_047_576, True),
+    ("gpt-4o", 128_000, True),
+    ("o4-mini", 200_000, True),
+    ("o3", 200_000, True),
+    ("o1", 200_000, True),
+)
+
+
+def _known_openai_model(model: str) -> tuple[int, bool] | None:
+    return next(
+        ((window, vision) for prefix, window, vision in _OPENAI_MODELS if model.startswith(prefix)),
+        None,
+    )
+
+
+def _openrouter_reports_caching(metadata: object) -> bool | None:
+    pricing = metadata.get("pricing", {}) if isinstance(metadata, dict) else {}
+    if not isinstance(pricing, dict):
+        return None
+    return any(key in pricing for key in ("input_cache_read", "input_cache_write")) or None
+
+
+async def _validate_bedrock_capabilities(
+    request: ProviderConfigurationRequest,
+) -> ProviderCapabilities:
+    from pydantic_ai.providers.bedrock import BedrockProvider
+
+    access = request.bedrock_access()
+    context_window = bedrock.known_context_window(request.model) or request.context_window
+    if context_window is None:
+        raise ContextWindowUnknownError(
+            "Amazon Bedrock does not report context windows. "
+            "Enter the model's context size to continue."
+        )
+    profile = BedrockProvider.model_profile(request.model)
+    prompt_caching = (
+        bool(profile.get("bedrock_supports_prompt_caching")) if profile is not None else None
+    )
+    if prompt_caching is None:
+        prompt_caching = request.prompt_caching
+    if prompt_caching is None:
+        raise PromptCachingUnknownError(
+            "Course Harness cannot tell from this model ID whether the model supports "
+            "prompt caching. Say whether it does to continue."
+        )
+    try:
+        tool_calling = await asyncio.to_thread(bedrock.probe_tool_calling, access, request.model)
+        described = await asyncio.to_thread(bedrock.describe_model, access, request.model)
+    except BedrockError as error:
+        raise ProviderValidationError(str(error)) from error
+    return ProviderCapabilities(
+        tool_calling=tool_calling,
+        structured_output=bool(profile and profile.get("supports_json_schema_output")),
+        streaming=described.streaming if described else True,
+        context_window=context_window,
+        vision=described.vision if described else False,
+        prompt_caching=prompt_caching,
+    )
 
 
 def _listing_reports_vision(listing: object, model: str) -> bool:
@@ -612,6 +825,7 @@ def save_provider_account(
     store_path: Path,
     request: ProviderAccountRequest,
     *,
+    detected_from: str | None = None,
     credential_store: CredentialStore | None = None,
 ) -> ProviderAccount:
     store = _credential_store(store_path, credential_store)
@@ -621,12 +835,22 @@ def save_provider_account(
         name=request.name,
         kind=request.kind,
         base_url=request.resolved_base_url(),
+        credential_source=request.credential_source,
+        region=request.region,
+        aws_profile=request.aws_profile,
+        detected_from=detected_from,
     )
     catalog.provider_accounts.append(account)
-    store.write(account.id, request.api_key.get_secret_value())
+    secret = request.secret()
+    if secret is not None:
+        store.write(account.id, secret)
     try:
         _write_catalog(store_path, catalog)
     except OSError as error:
+        if secret is None:
+            raise CredentialStoreError(
+                "The new Provider Account could not be saved safely."
+            ) from error
         try:
             store.delete(account.id)
         except CredentialStoreError as rollback_error:
@@ -657,12 +881,13 @@ def provider_request_for_credential_rotation(
     )
     if account is None:
         raise KeyError(account_id)
+    if not account.stores_credential:
+        raise ProviderValidationError(
+            f"{account.name} uses AWS credentials that are not stored; there is no key to replace."
+        )
     return ProviderAccountRequest(
         name=account.name,
-        kind=account.kind,
-        api_key=request.api_key,
-        base_url=account.base_url if account.kind == "openai-compatible" else None,
-        allow_insecure_http=account.base_url.startswith("http://"),
+        **account.access(request.api_key.get_secret_value()).model_dump(),
     )
 
 
@@ -708,7 +933,8 @@ def delete_provider_account(
 
     # Delete the secret before mutating account metadata.  A backend failure is
     # surfaced and leaves the catalog and its storage-mode metadata intact.
-    recovery = store.delete(account_id)
+    account = next(item for item in catalog.provider_accounts if item.id == account_id)
+    recovery = store.delete(account_id) if account.stores_credential else None
     post_delete_metadata, post_delete_credentials = store.private_state()
     removed_preset_ids = {preset.id for preset in attached_presets}
     catalog.provider_accounts = [
@@ -722,6 +948,10 @@ def delete_provider_account(
     try:
         _write_catalog(store_path, catalog)
     except OSError as error:
+        if recovery is None:
+            raise CredentialStoreError(
+                "The Provider Account could not be deleted safely."
+            ) from error
         try:
             store.restore_recovery(
                 recovery,
@@ -762,6 +992,12 @@ def save_model_preset(
         entered_context_window=(
             request.context_window
             if capabilities.context_window == request.context_window
+            else None
+        ),
+        entered_prompt_caching=(
+            request.prompt_caching
+            if request.prompt_caching is not None
+            and capabilities.prompt_caching == request.prompt_caching
             else None
         ),
     )
@@ -806,7 +1042,7 @@ def select_model_preset(
 
 
 class ModelSuggestion(BaseModel):
-    """A model an OpenAI-compatible endpoint reports, offered while adding a Model Preset."""
+    """A model a provider reports, offered while adding a Model Preset."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -825,22 +1061,39 @@ async def list_provider_models(
     http_client: httpx2.AsyncClient | None = None,
     credential_store: CredentialStore | None = None,
 ) -> list[ModelSuggestion]:
-    """List the models an OpenAI-compatible Provider Account's endpoint reports.
+    """List the models an OpenAI-compatible or Bedrock Provider Account reports.
 
-    Hosted providers have large curated catalogs, so they get no suggestions.
+    Other hosted providers have large curated catalogs, so they get no suggestions.
     """
     store = _credential_store(store_path, credential_store)
     catalog = read_model_catalog(store_path, credential_store=store)
     account = next((item for item in catalog.provider_accounts if item.id == account_id), None)
-    api_key = store.read(account_id)
-    if account is None or api_key is None:
+    api_key = store.read(account_id) if account is not None and account.stores_credential else None
+    if account is None or (account.stores_credential and api_key is None):
         raise KeyError(account_id)
-    if account.kind != "openai-compatible":
+    if account.kind == "bedrock":
+        return await _list_bedrock_models(account.access(api_key).bedrock_access())
+    if account.kind != "openai-compatible" or api_key is None:
         return []
     if http_client is None:
         async with product_connector_client(timeout=15) as client:
             return await _list_provider_models(client, account.base_url, api_key)
     return await _list_provider_models(http_client, account.base_url, api_key)
+
+
+async def _list_bedrock_models(access: BedrockAccess) -> list[ModelSuggestion]:
+    try:
+        models = await asyncio.to_thread(bedrock.list_models, access, limit=MAX_MODEL_SUGGESTIONS)
+    except BedrockError as error:
+        raise ProviderValidationError(str(error)) from error
+    return [
+        ModelSuggestion(
+            id=model.id,
+            vision=model.vision,
+            context_window=bedrock.known_context_window(model.id),
+        )
+        for model in models
+    ]
 
 
 async def _list_provider_models(
@@ -895,22 +1148,23 @@ def provider_request_for_model(
         ),
         None,
     )
-    api_key = store.read(request.provider_account_id)
-    if account is None or api_key is None:
+    if account is None:
+        raise KeyError(request.provider_account_id)
+    api_key = store.read(account.id) if account.stores_credential else None
+    if account.stores_credential and api_key is None:
         raise KeyError(request.provider_account_id)
     return ProviderConfigurationRequest(
-        kind=account.kind,
+        **account.access(api_key).model_dump(),
         model=request.model,
-        api_key=SecretStr(api_key),
-        base_url=account.base_url if account.kind == "openai-compatible" else None,
-        allow_insecure_http=account.base_url.startswith("http://"),
         context_window=request.context_window,
+        prompt_caching=request.prompt_caching,
     )
 
 
 def resolve_selected_model(
     store_path: Path, *, credential_store: CredentialStore | None = None
-) -> tuple[ProviderConfiguration, str] | None:
+) -> tuple[ProviderConfiguration, str | None] | None:
+    """The selected model and its stored key; AWS credential accounts have no stored key."""
     store = _credential_store(store_path, credential_store)
     catalog = read_model_catalog(store_path, credential_store=store)
     preset = next(
@@ -931,8 +1185,10 @@ def resolve_selected_model(
         ),
         None,
     )
-    api_key = store.read(preset.provider_account_id)
-    if account is None or api_key is None:
+    if account is None:
+        return None
+    api_key = store.read(account.id) if account.stores_credential else None
+    if account.stores_credential and api_key is None:
         return None
     return (
         ProviderConfiguration(
@@ -940,6 +1196,9 @@ def resolve_selected_model(
             model=preset.model,
             base_url=account.base_url,
             capabilities=preset.capabilities,
+            credential_source=account.credential_source,
+            region=account.region,
+            aws_profile=account.aws_profile,
         ),
         api_key,
     )
@@ -947,7 +1206,7 @@ def resolve_selected_model(
 
 def resolve_active_model(
     store_path: Path, *, credential_store: CredentialStore | None = None
-) -> tuple[ProviderConfiguration, str] | None:
+) -> tuple[ProviderConfiguration, str | None] | None:
     """Resolve the selected model, using legacy state only before a catalog exists."""
     store = _credential_store(store_path, credential_store)
     selected = resolve_selected_model(store_path, credential_store=store)
@@ -969,11 +1228,7 @@ def _migrate_legacy_catalog(
         return ModelCatalog()
     account = ProviderAccount(
         id="provider-legacy",
-        name={
-            "openrouter": "OpenRouter",
-            "anthropic": "Anthropic",
-            "openai-compatible": "OpenAI-compatible",
-        }[configuration.kind],
+        name=PROVIDER_LABELS[configuration.kind],
         kind=configuration.kind,
         base_url=configuration.base_url,
     )
@@ -1108,7 +1363,11 @@ def runtime_provider_status(store_path: Path) -> RuntimeProviderStatus:
         else None
     )
     if selected is not None and account is not None:
-        storage_mode, storage_location = store.diagnostics(account.id)
+        storage_mode, storage_location = (
+            store.diagnostics(account.id)
+            if account.stores_credential
+            else ("aws-sdk", aws_credential_origin(account))
+        )
         if storage_mode == "unavailable":
             return _unavailable_runtime_provider_status(
                 catalog.selected_model_id,
@@ -1177,6 +1436,12 @@ def runtime_provider_status(store_path: Path) -> RuntimeProviderStatus:
         ),
         remediation=remediation,
     )
+
+
+def aws_credential_origin(account: ProviderAccount) -> str:
+    if account.credential_source == "aws-profile":
+        return f"AWS profile {account.aws_profile}, resolved by the AWS SDK"
+    return "AWS session credentials in the environment Course Harness started from"
 
 
 def _unavailable_runtime_provider_status(

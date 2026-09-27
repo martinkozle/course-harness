@@ -1,4 +1,12 @@
-export type ProviderKind = "openrouter" | "openai-compatible" | "anthropic";
+export type ProviderKind =
+	| "openrouter"
+	| "openai"
+	| "openai-compatible"
+	| "anthropic"
+	| "bedrock";
+
+/** A stored API key, or AWS credentials that the AWS SDK resolves (Bedrock only). */
+export type CredentialSource = "stored-key" | "aws-profile" | "aws-environment";
 
 export type ProviderCapabilities = {
 	tool_calling: boolean;
@@ -6,6 +14,7 @@ export type ProviderCapabilities = {
 	streaming: boolean;
 	context_window: number;
 	vision: boolean;
+	prompt_caching?: boolean | null;
 };
 
 export type ProviderAccount = {
@@ -13,6 +22,23 @@ export type ProviderAccount = {
 	name: string;
 	kind: ProviderKind;
 	base_url: string;
+	credential_source?: CredentialSource;
+	region?: string | null;
+	aws_profile?: string | null;
+	detected_from?: string | null;
+};
+
+/** A credential Course Harness can see, offered to add as a Provider Account. */
+export type DetectedCredential = {
+	id: string;
+	kind: ProviderKind;
+	credential_source: CredentialSource;
+	name: string;
+	origin: string;
+	base_url: string | null;
+	region: string | null;
+	aws_profiles: { name: string; region: string | null }[];
+	expires_at: string | null;
 };
 
 export type ModelPreset = {
@@ -23,6 +49,7 @@ export type ModelPreset = {
 	capabilities: ProviderCapabilities;
 	diagnostics: string[];
 	entered_context_window?: number | null;
+	entered_prompt_caching?: boolean | null;
 };
 
 export type ModelCatalog = {

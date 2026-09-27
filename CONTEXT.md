@@ -145,8 +145,12 @@ A Course Author-reviewed summary of a Conversation's earlier turns that replaces
 _Avoid_: Transcript deletion, Course Revision
 
 **Provider Account**:
-A reusable connection to a model provider, consisting of an endpoint and one private credential.
+A reusable connection to a model provider, consisting of an endpoint and one credential: a private stored key, or, for Amazon Bedrock, a reference to AWS credentials that the AWS SDK resolves on every use and Course Harness never stores.
 _Avoid_: Model, connection, provider configuration
+
+**Detected Credential**:
+A model provider credential that Course Harness can see in the environment it started from or in the shared AWS configuration, offered to the Course Author to add as a Provider Account; it is never used until added.
+_Avoid_: Default provider, automatic Provider Account
 
 **Model Preset**:
 A named model choice with verified capabilities that uses one Provider Account; multiple Model Presets may share the same Provider Account.

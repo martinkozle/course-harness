@@ -55,6 +55,16 @@ Canonical Course state lives in readable files in the Course Workspace. Caches, 
 credentials live in platform-native user locations outside it; credentials go to the operating
 system keyring when one is available. **Settings → Diagnostics** shows the exact locations.
 
+**Models** works with OpenRouter, OpenAI, Anthropic, Amazon Bedrock, and any OpenAI-compatible
+server. Under **Found on this computer**, it lists the provider credentials it can see and lets you
+add each one with a single click. It looks at `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`OPENROUTER_API_KEY`, `AWS_BEARER_TOKEN_BEDROCK`, AWS session variables (such as those set by
+awsume), and the profiles in `~/.aws`. None of these is used until you add it. For Bedrock, an AWS
+profile is the most robust choice: only its name is stored, and the AWS SDK refreshes SSO and role
+credentials by itself. Session variables are read from the shell that started Course Harness, so
+after they expire, refresh them and restart from that shell. Prompt caching is turned on for
+Anthropic and OpenRouter models, and for Bedrock models that support it.
+
 To use an OpenAI-compatible provider on another machine over plain HTTP, select **Allow HTTP to
 another host**. The API key and Course content are then sent unencrypted, so use it only on a
 network you trust.

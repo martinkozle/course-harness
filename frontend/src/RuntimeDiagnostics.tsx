@@ -10,7 +10,12 @@ type RuntimeDiagnostics = {
 		selected_model_id: string | null;
 		remediation?: string;
 		credential_storage: {
-			mode: "os-keyring" | "private-json-file" | "unavailable" | "unconfigured";
+			mode:
+				| "os-keyring"
+				| "private-json-file"
+				| "aws-sdk"
+				| "unavailable"
+				| "unconfigured";
 			location: string;
 		};
 		provider: {
@@ -46,6 +51,7 @@ const pathLabels: Record<string, string> = {
 const credentialStorageLabels = {
 	"os-keyring": "Operating-system keyring",
 	"private-json-file": "Private application file",
+	"aws-sdk": "Not stored — the AWS SDK resolves AWS credentials",
 	unavailable: "Unavailable — inspect the reported metadata path",
 	unconfigured: "Not configured",
 } as const;

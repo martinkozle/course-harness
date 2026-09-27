@@ -443,7 +443,8 @@ async def test_provider_account_credential_can_be_rotated_without_replacing_the_
     validated_keys: list[str] = []
 
     async def validate_account(request: ProviderAccountRequest) -> None:
-        key = request.api_key.get_secret_value()
+        key = request.secret()
+        assert key is not None
         validated_keys.append(key)
         if key == "rejected-secret":
             raise ProviderValidationError("The replacement credential was rejected.")

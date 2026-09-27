@@ -16,6 +16,8 @@ from course_harness.course_plan import read_course_plan
 from course_harness.presentation import read_presentation_for_lecture
 from course_harness.providers import (
     ContextWindowUnknownError,
+    ModelSuggestion,
+    PromptCachingUnknownError,
     ProviderCapabilities,
     ProviderConfigurationRequest,
 )
@@ -34,17 +36,29 @@ async def verified_capabilities(request: ProviderConfigurationRequest) -> Provid
                 "Enter the model's context size to continue."
             )
         context_window = request.context_window
+    # An application inference profile ARN does not reveal whether it can cache prompts.
+    if request.model.startswith("arn:") and request.prompt_caching is None:
+        raise PromptCachingUnknownError(
+            "Course Harness cannot tell from this model ID whether the model supports "
+            "prompt caching. Say whether it does to continue."
+        )
     return ProviderCapabilities(
         tool_calling=True,
         structured_output=True,
         streaming=True,
         context_window=context_window,
         vision=False,
+        prompt_caching=request.prompt_caching,
     )
 
 
 async def verified_account(_request: object) -> None:
     return None
+
+
+async def no_model_suggestions(_store: Path, _account_id: str) -> list[ModelSuggestion]:
+    # Listing Bedrock models would reach the developer's real AWS configuration.
+    return []
 
 
 ATTACHMENT = re.compile(r"^\[Attachment: (resource-[0-9a-f]{12}) ", re.MULTILINE)
@@ -236,6 +250,12 @@ async def course_planning_model(
 
 temporary_root = TemporaryDirectory(prefix="course-harness-e2e-", dir=".cache")
 root = Path(temporary_root.name)
+# Detected Credentials come only from this fake home, never from the developer's shell.
+credential_home = root / "home"
+(credential_home / ".aws").mkdir(parents=True)
+(credential_home / ".aws" / "config").write_text(
+    "[profile work]\nregion = eu-central-1\n", encoding="utf-8"
+)
 workspace_ids = count(1)
 active_workspace: Path | None = None
 
@@ -263,6 +283,8 @@ uvicorn.run(
         agent_model=FunctionModel(stream_function=course_planning_model),
         provider_validator=verified_capabilities,
         provider_account_validator=verified_account,
+        provider_model_lister=no_model_suggestions,
+        credential_environ={"HOME": str(credential_home)},
         # The smoke journey must not reach the default Exa Connector over the network.
         connector_connect=lambda connector: MCPToolset(
             "http://127.0.0.1:9/mcp", id=connector.id, init_timeout=2
