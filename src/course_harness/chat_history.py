@@ -29,6 +29,7 @@ RESEARCH_KINDS = frozenset({"research_candidates", "connector_result"})
 FALLBACK_TITLE_LENGTH = 60
 MAX_TITLE_LENGTH = 80
 _DEFAULT_TITLE = re.compile(r"Conversation \d+")
+COURSE_STATE_HEADING = "[Current Course state, supplied by Course Harness]"
 
 TitleSource = Literal["default", "query", "generated", "author"]
 # A title may only be replaced by a source of equal or higher rank; an author's rename always wins.
@@ -125,6 +126,15 @@ def _index_path(store_path: Path, workspace: Path) -> Path:
 
 def _thread_path(store_path: Path, workspace: Path, conversation_id: str) -> Path:
     return _directory(store_path, workspace) / f"{conversation_id}.json"
+
+
+def traces_directory(store_path: Path, workspace: Path) -> Path:
+    """Where this Workspace's Course Agent run traces are kept, beside its Conversations."""
+    return _directory(store_path, workspace) / "traces"
+
+
+def trace_path(store_path: Path, workspace: Path, conversation_id: str) -> Path:
+    return traces_directory(store_path, workspace) / f"{conversation_id}.jsonl"
 
 
 def _now() -> str:
@@ -398,6 +408,9 @@ def delete_conversation(
             _update_metadata(index, first)
     _atomic_write(_index_path(store_path, workspace), index)
     _thread_path(store_path, workspace, conversation_id).unlink(missing_ok=True)
+    trace = trace_path(store_path, workspace, conversation_id)
+    trace.unlink(missing_ok=True)
+    trace.with_suffix(".state.json").unlink(missing_ok=True)
     return list_conversations(store_path, workspace)
 
 
@@ -467,10 +480,32 @@ def read_chat_history(
     return history
 
 
+def is_course_state_part(part: object) -> bool:
+    """Whether a request part is a Course state snapshot rather than Course Author text."""
+    return (
+        isinstance(part, UserPromptPart)
+        and isinstance(part.content, str)
+        and part.content.startswith(COURSE_STATE_HEADING)
+    )
+
+
+def _without_course_state(history: list[ModelMessage]) -> list[ModelMessage]:
+    result: list[ModelMessage] = []
+    for message in history:
+        if isinstance(message, ModelRequest):
+            parts = [part for part in message.parts if not is_course_state_part(part)]
+            if not parts:
+                continue
+            if len(parts) != len(message.parts):
+                message = dataclasses.replace(message, parts=parts)
+        result.append(message)
+    return result
+
+
 def _visible_messages(history: list[ModelMessage]) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     research: list[ResearchCard] = []
-    for message in AGUIAdapter.dump_messages(history):
+    for message in AGUIAdapter.dump_messages(_without_course_state(history)):
         if message.role == "tool" and isinstance(message.content, str):
             card = _research_card(message.content)
             if card is not None:

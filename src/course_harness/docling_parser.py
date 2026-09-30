@@ -1,6 +1,7 @@
 """Local document conversion and model provisioning for the Library."""
 
 import io
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -12,6 +13,10 @@ OFFICE_MEDIA_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
 }
 HTML_MEDIA_TYPES = {"text/html": ".html", "application/xhtml+xml": ".xhtml"}
+
+# The PDF pipeline runs layout, table, and OCR models that need gigabytes of memory and
+# every core, so PDFs convert one at a time. Web pages and Office files do not wait.
+_PDF_CONVERSION = threading.Lock()
 
 
 def models_ready(cache_dir: Path) -> bool:
@@ -80,10 +85,12 @@ def convert_document(media_type: str, content: bytes, cache_dir: Path) -> tuple[
             allowed_formats=[InputFormat.PPTX if extension == ".pptx" else InputFormat.DOCX]
         )
 
-    result = converter.convert(
-        DocumentStream(name=f"resource{extension}", stream=io.BytesIO(content)),
-        max_file_size=100 * 1024 * 1024,
-    )
+    stream = DocumentStream(name=f"resource{extension}", stream=io.BytesIO(content))
+    if media_type == PDF_MEDIA_TYPE:
+        with _PDF_CONVERSION:
+            result = converter.convert(stream, max_file_size=100 * 1024 * 1024)
+    else:
+        result = converter.convert(stream, max_file_size=100 * 1024 * 1024)
     document = result.document
     if document.pages:
         label = "Slide" if extension == ".pptx" else "Page"

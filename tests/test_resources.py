@@ -1069,3 +1069,55 @@ async def test_refresh_non_remote_rejected(tmp_path: Path) -> None:
 
     assert refresh.status_code == 422
     assert "remote" in (refresh.json().get("detail") or "").lower()
+
+
+@pytest.mark.anyio
+async def test_a_slow_upload_conversion_does_not_hold_up_other_library_changes(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "resource-course"
+    workspace.mkdir()
+    data_dir = tmp_path / "library-data"
+    cache_dir = tmp_path / "library-cache"
+    converting = threading.Event()
+    release = threading.Event()
+    process_snapshot = res.process_snapshot
+
+    def slow_process_snapshot(
+        cache: Path, content_hash: str, media_type: str, content: bytes
+    ) -> res.ResourceState:
+        converting.set()
+        release.wait(timeout=10)
+        return process_snapshot(cache, content_hash, media_type, content)
+
+    transport = httpx2.ASGITransport(app=_app(workspace, data_dir, cache_dir))
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        with patch("course_harness.library.process_snapshot", slow_process_snapshot):
+            upload = asyncio.create_task(
+                client.post(
+                    "/api/resources/upload",
+                    files={"file": ("long.md", b"# A long book\n", "text/markdown")},
+                )
+            )
+            async with asyncio.timeout(5):
+                while not converting.is_set():
+                    await asyncio.sleep(0.01)
+            # The upload is recorded before conversion, so it survives an interruption.
+            waiting = (await client.get("/api/resources")).json()
+            async with asyncio.timeout(5):
+                registered = await client.post(
+                    "/api/resources",
+                    json={
+                        "kind": "local-file",
+                        "location": str(FIXTURES / "hello.md"),
+                        "media_type": "text/markdown",
+                    },
+                )
+            release.set()
+            uploaded = await upload
+
+    assert [(item["location"], item["status"]) for item in waiting] == [("long.md", "unprocessed")]
+    assert waiting[0]["snapshot"] is not None
+    assert registered.status_code == 201
+    assert uploaded.status_code == 201
+    assert uploaded.json()["status"] == "ready"

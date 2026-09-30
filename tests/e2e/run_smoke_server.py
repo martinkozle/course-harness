@@ -12,6 +12,7 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart, Use
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from course_harness.app import create_app
+from course_harness.chat_history import is_course_state_part
 from course_harness.course_plan import read_course_plan
 from course_harness.presentation import read_presentation_for_lecture
 from course_harness.providers import (
@@ -71,7 +72,11 @@ def attached_image_request(messages: list[ModelMessage]) -> tuple[str, set[str]]
         if not isinstance(message, ModelRequest):
             continue
         for part in message.parts:
-            if isinstance(part, UserPromptPart) and isinstance(part.content, str):
+            if (
+                isinstance(part, UserPromptPart)
+                and isinstance(part.content, str)
+                and not is_course_state_part(part)
+            ):
                 match = ATTACHMENT.search(part.content)
                 if match is None or "Use the attached image" not in part.content:
                     return None

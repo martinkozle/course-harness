@@ -31,6 +31,7 @@ from course_harness import resources as res
 from course_harness import search as search_module
 from course_harness import sources as sources_module
 from course_harness import template_profiles as tpl
+from course_harness.agent_traces import AgentTrace, prune_traces
 from course_harness.canonical_mutation import (
     MAX_CANONICAL_FILES,
     CanonicalMutationConflict,
@@ -58,6 +59,8 @@ from course_harness.chat_history import (
     read_chat_transcript,
     read_conversation_transcript,
     save_chat_history,
+    trace_path,
+    traces_directory,
     update_conversation,
 )
 from course_harness.connector_tools import (
@@ -1848,6 +1851,7 @@ def create_app(
             )
             conversation_id = active_conversation_id(chat_path, active)
             history = read_chat_history(chat_path, active, conversation_id)
+            prune_traces(traces_directory(chat_path, active))
 
             async def persist_if_not_cancelled(result: object) -> None:
                 if not cancel.is_set():
@@ -1894,6 +1898,7 @@ def create_app(
                 conversation_id=conversation_id,
                 on_complete=persist_if_not_cancelled,
                 allowed_file_url_schemes=frozenset(),
+                capabilities=[AgentTrace(trace_path(chat_path, active, conversation_id))],
                 toolsets=(
                     None
                     if is_reconciliation
@@ -3094,12 +3099,14 @@ def create_app(
                 detail="Uploaded Resources must be processed with their content payload.",
             )
 
+        # Conversion can take many minutes, so only the registry write holds the lock.
         async with resource_registry_lock:
-            result = await asyncio.to_thread(
-                library.process_existing_resource, data_dir, cache_dir, resource_id, content
+            recorded = await asyncio.to_thread(
+                library.snapshot_existing_resource, data_dir, resource_id, content
             )
-        if result is None:
+        if recorded is None:
             raise HTTPException(status_code=404, detail="Resource was not found")
+        result = await asyncio.to_thread(library.process_upload, cache_dir, *recorded, content)
         if result.status != "ready":
             raise HTTPException(status_code=422, detail=result.error or "Processing failed.")
         return result
@@ -3155,11 +3162,14 @@ def create_app(
             location=str(filename),
             media_type=media_type,
         )
+        # Conversion can take many minutes, so only the registry write holds the lock.
         async with resource_registry_lock:
-            _, _, state = await asyncio.to_thread(
-                library.register_and_snapshot, data_dir, cache_dir, record, content
+            resource, snapshot = await asyncio.to_thread(
+                library.register_upload, data_dir, record, content
             )
-        return state
+        return await asyncio.to_thread(
+            library.process_upload, cache_dir, resource, snapshot, content
+        )
 
     @app.get("/api/resources/{resource_id}/content")
     async def resource_content(resource_id: str) -> StarletteResponse:

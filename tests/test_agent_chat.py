@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import itertools
 import json
 import os
 from collections.abc import AsyncIterator
@@ -11,6 +12,7 @@ import pytest
 from pydantic import SecretStr
 from pydantic_ai.messages import (
     ModelMessage,
+    ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
     TextPart,
@@ -24,6 +26,7 @@ from course_harness import canonical_mutation
 from course_harness import providers as providers_module
 from course_harness import workspace_history as history
 from course_harness.app import create_app
+from course_harness.chat_history import COURSE_STATE_HEADING
 from course_harness.course_agent import (
     CourseAgentDeps,
     CourseAgentState,
@@ -2701,3 +2704,128 @@ async def test_revision_tools_tell_the_model_the_summary_length_limit(tmp_path: 
     summary = schemas["create_course_revision"]["properties"]["summary"]
     assert summary["maxLength"] == history.MAX_REVISION_SUMMARY_CHARACTERS
     assert "at most 240 characters" in summary["description"]
+
+
+def _sent_history(messages: list[ModelMessage]) -> list[dict[str, Any]]:
+    """What a provider receives for earlier messages; only the latest instructions are sent."""
+    dumped = ModelMessagesTypeAdapter.dump_python(messages, mode="json")
+    for message in dumped:
+        message.pop("instructions", None)
+    return dumped
+
+
+@pytest.mark.anyio
+async def test_course_state_changes_keep_earlier_requests_reusable_from_the_prompt_cache(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "cached-course"
+    workspace.mkdir()
+    chat_store = tmp_path / "user-data" / "chat"
+    requests: list[tuple[str | None, list[dict[str, Any]]]] = []
+
+    async def planning_model(
+        messages: list[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        requests.append((info.instructions, _sent_history(messages)))
+        latest = messages[-1]
+        if len(requests) == 1:
+            command = {
+                "title": "Cache-friendly Course",
+                "audience": "Local model users",
+                "lectures": [{"title": "Prefixes"}, {"title": "Reuse"}],
+            }
+            yield {
+                0: DeltaToolCall(
+                    name="replace_course_plan",
+                    json_args=json.dumps({"command": command}),
+                    tool_call_id="cached-plan-1",
+                )
+            }
+        elif isinstance(latest, ModelRequest) and any(
+            isinstance(part, ToolReturnPart) for part in latest.parts
+        ):
+            yield "I created the Course Plan."
+        else:
+            yield "It has two Lectures."
+
+    app = create_app(
+        workspace,
+        provider_store_path=tmp_path / "user-data" / "provider",
+        chat_store_path=chat_store,
+        agent_model=FunctionModel(stream_function=planning_model),
+        provider_validator=_verified_capabilities,
+    )
+
+    def turn(run_id: str, text: str) -> dict[str, object]:
+        return {
+            "threadId": "course-agent",
+            "runId": run_id,
+            "state": {},
+            "messages": [{"id": f"user-{run_id}", "role": "user", "content": text}],
+            "tools": [],
+            "context": [],
+            "forwardedProps": {},
+        }
+
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        first_status, _ = await _post_stream(app, "/api/agent", turn("run-1", "Plan a Course."))
+        second_status, _ = await _post_stream(app, "/api/agent", turn("run-2", "How long?"))
+        chat = (await client.get("/api/chat")).json()
+        await client.post("/api/workspace/close")
+
+    assert (first_status, second_status) == (200, 200)
+    assert len(requests) == 3
+    instructions = {sent_instructions for sent_instructions, _ in requests}
+    assert len(instructions) == 1
+    assert "Cache-friendly Course" not in (instructions.pop() or "")
+    for (_, earlier), (_, later) in itertools.pairwise(requests):
+        assert later[: len(earlier)] == earlier
+
+    def snapshots(history: list[dict[str, Any]]) -> list[str]:
+        return [
+            part["content"]
+            for message in history
+            if message["kind"] == "request"
+            for part in message["parts"]
+            if part["part_kind"] == "user-prompt"
+            and part["content"].startswith(COURSE_STATE_HEADING)
+        ]
+
+    first_run_snapshots = snapshots(requests[1][1])
+    assert len(first_run_snapshots) == 1
+    assert "does not have a Course Plan yet" in first_run_snapshots[0]
+    second_run_snapshots = snapshots(requests[2][1])
+    assert len(second_run_snapshots) == 2
+    assert "Cache-friendly Course" in second_run_snapshots[1]
+    assert [message["content"] for message in chat["messages"]] == [
+        "Plan a Course.",
+        "I created the Course Plan.",
+        "How long?",
+        "It has two Lectures.",
+    ]
+
+    trace_files = list(chat_store.glob("*/traces/*.jsonl"))
+    assert len(trace_files) == 1
+    records = [json.loads(line) for line in trace_files[0].read_text().splitlines()]
+    assert [record["event"] for record in records] == [
+        "run_start",
+        "model_request",
+        "tool_call",
+        "model_request",
+        "run_end",
+        "run_start",
+        "model_request",
+        "run_end",
+    ]
+    model_requests = [record for record in records if record["event"] == "model_request"]
+    assert model_requests[0]["instructions"] == requests[0][0]
+    for record in model_requests[1:]:
+        assert record["reused_messages"] > 0
+        assert record["history_rewritten"] is False
+        assert record["instructions_changed"] is False
+        assert record["tools_changed"] is False
+        assert "instructions" not in record
+    assert records[2]["tool"] == "replace_course_plan"
+    assert {record["status"] for record in records if record["event"] == "run_end"} == {"completed"}

@@ -52,27 +52,42 @@ def register_and_snapshot(
     request: ResourceRegistrationRequest,
     content: bytes,
 ) -> tuple[Resource, Snapshot, ResourceState]:
+    resource, snapshot = register_upload(data_dir, request, content)
+    return resource, snapshot, process_upload(cache_dir, resource, snapshot, content)
+
+
+def register_upload(
+    data_dir: Path, request: ResourceRegistrationRequest, content: bytes
+) -> tuple[Resource, Snapshot]:
+    """Record an upload and its Snapshot; the only step that writes the registry.
+
+    The Snapshot is recorded before processing, so a slow or interrupted conversion
+    leaves an unprocessed Resource that can be reprocessed instead of losing the upload.
+    """
     registry = registry_path(data_dir)
     resource = register_resource(registry, request)
     snapshot = create_snapshot(snapshots_dir(data_dir), resource.id, content)
-    state = process_snapshot(cache_dir, snapshot.content_hash, resource.media_type, content)
     update_resource_snapshot(registry, resource.id, snapshot.content_hash)
+    return resource, snapshot
+
+
+def process_upload(
+    cache_dir: Path, resource: Resource, snapshot: Snapshot, content: bytes
+) -> ResourceState:
+    """Convert and index a recorded Snapshot without touching the registry."""
+    state = process_snapshot(cache_dir, snapshot.content_hash, resource.media_type, content)
     indexed = False
     if state.status == "ready":
         indexed = _index_if_ready(cache_dir, snapshot.content_hash)
-    return (
-        resource,
-        snapshot,
-        ResourceState(
-            resource_id=resource.id,
-            kind=resource.kind,
-            location=resource.location,
-            media_type=resource.media_type,
-            status=state.status,
-            indexed=indexed,
-            error=state.error,
-            snapshot=snapshot,
-        ),
+    return ResourceState(
+        resource_id=resource.id,
+        kind=resource.kind,
+        location=resource.location,
+        media_type=resource.media_type,
+        status=state.status,
+        indexed=indexed,
+        error=state.error,
+        snapshot=snapshot,
     )
 
 
@@ -145,26 +160,22 @@ def process_existing_resource(
     resource_id: str,
     content: bytes,
 ) -> ResourceState | None:
+    recorded = snapshot_existing_resource(data_dir, resource_id, content)
+    if recorded is None:
+        return None
+    return process_upload(cache_dir, *recorded, content)
+
+
+def snapshot_existing_resource(
+    data_dir: Path, resource_id: str, content: bytes
+) -> tuple[Resource, Snapshot] | None:
     index = read_library_index(registry_path(data_dir))
     resource = next((r for r in index.resources if r.id == resource_id), None)
     if resource is None:
         return None
     snapshot = create_snapshot(snapshots_dir(data_dir), resource.id, content)
-    state = process_snapshot(cache_dir, snapshot.content_hash, resource.media_type, content)
     update_resource_snapshot(registry_path(data_dir), resource.id, snapshot.content_hash)
-    indexed = False
-    if state.status == "ready":
-        indexed = _index_if_ready(cache_dir, snapshot.content_hash)
-    return ResourceState(
-        resource_id=resource.id,
-        kind=resource.kind,
-        location=resource.location,
-        media_type=resource.media_type,
-        status=state.status,
-        indexed=indexed,
-        error=state.error,
-        snapshot=snapshot,
-    )
+    return resource, snapshot
 
 
 def remove_resource(
