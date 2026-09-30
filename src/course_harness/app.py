@@ -44,6 +44,7 @@ from course_harness.chat_history import (
     CompactionPreview,
     ConversationCatalog,
     ConversationConflict,
+    SaveConversationProgress,
     activate_conversation,
     active_conversation_id,
     clear_chat_history,
@@ -1898,7 +1899,10 @@ def create_app(
                 conversation_id=conversation_id,
                 on_complete=persist_if_not_cancelled,
                 allowed_file_url_schemes=frozenset(),
-                capabilities=[AgentTrace(trace_path(chat_path, active, conversation_id))],
+                capabilities=[
+                    AgentTrace(trace_path(chat_path, active, conversation_id)),
+                    SaveConversationProgress(chat_path, active, conversation_id),
+                ],
                 toolsets=(
                     None
                     if is_reconciliation

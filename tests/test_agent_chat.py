@@ -18,6 +18,7 @@ from pydantic_ai.messages import (
     TextPart,
     ToolCallPart,
     ToolReturnPart,
+    UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 from starlette.responses import StreamingResponse
@@ -26,7 +27,15 @@ from course_harness import canonical_mutation
 from course_harness import providers as providers_module
 from course_harness import workspace_history as history
 from course_harness.app import create_app
-from course_harness.chat_history import COURSE_STATE_HEADING
+from course_harness.chat_history import (
+    COURSE_STATE_HEADING,
+    UNFINISHED_TOOL_RESULT,
+    active_conversation_id,
+    close_unfinished_tool_calls,
+    read_chat_history,
+    read_chat_transcript,
+    save_chat_history,
+)
 from course_harness.course_agent import (
     CourseAgentDeps,
     CourseAgentState,
@@ -2812,11 +2821,14 @@ async def test_course_state_changes_keep_earlier_requests_reusable_from_the_prom
     assert [record["event"] for record in records] == [
         "run_start",
         "model_request",
+        "model_response",
         "tool_call",
         "model_request",
+        "model_response",
         "run_end",
         "run_start",
         "model_request",
+        "model_response",
         "run_end",
     ]
     model_requests = [record for record in records if record["event"] == "model_request"]
@@ -2827,5 +2839,107 @@ async def test_course_state_changes_keep_earlier_requests_reusable_from_the_prom
         assert record["instructions_changed"] is False
         assert record["tools_changed"] is False
         assert "instructions" not in record
-    assert records[2]["tool"] == "replace_course_plan"
+    assert records[3]["tool"] == "replace_course_plan"
+    responses = [record for record in records if record["event"] == "model_response"]
+    assert all(record["usage"]["output_tokens"] > 0 for record in responses)
     assert {record["status"] for record in records if record["event"] == "run_end"} == {"completed"}
+
+
+@pytest.mark.anyio
+async def test_stopping_a_run_keeps_the_conversation_up_to_the_latest_model_request(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "stopped-course"
+    workspace.mkdir()
+    chat_store = tmp_path / "chat"
+    waiting = asyncio.Event()
+    seen: list[list[ModelMessage]] = []
+
+    async def researching_model(
+        messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        seen.append(messages)
+        if any(
+            isinstance(message, ModelRequest)
+            and any(isinstance(part, ToolReturnPart) for part in message.parts)
+            for message in messages
+        ):
+            if len(seen) == 2:
+                waiting.set()
+                await asyncio.Event().wait()
+            yield "Here is what I found before you stopped me."
+            return
+        yield {0: DeltaToolCall(name="list_sources", json_args="{}", tool_call_id="sources-1")}
+
+    app = create_app(
+        workspace,
+        provider_store_path=tmp_path / "provider",
+        chat_store_path=chat_store,
+        agent_model=FunctionModel(stream_function=researching_model),
+        provider_validator=_verified_capabilities,
+    )
+
+    def turn(run_id: str, text: str) -> dict[str, object]:
+        return {
+            "threadId": "course-agent",
+            "runId": run_id,
+            "state": {},
+            "messages": [{"id": f"user-{run_id}", "role": "user", "content": text}],
+            "tools": [],
+            "context": [],
+            "forwardedProps": {},
+        }
+
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        running = asyncio.create_task(_post_stream(app, "/api/agent", turn("run-1", "Research.")))
+        await asyncio.wait_for(waiting.wait(), timeout=5)
+        assert (await client.post("/api/agent/cancel")).status_code == 204
+        await asyncio.wait_for(running, timeout=5)
+        stopped_chat = (await client.get("/api/chat")).json()
+        status, _ = await _post_stream(app, "/api/agent", turn("run-2", "Go on."))
+
+    assert stopped_chat == {
+        "approval": None,
+        "messages": [
+            {"id": stopped_chat["messages"][0]["id"], "role": "user", "content": "Research."}
+        ],
+    }
+    assert status == 200
+    resumed = seen[-1]
+    assert any(
+        isinstance(part, ToolReturnPart) and part.tool_call_id == "sources-1"
+        for message in resumed
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+    )
+
+
+def test_a_saved_unfinished_tool_call_is_closed_rather_than_awaiting_approval(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    conversation_id = active_conversation_id(tmp_path / "chat", workspace)
+    history: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content="Admit it.")]),
+        ModelResponse(
+            parts=[ToolCallPart(tool_name="admit_source", args="{}", tool_call_id="admit-1")]
+        ),
+    ]
+
+    save_chat_history(
+        tmp_path / "chat", workspace, close_unfinished_tool_calls(history), conversation_id
+    )
+
+    saved = read_chat_history(tmp_path / "chat", workspace, conversation_id)
+    assert read_chat_transcript(tmp_path / "chat", workspace).approval is None
+    closing = saved[-1]
+    assert isinstance(closing, ModelRequest)
+    assert [
+        (part.tool_call_id, part.content)
+        for part in closing.parts
+        if isinstance(part, ToolReturnPart)
+    ] == [("admit-1", UNFINISHED_TOOL_RESULT)]
+    assert len(closing.parts) == 1

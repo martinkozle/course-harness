@@ -1,11 +1,13 @@
 """Local traces of Course Agent runs, kept for debugging outside the Course Workspace.
 
-Each Conversation gets one JSON Lines file. A model request record keeps only the messages
-that differ from the previous request in the same Conversation, and says how many earlier
-messages were reused unchanged. When ``history_rewritten``, ``instructions_changed``, or
-``tools_changed`` is set, the provider could not reuse its prompt cache for the whole
-conversation so far, which is the usual reason a local model spends a long time on prompt
-processing. Tool call records show where a run waited on its own tools.
+Each Conversation gets one JSON Lines file. A model request record is written before the
+request is sent and keeps only the messages that differ from the previous request in the
+same Conversation, saying how many earlier messages were reused unchanged; a model response
+record follows with the response, its timing, and token usage. When ``history_rewritten``,
+``instructions_changed``, or ``tools_changed`` is set, the provider could not reuse its
+prompt cache for the whole conversation so far, which is the usual reason a local model
+spends a long time on prompt processing. Tool call records show where a run waited on its
+own tools.
 """
 
 from __future__ import annotations
@@ -165,20 +167,26 @@ class AgentTrace(AbstractCapability[Any]):
         request_context: ModelRequestContext,
         handler: WrapModelRequestHandler,
     ) -> ModelResponse:
-        record: dict[str, Any] = {"event": "model_request", "at": _now(), "run_id": ctx.run_id}
-        started = time.monotonic()
+        # The request is written before it is sent, so a request that never returns shows.
+        request: dict[str, Any] = {"event": "model_request", "at": _now(), "run_id": ctx.run_id}
         try:
-            record.update(self._describe_request(ctx, request_context))
+            request.update(self._describe_request(ctx, request_context))
         except Exception as error:  # A trace must never stop a run.
             logger.warning("Agent trace could not describe a model request: %s", error)
+        self._write(request)
+        record: dict[str, Any] = {"event": "model_response", "run_id": ctx.run_id}
+        started = time.monotonic()
         try:
             response = await handler(request_context)
         except BaseException as caught:
-            record["error"] = repr(caught)
-            record["duration_ms"] = round((time.monotonic() - started) * 1000)
+            record.update(
+                at=_now(),
+                error=repr(caught),
+                duration_ms=round((time.monotonic() - started) * 1000),
+            )
             self._write(record)
             raise
-        record["duration_ms"] = round((time.monotonic() - started) * 1000)
+        record.update(at=_now(), duration_ms=round((time.monotonic() - started) * 1000))
         try:
             record["response"] = _dump_messages([response])[0]
             record["usage"] = dataclasses.asdict(response.usage)

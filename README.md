@@ -56,11 +56,12 @@ credentials live in platform-native user locations outside it; credentials go to
 system keyring when one is available. **Settings → Diagnostics** shows the exact locations.
 
 Each Course Agent run is also traced for debugging, beside its conversation in the chat store:
-`traces/<conversation id>.jsonl` holds one line per model request and tool call, with timings,
-token usage (including cached input tokens), and only the messages that changed since the previous
-request. If a request sets `history_rewritten`, `instructions_changed`, or `tools_changed`, the
-provider could not reuse its prompt cache for the conversation so far. A trace is removed with its
-conversation, or after two weeks without new runs.
+`traces/<conversation id>.jsonl` holds one line per model request, response, and tool call, with
+timings, token usage (including cached input tokens), and only the messages that changed since the
+previous request. If a request sets `history_rewritten`, `instructions_changed`, or
+`tools_changed`, the provider could not reuse its prompt cache for the conversation so far. A trace
+is removed with its conversation, or after two weeks without new runs. The conversation itself is
+saved around every model request, so stopping a run keeps everything up to that point.
 
 **Models** works with OpenRouter, OpenAI, Anthropic, Amazon Bedrock, and any OpenAI-compatible
 server. Under **Found on this computer**, it lists the provider credentials it can see and lets you

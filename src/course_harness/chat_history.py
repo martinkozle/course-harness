@@ -3,14 +3,17 @@
 import dataclasses
 import hashlib
 import json
+import logging
 import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic_ai import RunContext
+from pydantic_ai.capabilities import AbstractCapability, WrapModelRequestHandler
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
@@ -21,15 +24,19 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from pydantic_ai.models import ModelRequestContext
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 
 from course_harness.workspaces import workspace_identity
+
+logger = logging.getLogger(__name__)
 
 RESEARCH_KINDS = frozenset({"research_candidates", "connector_result"})
 FALLBACK_TITLE_LENGTH = 60
 MAX_TITLE_LENGTH = 80
 _DEFAULT_TITLE = re.compile(r"Conversation \d+")
 COURSE_STATE_HEADING = "[Current Course state, supplied by Course Harness]"
+UNFINISHED_TOOL_RESULT = "The run stopped before this tool finished, so it has no result."
 
 TitleSource = Literal["default", "query", "generated", "author"]
 # A title may only be replaced by a source of equal or higher rank; an author's rename always wins.
@@ -600,6 +607,62 @@ def save_chat_history(
     _atomic_write(_thread_path(store_path, workspace, conversation_id), thread)
     _update_metadata(index, item)
     _atomic_write(_index_path(store_path, workspace), index)
+
+
+def close_unfinished_tool_calls(history: list[ModelMessage]) -> list[ModelMessage]:
+    """Give the latest response's unanswered tool calls a result saying the run stopped.
+
+    Only a finished run may end with unanswered calls: they are its pending approvals.
+    """
+    if not history or not isinstance(latest := history[-1], ModelResponse):
+        return history
+    unfinished = [
+        ToolReturnPart(
+            tool_name=part.tool_name,
+            content=UNFINISHED_TOOL_RESULT,
+            tool_call_id=part.tool_call_id,
+        )
+        for part in latest.parts
+        if isinstance(part, ToolCallPart)
+    ]
+    return [*history, ModelRequest(parts=unfinished)] if unfinished else history
+
+
+@dataclasses.dataclass
+class SaveConversationProgress(AbstractCapability[Any]):
+    """Store a run's conversation around each model request.
+
+    A run's final messages are saved when it completes. These saves keep everything up to
+    the latest model request and response when the run is stopped, fails, or the
+    application exits instead.
+    """
+
+    store_path: Path
+    workspace: Path
+    conversation_id: str
+
+    def _save(self, messages: list[ModelMessage]) -> None:
+        try:
+            save_chat_history(
+                self.store_path,
+                self.workspace,
+                close_unfinished_tool_calls(messages),
+                self.conversation_id,
+            )
+        except (OSError, ValueError) as error:
+            logger.warning("Conversation progress could not be saved: %s", error)
+
+    async def wrap_model_request(
+        self,
+        ctx: RunContext[Any],
+        *,
+        request_context: ModelRequestContext,
+        handler: WrapModelRequestHandler,
+    ) -> ModelResponse:
+        self._save(request_context.messages)
+        response = await handler(request_context)
+        self._save([*request_context.messages, response])
+        return response
 
 
 def clear_chat_history(store_path: Path, workspace: Path) -> None:
