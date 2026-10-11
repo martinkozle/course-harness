@@ -25,18 +25,27 @@ fi
 
 nix_flags=(--extra-experimental-features "nix-command flakes")
 
-# One "<input> <owner> <repo> <rev>" line per GitHub input in flake.lock.
+# One "<input path> <owner> <repo> <rev>" line per GitHub input in flake.lock. A nested input
+# is addressed by its path from the root, such as git-hooks/flake-compat; inputs that only
+# follow another input are skipped, because overriding their target covers them.
 github_inputs="$(
 	nix "${nix_flags[@]}" eval --impure --raw --expr '
 		let
 			lock = builtins.fromJSON (builtins.readFile ./flake.lock);
-			github = builtins.filter
-				(name: (lock.nodes.${name}.locked.type or "") == "github")
-				(builtins.attrNames lock.nodes);
+			inputsOf = id: lock.nodes.${id}.inputs or { };
+			walk = prefix: id: builtins.concatLists (map (name:
+				let target = (inputsOf id).${name};
+				in if builtins.isString target then
+					let
+						path = if prefix == "" then name else "${prefix}/${name}";
+						locked = lock.nodes.${target}.locked or { };
+						here = if (locked.type or "") == "github"
+							then [ "${path} ${locked.owner} ${locked.repo} ${locked.rev}" ]
+							else [ ];
+					in here ++ walk path target
+				else [ ]) (builtins.attrNames (inputsOf id)));
 		in
-			builtins.concatStringsSep "\n" (map (name:
-				let locked = lock.nodes.${name}.locked;
-				in "${name} ${locked.owner} ${locked.repo} ${locked.rev}") github)
+			builtins.concatStringsSep "\n" (walk "" lock.root)
 	'
 )"
 
