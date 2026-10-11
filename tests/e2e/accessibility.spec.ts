@@ -17,6 +17,8 @@ async function expectNoAccessibilityViolations(page: Page, surface: string) {
 test("major Course Author journey surfaces meet automated and keyboard accessibility checks", async ({
 	page,
 }) => {
+	// Axe scans every major surface in turn, which takes close to the default 30 seconds.
+	test.setTimeout(60_000);
 	const navigator = page.getByRole("navigation", { name: "Course" });
 	await page.request.post("/api/workspace/close");
 	await page.goto("/");
@@ -230,6 +232,9 @@ test("major Course Author journey surfaces meet automated and keyboard accessibi
 		name: "Settings sections",
 	});
 	await expectNoAccessibilityViolations(page, "Settings: Models");
+	await sections.getByRole("button", { name: "Documents" }).click();
+	await expect(settings.getByLabel("Offer to reprocess it with")).toBeVisible();
+	await expectNoAccessibilityViolations(page, "Settings: Documents");
 	await sections.getByRole("button", { name: "Templates" }).click();
 	await expectNoAccessibilityViolations(page, "Settings: Templates");
 	await sections.getByRole("button", { name: "Workspace" }).click();

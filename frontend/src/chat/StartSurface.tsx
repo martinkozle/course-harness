@@ -154,9 +154,7 @@ function UploadRow({ item, library }: { item: UploadItem; library: Library }) {
 			? "Reading…"
 			: item.state === "including"
 				? "Adding to course…"
-				: item.state === "needs-models"
-					? "Needs PDF support"
-					: "Couldn't add";
+				: "Couldn't add";
 	const working = item.state === "uploading" || item.state === "including";
 	return (
 		<li className={`upload-row is-${item.state}`}>
@@ -176,7 +174,7 @@ function UploadRow({ item, library }: { item: UploadItem; library: Library }) {
 						onClick={() => library.retryUpload(item.id)}
 					>
 						<RotateCcw aria-hidden="true" />
-						{item.state === "needs-models" ? "Set up PDF support" : "Try again"}
+						Try again
 					</button>
 					<button
 						type="button"

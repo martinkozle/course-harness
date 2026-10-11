@@ -142,6 +142,11 @@ button.row-title:hover {
 	color: var(--danger);
 }
 
+.row-note {
+	font-size: 0.875rem;
+	color: var(--ink-muted);
+}
+
 .row-actions {
 	display: flex;
 	flex: none;

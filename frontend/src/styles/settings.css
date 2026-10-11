@@ -198,6 +198,11 @@
 	margin-top: 10px;
 }
 
+.settings-subheading {
+	font-size: 0.9375rem;
+	font-weight: 600;
+}
+
 .model-form {
 	display: grid;
 	gap: 14px;

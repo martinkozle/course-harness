@@ -9,24 +9,18 @@ export function ModelDownloadDialog({ library }: { library: Library }) {
 	const total = status?.total_steps ?? 3;
 	const completed = status?.completed_steps ?? 0;
 	const consequence =
-		prompt.kind === "upload"
-			? prompt.files.length === 1
-				? "If you cancel, the PDF is not added. It stays in the list so you can add it later."
-				: `If you cancel, these ${prompt.files.length} PDFs are not added. They stay in the list so you can add them later.`
-			: prompt.kind === "process"
-				? "If you cancel, the file stays as it is."
-				: "After the download, reprocess any existing PDF to make it searchable.";
+		prompt.kind === "process"
+			? "If you cancel, the file keeps its current text."
+			: "After the download, reprocess a PDF with Docling to use them.";
 	const confirmLabel = busy
 		? "Downloading models…"
-		: prompt.kind === "upload"
-			? "Download and add"
-			: prompt.kind === "process"
-				? "Download and process"
-				: "Download models";
+		: prompt.kind === "process"
+			? "Download and reprocess"
+			: "Download models";
 
 	return (
 		<Dialog
-			title="Download document processing models?"
+			title="Download the Docling models?"
 			onClose={library.cancelModelPrompt}
 			dismissible={!busy}
 			footer={
@@ -51,9 +45,10 @@ export function ModelDownloadDialog({ library }: { library: Library }) {
 			}
 		>
 			<p>
-				Reading PDFs uses local layout, table, and text recognition models. They
-				take several hundred megabytes and are downloaded once to this computer,
-				outside your Course folder. Your documents stay on this device.
+				Docling reads scans, tables, and multi-column layouts with local layout,
+				table, and text recognition models. They take several hundred megabytes
+				and are downloaded once to this computer, outside your Course folder.
+				Your documents stay on this device.
 			</p>
 			<p className="meta">{consequence}</p>
 			{busy ? (
