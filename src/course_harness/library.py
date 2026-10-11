@@ -407,6 +407,9 @@ def reprocess_resource(
     if state.status == "ready":
         indexed = _index_if_ready(cache_dir, content_hash)
         _restore_pinned(data_dir, cache_dir, resource, content, processors)
+    else:
+        # A failed document conversion leaves the current representation untouched.
+        _index_if_ready(cache_dir, content_hash)
 
     return ResourceState(
         resource_id=resource.id,

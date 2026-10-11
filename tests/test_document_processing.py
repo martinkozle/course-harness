@@ -399,3 +399,38 @@ def test_pptx_screenshot_slides_fail_the_quality_check(tmp_path: Path) -> None:
 
     assert [finding.kind for finding in report.findings] == ["image-heavy"]
     assert report.findings[0].pages == [1]
+
+
+class FailingHostedProcessor(FakeHostedProcessor):
+    id = "failing-hosted"
+
+    def convert(self, media_type: str, content: bytes) -> Conversion:
+        raise RuntimeError("Mistral OCR refused the request: you may have run out of credits.")
+
+
+@pytest.mark.anyio
+async def test_a_failed_reprocess_keeps_the_current_text_searchable(tmp_path: Path) -> None:
+    failing = FailingHostedProcessor()
+    app, patcher = _app(tmp_path, failing)
+    try:
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+            await client.put("/api/document-processing/consent/mistral")
+            uploaded = await client.post(
+                "/api/resources/upload",
+                files={"file": ("teaching.pdf", TEACHING_PDF, "application/pdf")},
+            )
+            failed = await client.post(
+                f"/api/resources/{uploaded.json()['resource_id']}/reprocess",
+                json={"processor": "failing-hosted"},
+            )
+            after = await client.get(f"/api/resources/{uploaded.json()['resource_id']}")
+    finally:
+        patcher.stop()
+
+    assert failed.status_code == 422
+    assert "run out of credits" in failed.json()["detail"]
+    assert after.json()["status"] == "ready"
+    assert after.json()["indexed"] is True
+    assert after.json()["processing"]["processor"] == "local-quick"
+    assert search_raw(tmp_path / "library-cache", "teaching")
