@@ -91,7 +91,7 @@ async def test_runtime_diagnostics_are_available_unbound_and_read_only(tmp_path:
         "text/plain",
         "text/x-markdown",
     ]
-    assert body["parser"]["processors"]["docling"] == [
+    assert body["parser"]["processors"]["document"] == [
         "application/pdf",
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

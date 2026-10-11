@@ -100,6 +100,18 @@ _Avoid_: Automatic repair, overwrite, rollback
 A disposable, reproducible form of a Snapshot—such as extracted Markdown, structured blocks, or a search index—stored without modifying the Resource itself.
 _Avoid_: Source, converted original
 
+**Document Processor**:
+A named way of producing a Derived Representation of a PDF, PowerPoint, Word, or HTML Snapshot. It may be local (the default model-free processor, or full Docling when its extra is installed) or hosted (it sends the document off the device to a vendor or a Model Preset).
+_Avoid_: Parser, converter, OCR engine
+
+**Processing Quality Check**:
+A heuristic check of a fresh Derived Representation for missing text, large images, and garbled characters. A failure makes Course Harness offer a better Document Processor; it never rejects the Resource.
+_Avoid_: Validation Finding, parse error
+
+**Processor Key**:
+A private API key for one hosted Document Processor, such as LlamaParse. It lives in installation credential storage, never in a Course Workspace.
+_Avoid_: Provider Account, Connector Credential
+
 **Attached Source**:
 A Source made available to a Course Workspace without granting the agent permission to alter its original content.
 _Avoid_: Managed file, upload

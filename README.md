@@ -8,24 +8,35 @@ human-readable Course Workspace.
 Install [uv](https://docs.astral.sh/uv/). It downloads Python 3.14 if you do not have it.
 
 ```bash
-uvx --torch-backend cpu course-harness
+uvx course-harness
 ```
 
 Or install it as a command-line tool:
 
 ```bash
-uv tool install --torch-backend cpu course-harness
+uv tool install course-harness
 course-harness
 ```
 
-`--torch-backend cpu` installs the CPU build of PyTorch for local document conversion. Without it,
-uv installs the CUDA build on Linux, which downloads several gigabytes of GPU libraries.
-
-To run the latest revision from GitHub (no flag needed; the CPU build is selected automatically):
+To run the latest revision from GitHub:
 
 ```bash
 uvx --from git+https://github.com/martinkozle/course-harness.git course-harness
 ```
+
+### Optional: full Docling for difficult PDFs
+
+Documents are first read quickly on your device, without any models. For scanned PDFs, tables,
+and multi-column layouts you can reprocess a document with full Docling, which runs layout,
+table, and text recognition models locally. Install it as an extra:
+
+```bash
+uv tool install --torch-backend cpu 'course-harness[docling]'
+```
+
+`--torch-backend cpu` installs the CPU build of PyTorch. Without it, uv installs the CUDA build
+on Linux, which downloads several gigabytes of GPU libraries. Course Harness asks before it
+downloads the Docling models.
 
 The command opens `http://127.0.0.1:8765` with the Workspace Launcher, where you create or open a
 Course Workspace. Useful options:
@@ -42,8 +53,10 @@ thumbnails.
 ## What it does
 
 - **Sources**: add PDF, `.pptx`, `.docx`, and web pages, or discover papers through arXiv,
-  Crossref, Semantic Scholar, and OpenAlex. Documents are converted locally with Docling; the
-  layout and OCR models are downloaded on first use, after you confirm.
+  Crossref, Semantic Scholar, and OpenAlex. Documents are read quickly on your device first. When
+  a document looks scanned, image-heavy, or garbled, you can reprocess it with full Docling (an
+  optional extra) or a hosted processor: LlamaParse, Mistral OCR, or one of your Model Presets.
+  A hosted processor gets a document only after you agree to send documents to that vendor.
 - **Course Agent**: plans the Course, researches sources, and writes Lectures. Only Sources added
   to the Course can be cited.
 - **Connectors**: web search and page reading through remote MCP servers. Exa is set up by default

@@ -2,6 +2,8 @@ from pathlib import Path
 
 import httpx2
 
+from course_harness import representations
+from course_harness.document_processors import DocumentProcessors
 from course_harness.product_connectors import product_connector_client
 from course_harness.resources import (
     MAX_REMOTE_REDIRECTS,
@@ -72,10 +74,43 @@ def register_upload(
 
 
 def process_upload(
-    cache_dir: Path, resource: Resource, snapshot: Snapshot, content: bytes
+    cache_dir: Path,
+    resource: Resource,
+    snapshot: Snapshot,
+    content: bytes,
+    *,
+    processors: DocumentProcessors | None = None,
+    data_dir: Path | None = None,
 ) -> ResourceState:
-    """Convert and index a recorded Snapshot without touching the registry."""
-    state = process_snapshot(cache_dir, snapshot.content_hash, resource.media_type, content)
+    """Convert and index a recorded Snapshot without touching the registry.
+
+    A document is read by the quick local processor (or the one chosen for its Resource).
+    When the result fails its quality check and the Course Author opted in, the preferred
+    processor replaces it straight away; nothing pins a representation this fresh.
+    """
+    processors = processors or DocumentProcessors.local(cache_dir)
+    chosen = processors.get(resource.processor) if resource.processor else None
+    state = process_snapshot(
+        cache_dir,
+        snapshot.content_hash,
+        resource.media_type,
+        content,
+        processor=chosen if chosen is not None and processors.usable(chosen) else None,
+        data_dir=data_dir,
+    )
+    upgrade = processors.automatic_upgrade(resource.media_type, state.processing)
+    if state.status == "ready" and upgrade is not None:
+        upgraded = process_snapshot(
+            cache_dir,
+            snapshot.content_hash,
+            resource.media_type,
+            content,
+            processor=upgrade,
+            data_dir=data_dir,
+        )
+        # A failed upgrade leaves the quick result, which is still usable.
+        if upgraded.status == "ready":
+            state = upgraded
     indexed = False
     if state.status == "ready":
         indexed = _index_if_ready(cache_dir, snapshot.content_hash)
@@ -88,6 +123,8 @@ def process_upload(
         indexed=indexed,
         error=state.error,
         snapshot=snapshot,
+        processing=state.processing,
+        suggested_processor=processors.suggestion(resource.media_type, state.processing),
     )
 
 
@@ -141,13 +178,13 @@ def save_connector_snapshot(
     return snapshot if updated is not None else None
 
 
-def _index_if_ready(cache_dir: Path, content_hash: str) -> bool:
+def _index_if_ready(cache_dir: Path, key: str) -> bool:
     from course_harness.search import index_resource  # noqa: PLC0415
 
-    extracted = derived_dir(cache_dir) / content_hash / "extracted.md"
+    extracted = derived_dir(cache_dir) / key / "extracted.md"
     if extracted.is_file():
         try:
-            index_resource(cache_dir, content_hash, extracted.read_text(encoding="utf-8"))
+            index_resource(cache_dir, key, extracted.read_text(encoding="utf-8"))
             return True
         except OSError, UnicodeError:
             pass
@@ -198,37 +235,41 @@ def remove_resource(
     return True
 
 
-def list_resources_with_state(data_dir: Path, cache_dir: Path) -> list[ResourceState]:
+def list_resources_with_state(
+    data_dir: Path, cache_dir: Path, processors: DocumentProcessors | None = None
+) -> list[ResourceState]:
     index = read_library_index(registry_path(data_dir))
-    results: list[ResourceState] = []
-    for resource in index.resources:
-        snapshot = _read_snapshot(snapshots_dir(data_dir), resource)
-        indexed = _is_indexed(cache_dir, resource.snapshot_hash)
-        result = ResourceState(
-            resource_id=resource.id,
-            kind=resource.kind,
-            location=resource.location,
-            media_type=resource.media_type,
-            status=(
-                "ready"
-                if snapshot is not None and _has_representation(cache_dir, resource.snapshot_hash)
-                else "unprocessed"
-            ),
-            indexed=indexed,
-            snapshot=snapshot,
-            captured_via=resource.captured_via,
-        )
-        results.append(result)
-    return results
+    processors = processors or DocumentProcessors.local(cache_dir)
+    return [
+        _resource_state(data_dir, cache_dir, resource, processors) for resource in index.resources
+    ]
 
 
-def get_resource_state(data_dir: Path, cache_dir: Path, resource_id: str) -> ResourceState | None:
+def get_resource_state(
+    data_dir: Path,
+    cache_dir: Path,
+    resource_id: str,
+    processors: DocumentProcessors | None = None,
+) -> ResourceState | None:
     index = read_library_index(registry_path(data_dir))
     resource = next((r for r in index.resources if r.id == resource_id), None)
     if resource is None:
         return None
+    return _resource_state(
+        data_dir, cache_dir, resource, processors or DocumentProcessors.local(cache_dir)
+    )
+
+
+def _resource_state(
+    data_dir: Path, cache_dir: Path, resource: Resource, processors: DocumentProcessors
+) -> ResourceState:
     snapshot = _read_snapshot(snapshots_dir(data_dir), resource)
     indexed = _is_indexed(cache_dir, resource.snapshot_hash)
+    record = (
+        representations.read_record(derived_dir(cache_dir) / resource.snapshot_hash)
+        if resource.snapshot_hash is not None
+        else None
+    )
     return ResourceState(
         resource_id=resource.id,
         kind=resource.kind,
@@ -242,6 +283,8 @@ def get_resource_state(data_dir: Path, cache_dir: Path, resource_id: str) -> Res
         indexed=indexed,
         snapshot=snapshot,
         captured_via=resource.captured_via,
+        processing=record,
+        suggested_processor=processors.suggestion(resource.media_type, record),
     )
 
 
@@ -312,25 +355,58 @@ def reprocess_resource(
     data_dir: Path,
     cache_dir: Path,
     resource_id: str,
+    *,
+    processor_id: str | None = None,
+    processors: DocumentProcessors | None = None,
 ) -> ResourceState | None:
+    """Rebuild a Resource's representation, with ``processor_id`` or its chosen processor.
+
+    The representation being replaced is kept beside the new one only when a Source pins
+    it, because Citations name line coordinates in it (ADR 0015).
+    """
     index = read_library_index(registry_path(data_dir))
     resource = next((r for r in index.resources if r.id == resource_id), None)
     if resource is None or resource.snapshot_hash is None:
         return None
+    snapshot_path = snapshots_dir(data_dir) / resource.snapshot_hash
+    if not snapshot_path.is_file():
+        return None
+    content = snapshot_path.read_bytes()
+    processors = processors or DocumentProcessors.local(cache_dir)
+    content_hash = resource.snapshot_hash
+
+    processor = None
+    if processor_id is not None:
+        processor = processors.get(processor_id)
+        if processor is None:
+            raise ValueError(f"Document Processor {processor_id} is not available.")
+        if not processors.consented(processor):
+            raise ValueError(f"Agree to send documents to {processor.vendor} first.")
+    elif resource.processor is not None:
+        chosen = processors.get(resource.processor)
+        processor = chosen if chosen is not None and processors.usable(chosen) else None
 
     from course_harness.search import deindex_resource  # noqa: PLC0415
 
-    deindex_resource(cache_dir, resource.snapshot_hash)
-    snapshot_path = snapshots_dir(data_dir) / resource.snapshot_hash
-    if snapshot_path.is_file():
-        content = snapshot_path.read_bytes()
-    else:
-        return None
+    current = representations.current_processor(cache_dir, content_hash)
+    if current is not None and representations.is_pinned(data_dir, content_hash, current):
+        kept = representations.keep_current(cache_dir, content_hash)
+        if kept is not None:
+            _index_if_ready(cache_dir, kept)
+    deindex_resource(cache_dir, content_hash)
 
-    state = process_snapshot(cache_dir, resource.snapshot_hash, resource.media_type, content)
+    state = process_snapshot(
+        cache_dir,
+        content_hash,
+        resource.media_type,
+        content,
+        processor=processor,
+        data_dir=data_dir,
+    )
     indexed = False
     if state.status == "ready":
-        indexed = _index_if_ready(cache_dir, resource.snapshot_hash)
+        indexed = _index_if_ready(cache_dir, content_hash)
+        _restore_pinned(data_dir, cache_dir, resource, content, processors)
 
     return ResourceState(
         resource_id=resource.id,
@@ -342,12 +418,59 @@ def reprocess_resource(
         error=state.error,
         snapshot=Snapshot(
             resource_id=resource.id,
-            content_hash=resource.snapshot_hash,
+            content_hash=content_hash,
             byte_count=snapshot_path.stat().st_size,
             captured_at=resource.registered_at,
         ),
         captured_via=resource.captured_via,
+        processing=state.processing,
+        suggested_processor=processors.suggestion(resource.media_type, state.processing),
     )
+
+
+def _restore_pinned(
+    data_dir: Path,
+    cache_dir: Path,
+    resource: Resource,
+    content: bytes,
+    processors: DocumentProcessors,
+) -> None:
+    """Rebuild pinned representations that a cleared cache lost, where that costs nothing.
+
+    A hosted representation comes back from durable Library data; a local one is rebuilt
+    by its processor. Neither sends the document anywhere.
+    """
+    assert resource.snapshot_hash is not None
+    content_hash = resource.snapshot_hash
+    current = representations.current_processor(cache_dir, content_hash)
+    for processor_id in representations.pinned_processors(data_dir, content_hash):
+        key = representations.representation_key(content_hash, processor_id)
+        if processor_id == current or (derived_dir(cache_dir) / key).is_dir():
+            continue
+        target = derived_dir(cache_dir) / key
+        restored = representations.restore_durable(data_dir, content_hash, processor_id, target)
+        processor = processors.get(processor_id)
+        if not restored and processor is not None and not processor.hosted:
+            if processor.unavailable() is not None:
+                continue
+            # The key names the directory, so the rebuilt representation lands beside the current.
+            state = process_snapshot(
+                cache_dir, key, resource.media_type, content, processor=processor
+            )
+            restored = state.status == "ready"
+        if restored:
+            _index_if_ready(cache_dir, key)
+
+
+def set_resource_processor(data_dir: Path, resource_id: str, processor_id: str | None) -> None:
+    """Remember the Document Processor the Course Author chose for a Resource."""
+    registry = registry_path(data_dir)
+    index = read_library_index(registry)
+    for position, resource in enumerate(index.resources):
+        if resource.id == resource_id:
+            index.resources[position] = resource.model_copy(update={"processor": processor_id})
+            write_library_index(registry, index)
+            return
 
 
 MAX_FETCH_BYTES = 100 * 1024 * 1024  # 100 MiB

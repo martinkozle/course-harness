@@ -323,23 +323,29 @@ name = "course-harness"
 version = "0.3.0"
 source = { editable = "." }
 dependencies = [
-    { name = "docling" },
+    { name = "docling-slim", extra = ["convert-core", "format-html", "format-office", "format-pdf"] },
     { name = "fastapi" },
     { name = "fastmcp-slim", extra = ["client"] },
     { name = "httpx" },
     { name = "httpx2" },
     { name = "keyring" },
+    { name = "packaging" },
     { name = "pillow" },
     { name = "pydantic-ai-slim", extra = ["ag-ui", "anthropic", "bedrock", "mcp", "openai"] },
     { name = "python-multipart" },
     { name = "python-pptx" },
     { name = "pyyaml" },
+    { name = "typer" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.optional-dependencies]
+docling = [
+    { name = "docling" },
     { name = "torch", version = "2.14.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
     { name = "torch", version = "2.14.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
     { name = "torchvision", version = "0.29.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
     { name = "torchvision", version = "0.29.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
-    { name = "typer" },
-    { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.dev-dependencies]
@@ -353,24 +359,27 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "docling", specifier = ">=2.59" },
+    { name = "docling", marker = "extra == 'docling'", specifier = ">=2.129" },
+    { name = "docling-slim", extras = ["convert-core", "format-html", "format-office", "format-pdf"], specifier = ">=2.129" },
     { name = "fastapi" },
     { name = "fastmcp-slim", extras = ["client"], specifier = "<4" },
     { name = "httpx" },
     { name = "httpx2" },
     { name = "keyring", specifier = ">=25.6" },
+    { name = "packaging" },
     { name = "pillow", specifier = ">=12.3.0" },
     { name = "pydantic-ai-slim", extras = ["ag-ui", "anthropic", "bedrock", "mcp", "openai"] },
     { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "python-pptx", specifier = ">=1.0.2" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "torch", marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
-    { name = "torch", marker = "sys_platform == 'linux' or sys_platform == 'win32'", index = "https://download.pytorch.org/whl/cpu" },
-    { name = "torchvision", marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
-    { name = "torchvision", marker = "sys_platform == 'linux' or sys_platform == 'win32'", index = "https://download.pytorch.org/whl/cpu" },
+    { name = "torch", marker = "sys_platform != 'linux' and sys_platform != 'win32' and extra == 'docling'" },
+    { name = "torch", marker = "(sys_platform == 'linux' and extra == 'docling') or (sys_platform == 'win32' and extra == 'docling')", index = "https://download.pytorch.org/whl/cpu" },
+    { name = "torchvision", marker = "sys_platform != 'linux' and sys_platform != 'win32' and extra == 'docling'" },
+    { name = "torchvision", marker = "(sys_platform == 'linux' and extra == 'docling') or (sys_platform == 'win32' and extra == 'docling')", index = "https://download.pytorch.org/whl/cpu" },
     { name = "typer" },
     { name = "uvicorn", extras = ["standard"] },
 ]
+provides-extras = ["docling"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -603,6 +612,24 @@ wheels = [
 ]
 
 [package.optional-dependencies]
+convert-core = [
+    { name = "numpy" },
+    { name = "pillow" },
+    { name = "rtree" },
+    { name = "scipy" },
+]
+format-html = [
+    { name = "beautifulsoup4" },
+]
+format-office = [
+    { name = "openpyxl" },
+    { name = "python-docx" },
+    { name = "python-pptx" },
+]
+format-pdf = [
+    { name = "docling-parse" },
+    { name = "pypdfium2" },
+]
 standard = [
     { name = "accelerate" },
     { name = "beautifulsoup4" },

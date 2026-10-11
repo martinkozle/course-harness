@@ -105,7 +105,18 @@ from course_harness.course_plan import (
     write_course_plan,
 )
 from course_harness.credential_store import CredentialStoreError
+from course_harness.document_processing_settings import (
+    ConsentVendor,
+    DocumentProcessingError,
+    DocumentProcessingPreferences,
+    DocumentProcessingStore,
+    ProcessorKeyInput,
+    ProcessorKeyVendor,
+    ProcessorKeyView,
+)
+from course_harness.document_processors import DocumentProcessors, ProcessorView
 from course_harness.export import ExportError, export_presentation, validate_export_mapping
+from course_harness.hosted_processors import installed_processors
 from course_harness.paper_search_keys import (
     PaperSearchKeyError,
     PaperSearchKeyInput,
@@ -490,6 +501,20 @@ class ReleaseValidationRequest(BaseModel):
     waivers: list[Waiver] = Field(default_factory=list, max_length=1_000)
 
 
+class ReprocessRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # The Document Processor to use; omitted, the Resource's chosen or default one is used.
+    processor: str | None = Field(default=None, max_length=200)
+
+
+class DocumentProcessingView(BaseModel):
+    preferred_processor: str | None
+    auto_upgrade: bool
+    processors: list[ProcessorView]
+    keys: list[ProcessorKeyView]
+
+
 def create_app(
     workspace: Path | None = None,
     *,
@@ -699,6 +724,14 @@ def create_app(
         provider_path,
         use_os_keyring=provider_path == RuntimePaths.platform().provider_store_path,
     )
+    document_processing_store = DocumentProcessingStore.for_provider_store(
+        provider_path,
+        use_os_keyring=provider_path == RuntimePaths.platform().provider_store_path,
+    )
+
+    def processors() -> DocumentProcessors:
+        return installed_processors(cache_dir, provider_path, document_processing_store)
+
     startup_diagnostics = runtime_diagnostics(locations)
     logger.info(
         "Runtime capabilities: provider=%s; parsers=%s; LibreOffice=%s",
@@ -1486,6 +1519,59 @@ def create_app(
     ) -> list[PaperSearchKeyView]:
         paper_search_key_call(lambda: paper_search_key_store.delete(provider))
         return paper_search_key_call(paper_search_key_store.views)
+
+    def document_processing_call[T](action: Callable[[], T]) -> T:
+        require_workspace()
+        try:
+            return action()
+        except DocumentProcessingError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    def document_processing_view() -> DocumentProcessingView:
+        settings = document_processing_store.read()
+        return DocumentProcessingView(
+            preferred_processor=settings.preferred_processor,
+            auto_upgrade=settings.auto_upgrade,
+            processors=processors().views(),
+            keys=document_processing_store.key_views(),
+        )
+
+    @app.get("/api/document-processing", response_model=DocumentProcessingView)
+    async def document_processing() -> DocumentProcessingView:
+        return document_processing_call(document_processing_view)
+
+    @app.put("/api/document-processing/preferences", response_model=DocumentProcessingView)
+    async def update_document_processing(
+        request: DocumentProcessingPreferences,
+    ) -> DocumentProcessingView:
+        if request.preferred_processor is not None and (
+            processors().get(request.preferred_processor) is None
+        ):
+            raise HTTPException(status_code=422, detail="Document Processor was not found.")
+        document_processing_call(lambda: document_processing_store.update_preferences(request))
+        return document_processing_call(document_processing_view)
+
+    @app.put("/api/document-processing/consent/{vendor}", response_model=DocumentProcessingView)
+    async def consent_to_vendor(vendor: ConsentVendor) -> DocumentProcessingView:
+        document_processing_call(lambda: document_processing_store.set_consent(vendor, True))
+        return document_processing_call(document_processing_view)
+
+    @app.delete("/api/document-processing/consent/{vendor}", response_model=DocumentProcessingView)
+    async def withdraw_vendor_consent(vendor: ConsentVendor) -> DocumentProcessingView:
+        document_processing_call(lambda: document_processing_store.set_consent(vendor, False))
+        return document_processing_call(document_processing_view)
+
+    @app.put("/api/document-processing/keys/{vendor}", response_model=DocumentProcessingView)
+    async def save_processor_key(
+        vendor: ProcessorKeyVendor, request: ProcessorKeyInput
+    ) -> DocumentProcessingView:
+        document_processing_call(lambda: document_processing_store.save_key(vendor, request))
+        return document_processing_call(document_processing_view)
+
+    @app.delete("/api/document-processing/keys/{vendor}", response_model=DocumentProcessingView)
+    async def delete_processor_key(vendor: ProcessorKeyVendor) -> DocumentProcessingView:
+        document_processing_call(lambda: document_processing_store.delete_key(vendor))
+        return document_processing_call(document_processing_view)
 
     @app.post("/api/connectors/{connector_id}/test", response_model=ConnectorTest)
     async def test_connector(connector_id: str) -> ConnectorTest:
@@ -2801,7 +2887,11 @@ def create_app(
 
         sources_by_version: dict[str, tuple[str, str, str]] = {}
         for s in index.sources:
-            sources_by_version[s.source_version_id] = (s.id, s.resource_id, s.label)
+            sources_by_version[sources_module.evidence_key(cache_dir, s)] = (
+                s.id,
+                s.resource_id,
+                s.label,
+            )
 
         hits = search_module.search_raw(cache_dir, request.query, limit=request.limit or 10)
         logger.info(
@@ -2846,7 +2936,11 @@ def create_app(
         if source is None:
             raise HTTPException(status_code=404, detail="Source was not found")
 
-        extracted = library.derived_dir(cache_dir) / source.source_version_id / "extracted.md"
+        extracted = (
+            library.derived_dir(cache_dir)
+            / sources_module.evidence_key(cache_dir, source)
+            / "extracted.md"
+        )
         if not extracted.is_file():
             raise HTTPException(
                 status_code=404,
@@ -2923,7 +3017,11 @@ def create_app(
                 if snapshot is None:
                     return
                 result = await asyncio.to_thread(
-                    library.reprocess_resource, data_dir, cache_dir, resource_id
+                    library.reprocess_resource,
+                    data_dir,
+                    cache_dir,
+                    resource_id,
+                    processors=processors(),
                 )
                 if library.get_resource_state(data_dir, cache_dir, resource_id) is None:
                     remote_job_states.pop(resource_id, None)
@@ -2992,8 +3090,7 @@ def create_app(
 
     def needs_connector_fetch(state: res.ResourceState) -> bool:
         if state.status != "ready":
-            # Missing PDF models are for the Course Author to download, not to route around.
-            return "PDF processing models" not in (state.error or "")
+            return True
         if state.media_type not in docling_parser.HTML_MEDIA_TYPES or state.snapshot is None:
             return False
         extracted = library.derived_dir(cache_dir) / state.snapshot.content_hash / "extracted.md"
@@ -3005,24 +3102,17 @@ def create_app(
     @app.get("/api/resources", response_model=list[res.ResourceState])
     async def list_resources() -> list[res.ResourceState]:
         require_workspace()
+        current_processors = processors()
         return [
             with_remote_job_state(state)
-            for state in library.list_resources_with_state(data_dir, cache_dir)
+            for state in library.list_resources_with_state(data_dir, cache_dir, current_processors)
         ]
 
     model_download_lock = asyncio.Lock()
     model_download_status = docling_parser.ModelDownloadStatus(
-        ready=docling_parser.models_ready(cache_dir)
+        ready=docling_parser.models_ready(cache_dir),
+        installed=docling_parser.full_docling_installed(),
     )
-
-    def require_pdf_models(media_type: str) -> None:
-        if media_type == docling_parser.PDF_MEDIA_TYPE and not docling_parser.models_ready(
-            cache_dir
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="Download PDF processing models before processing this resource.",
-            )
 
     @app.get("/api/resources/parser-models", response_model=docling_parser.ModelDownloadStatus)
     async def parser_models_status() -> docling_parser.ModelDownloadStatus:
@@ -3033,6 +3123,12 @@ def create_app(
     @app.post("/api/resources/parser-models", response_model=docling_parser.ModelDownloadStatus)
     async def install_parser_models() -> docling_parser.ModelDownloadStatus:
         require_workspace()
+        if not model_download_status.installed:
+            raise HTTPException(
+                status_code=409,
+                detail="Install full Docling with: uv tool install --torch-backend cpu "
+                "'course-harness[docling]', then restart Course Harness.",
+            )
         async with model_download_lock:
             if not docling_parser.models_ready(cache_dir):
                 model_download_status.downloading = True
@@ -3066,7 +3162,7 @@ def create_app(
     @app.get("/api/resources/{resource_id}", response_model=res.ResourceState)
     async def resource_detail(resource_id: str) -> res.ResourceState:
         require_workspace()
-        state = library.get_resource_state(data_dir, cache_dir, resource_id)
+        state = library.get_resource_state(data_dir, cache_dir, resource_id, processors())
         if state is None:
             raise HTTPException(status_code=404, detail="Resource was not found")
         return with_remote_job_state(state)
@@ -3085,7 +3181,6 @@ def create_app(
         resource = next((r for r in index.resources if r.id == resource_id), None)
         if resource is None:
             raise HTTPException(status_code=404, detail="Resource was not found")
-        require_pdf_models(resource.media_type)
 
         from pathlib import Path as _Path
 
@@ -3110,29 +3205,66 @@ def create_app(
             )
         if recorded is None:
             raise HTTPException(status_code=404, detail="Resource was not found")
-        result = await asyncio.to_thread(library.process_upload, cache_dir, *recorded, content)
+        result = await asyncio.to_thread(
+            library.process_upload,
+            cache_dir,
+            *recorded,
+            content,
+            processors=processors(),
+            data_dir=data_dir,
+        )
         if result.status != "ready":
             raise HTTPException(status_code=422, detail=result.error or "Processing failed.")
         return result
 
+    reprocessing: set[str] = set()
+
     @app.post("/api/resources/{resource_id}/reprocess", response_model=res.ResourceState)
-    async def reprocess_resource(resource_id: str) -> res.ResourceState:
+    async def reprocess_resource(
+        resource_id: str, request: ReprocessRequest | None = None
+    ) -> res.ResourceState:
         require_workspace()
-        if resource_id in remote_jobs:
+        if resource_id in remote_jobs or resource_id in reprocessing:
             raise HTTPException(status_code=409, detail="This Resource is already processing.")
-        index = res.read_library_index(library.registry_path(data_dir))
-        resource = next((r for r in index.resources if r.id == resource_id), None)
-        if resource is not None:
-            require_pdf_models(resource.media_type)
-        result = await asyncio.to_thread(
-            library.reprocess_resource, data_dir, cache_dir, resource_id
-        )
+        processor_id = request.processor if request is not None else None
+        current_processors = processors()
+        if processor_id is not None:
+            processor = current_processors.get(processor_id)
+            if processor is None:
+                raise HTTPException(status_code=404, detail="Document Processor was not found.")
+            unavailable = processor.unavailable()
+            if unavailable is not None:
+                raise HTTPException(status_code=409, detail=unavailable.reason)
+            if not current_processors.consented(processor):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Agree to send documents to {processor.label} first.",
+                )
+        reprocessing.add(resource_id)
+        try:
+            result = await asyncio.to_thread(
+                library.reprocess_resource,
+                data_dir,
+                cache_dir,
+                resource_id,
+                processor_id=processor_id,
+                processors=current_processors,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        finally:
+            reprocessing.discard(resource_id)
         if result is None:
             raise HTTPException(
                 status_code=404, detail="Resource was not found or has no Snapshot."
             )
         if result.status != "ready":
             raise HTTPException(status_code=422, detail=result.error or "Reprocessing failed.")
+        if processor_id is not None:
+            async with resource_registry_lock:
+                await asyncio.to_thread(
+                    library.set_resource_processor, data_dir, resource_id, processor_id
+                )
         remote_job_states.pop(resource_id, None)
         return result
 
@@ -3159,8 +3291,6 @@ def create_app(
         ):
             media_type = res.identify_media_type(str(filename), content)
 
-        require_pdf_models(media_type)
-
         record = res.ResourceRegistrationRequest(
             kind="upload",
             location=str(filename),
@@ -3172,7 +3302,13 @@ def create_app(
                 library.register_upload, data_dir, record, content
             )
         return await asyncio.to_thread(
-            library.process_upload, cache_dir, resource, snapshot, content
+            library.process_upload,
+            cache_dir,
+            resource,
+            snapshot,
+            content,
+            processors=processors(),
+            data_dir=data_dir,
         )
 
     @app.get("/api/resources/{resource_id}/content")
@@ -3216,7 +3352,7 @@ def create_app(
         processor = res.resolve_processor(resource.media_type)
         if processor in {"text", "code"} or resource.media_type.startswith("text/"):
             content = snapshot_path.read_bytes()
-        elif processor == "docling":
+        elif processor == "document":
             extracted_path = (
                 library.derived_dir(cache_dir) / resource.snapshot_hash / "extracted.md"
             )

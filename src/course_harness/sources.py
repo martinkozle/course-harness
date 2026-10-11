@@ -27,6 +27,8 @@ class Source(BaseModel):
     source_version_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     label: str = Field(min_length=1, max_length=200)
     admitted_at: str
+    # The Document Processor whose representation Citations of this Source point into.
+    representation: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class SourcesIndex(BaseModel):
@@ -105,6 +107,13 @@ def pinned_image_resolver(sources: Iterable[PinnedSource], data_dir: Path) -> So
     return images.get
 
 
+def evidence_key(cache_dir: Path, source: PinnedSource) -> str:
+    """The derived directory holding the representation a Source's Citations point into."""
+    from course_harness.representations import evidence_key as key  # noqa: PLC0415
+
+    return key(cache_dir, source.source_version_id, getattr(source, "representation", None))
+
+
 def read_pinned_evidence_line_counts(cache_dir: Path, sources: Iterable[Source]) -> dict[str, int]:
     """Return line counts for safely readable extracted Evidence by Source Version.
 
@@ -119,21 +128,21 @@ def read_pinned_evidence_line_counts(cache_dir: Path, sources: Iterable[Source])
         return {}
     try:
         line_counts: dict[str, int] = {}
-        for source_version_id in {source.source_version_id for source in sources}:
-            content = _read_extracted_evidence(derived_fd, source_version_id)
+        for source in sources:
+            content = _read_extracted_evidence(derived_fd, evidence_key(cache_dir, source))
             if content is not None:
-                line_counts[source_version_id] = len(content.split("\n"))
+                line_counts[source.source_version_id] = len(content.split("\n"))
         return line_counts
     finally:
         os.close(derived_fd)
 
 
-def _read_extracted_evidence(derived_fd: int, source_version_id: str) -> str | None:
+def _read_extracted_evidence(derived_fd: int, key: str) -> str | None:
     """Read a bounded regular extracted file through no-follow directory FDs."""
     directory_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
     file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        version_fd = os.open(source_version_id, directory_flags, dir_fd=derived_fd)
+        version_fd = os.open(key, directory_flags, dir_fd=derived_fd)
     except OSError:
         return None
     try:
@@ -243,16 +252,28 @@ def admit_source(
     if any(s.resource_id == resource_id for s in existing_index.sources):
         raise ValueError(f"Resource {resource_id} is already admitted as a Course Source.")
 
+    representation = _pin_current_representation(data_dir, cache_dir, resource.snapshot_hash)
     source = Source(
         id=_generate_source_id(),
         resource_id=resource_id,
         source_version_id=resource.snapshot_hash,
         label=label or resource.location.rsplit("/", 1)[-1].rsplit("\\", 1)[-1][:200],
         admitted_at=datetime.now(UTC).isoformat(),
+        representation=representation,
     )
     existing_index.sources.append(source)
     write_sources_index(workspace, existing_index, expected=expected)
     return source
+
+
+def _pin_current_representation(data_dir: Path, cache_dir: Path, content_hash: str) -> str | None:
+    """Pin the current representation of a document Snapshot so reprocessing keeps it."""
+    from course_harness import representations  # noqa: PLC0415
+
+    processor = representations.current_processor(cache_dir, content_hash)
+    if processor is not None:
+        representations.pin(data_dir, content_hash, processor)
+    return processor
 
 
 def _generate_source_id() -> str:
@@ -291,7 +312,14 @@ def adopt_source_version(
     if state is None or state.status != "ready":
         raise ValueError("Latest Resource version has not been processed yet.")
 
-    updated_source = source.model_copy(update={"source_version_id": resource.snapshot_hash})
+    updated_source = source.model_copy(
+        update={
+            "source_version_id": resource.snapshot_hash,
+            "representation": _pin_current_representation(
+                data_dir, cache_dir, resource.snapshot_hash
+            ),
+        }
+    )
     existing_index.sources = [
         updated_source if s.id == source_id else s for s in existing_index.sources
     ]

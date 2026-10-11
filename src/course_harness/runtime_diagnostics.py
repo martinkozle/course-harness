@@ -67,8 +67,9 @@ def runtime_diagnostics(
             processors=processors,
             remediation=(
                 "Text, Markdown, CSV, supported code, web pages, PDF, PowerPoint, and Word "
-                "documents are searchable. PDF processing downloads local models with your "
-                "permission; the original file remains available as an immutable Snapshot."
+                "documents are searchable. Documents are read quickly on this device first; "
+                "you can reprocess one with a more thorough processor. The original file "
+                "remains available as an immutable Snapshot."
             ),
         ),
         renderer=RendererDiagnostic(
