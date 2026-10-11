@@ -89,6 +89,24 @@ nix develop   # or `direnv allow` once with nix-direnv
 Entering the shell installs the pre-commit and pre-push hooks (Biome, Ruff, ty, nixfmt, uv lock
 freshness, and hygiene checks). Their configuration lives in `flake.nix`.
 
+### Restricted networks and cloud agents
+
+Some sandboxes, such as cloud coding-agent containers, allow `git clone` from GitHub but refuse
+the archive downloads `nix develop` uses for flake inputs. `nix develop` then fails with
+`unable to download 'https://github.com/.../archive/<rev>.tar.gz': HTTP error 403`. Use the
+wrapper instead; it fetches the same locked revisions with git and leaves `flake.lock` unchanged:
+
+```bash
+scripts/nix-develop.sh                          # interactive shell
+scripts/nix-develop.sh -c pre-commit run --all-files
+scripts/nix-develop.sh -c uv run pytest
+```
+
+The first run builds the shell, including Chromium and LibreOffice, and can take several minutes;
+later runs reuse the Nix store. Run checks inside the shell rather than with tools installed
+elsewhere: the document conversion packages load native libraries, such as `libstdc++`, that the
+shell provides, and the pre-commit configuration only exists inside it.
+
 Launch from a checkout:
 
 ```bash
