@@ -34,8 +34,11 @@ all pre-commit hooks, Ruff, Ruff formatting, ty, the Python suite, frontend
 lint/typechecking/build, and the Playwright smoke journey.
 
 Run development commands inside the pinned Nix shell. When `IN_NIX_SHELL` is absent, prefix a
-command with `nix develop -c`. Add system-facing tools to `flake.nix`; keep Python and frontend
-application dependencies in `pyproject.toml`/`uv.lock` and `package.json`/`bun.lock` respectively.
+command with `nix develop -c`. If `nix develop` fails to download GitHub archives (HTTP 403, as in
+cloud agent containers), use `scripts/nix-develop.sh -c` instead; it fetches the locked flake inputs
+with git. Do not fall back to tools outside the shell. Add system-facing tools to `flake.nix`; keep
+Python and frontend application dependencies in `pyproject.toml`/`uv.lock` and
+`package.json`/`bun.lock` respectively.
 
 ## Git handoff
 
