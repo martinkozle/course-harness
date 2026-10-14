@@ -35,9 +35,10 @@ Use the `gh` CLI (already authenticated) for everything on GitHub. Run tools ins
 
 5. **Write the release notes** from `git log v<previous>..HEAD` (read commit bodies, not just
    subjects). Follow the style of the previous Release (`gh release view v<previous>`):
-   - An install/upgrade block: `uvx --torch-backend cpu course-harness@latest` and
-     `uv tool upgrade course-harness`. The PyPI wheel needs `--torch-backend cpu`, or uv installs
-     the multi-gigabyte CUDA build of PyTorch on Linux.
+   - An install/upgrade block: `uvx 'course-harness[pinned]@latest'` and
+     `uv tool upgrade course-harness`. The `pinned` extra installs the exact versions the release
+     was tested with. Only the `docling` extra needs `--torch-backend cpu`, or uv installs the
+     multi-gigabyte CUDA build of PyTorch on Linux.
    - Changes grouped by area (for example Slides and export, Course Agent, Model providers,
      Interface, Installation), written for Course Authors: what changed for them, with fixes
      marked "Fixed:". Leave out purely internal refactors and CI plumbing.
