@@ -16,6 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from course_harness import docling_parser
 from course_harness.docling_parser import (
     HTML_MEDIA_TYPES,
     OFFICE_MEDIA_TYPES,
@@ -24,8 +25,6 @@ from course_harness.docling_parser import (
     PageContent,
     convert_document,
     count_garbled,
-    full_docling_installed,
-    models_ready,
 )
 
 DOCUMENT_MEDIA_TYPES = frozenset({PDF_MEDIA_TYPE, *OFFICE_MEDIA_TYPES, *HTML_MEDIA_TYPES})
@@ -168,13 +167,13 @@ class FullDoclingProcessor(DocumentProcessor):
         return _package_version("docling")
 
     def unavailable(self) -> Unavailable | None:
-        if not full_docling_installed():
+        if not docling_parser.full_docling_installed():
             return Unavailable(
                 "Install it with: uv tool install --torch-backend cpu 'course-harness[docling]' "
                 "(or pip install 'course-harness[docling]'), then restart Course Harness.",
                 "install",
             )
-        if not models_ready(self.cache_dir):
+        if not docling_parser.models_ready(self.cache_dir):
             return Unavailable("Download its models before using it.", "download-models")
         return None
 

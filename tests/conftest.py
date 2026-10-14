@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from pydantic_ai.mcp import MCPToolset
 
-from course_harness import connector_tools, discovery
+from course_harness import connector_tools, discovery, docling_parser
 from course_harness.connectors import ResolvedConnector
 
 
@@ -25,3 +25,12 @@ def unpaced_semantic_scholar(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep Semantic Scholar's one-request-per-second pacing and backoff out of unrelated tests."""
     monkeypatch.setattr(discovery, "SEMANTIC_SCHOLAR_PACER", discovery.RequestPacer(0))
     monkeypatch.setattr(discovery, "_SEMANTIC_SCHOLAR_BACKOFF", 0.0)
+
+
+@pytest.fixture(autouse=True)
+def without_full_docling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Behave like a plain install, whether or not the course-harness[docling] extra is present.
+
+    A test that needs full Docling patches full_docling_installed to return True.
+    """
+    monkeypatch.setattr(docling_parser, "full_docling_installed", lambda: False)
