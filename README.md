@@ -8,17 +8,21 @@ human-readable Course Workspace.
 Install [uv](https://docs.astral.sh/uv/). It downloads Python 3.14 if you do not have it.
 
 ```bash
-uvx course-harness
+uvx 'course-harness[pinned]'
 ```
 
 Or install it as a command-line tool:
 
 ```bash
-uv tool install course-harness
+uv tool install 'course-harness[pinned]'
 course-harness
 ```
 
-To run the latest revision from GitHub:
+The `pinned` extra installs exactly the dependency versions each release was tested with, so an
+install keeps working as newer dependencies come out. Leave it off to use the newest compatible
+versions instead.
+
+To run the latest revision from GitHub, with the newest compatible dependencies:
 
 ```bash
 uvx --from git+https://github.com/martinkozle/course-harness.git course-harness
@@ -31,7 +35,7 @@ and multi-column layouts you can reprocess a document with full Docling, which r
 table, and text recognition models locally. Install it as an extra:
 
 ```bash
-uv tool install --torch-backend cpu 'course-harness[docling]'
+uv tool install --torch-backend cpu 'course-harness[pinned,docling]'
 ```
 
 `--torch-backend cpu` installs the CPU build of PyTorch. Without it, uv installs the CUDA build
@@ -152,7 +156,8 @@ Outside Nix, install the Playwright browser once with `bunx playwright install -
 or set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`.
 
 Build the wheel and smoke-test it through `uvx`, `uv tool install`, and a `git+file://` install of
-the current commit, all in isolated temporary environments:
+the current commit, all in isolated temporary environments. The script also checks that a
+`pinned` install holds exactly the versions in `uv.lock`:
 
 ```bash
 uv run python scripts/verify_distribution.py

@@ -105,6 +105,37 @@ def _install_tool(
     return executable
 
 
+def _check_locked_versions(executable: Path, repository: Path) -> None:
+    """Fail unless the pinned install holds exactly the versions in uv.lock."""
+    locked = {
+        line.partition(";")[0].strip()
+        for line in subprocess.check_output(
+            [
+                "uv",
+                "export",
+                "--frozen",
+                "--no-dev",
+                "--no-emit-project",
+                "--no-hashes",
+                "--no-header",
+                "--no-annotate",
+            ],
+            cwd=repository,
+            text=True,
+        ).splitlines()
+    }
+    python = executable.resolve().parent / ("python.exe" if os.name == "nt" else "python")
+    installed = {
+        line
+        for line in subprocess.check_output(
+            ["uv", "pip", "freeze", "--python", str(python)], text=True
+        ).splitlines()
+        if not line.startswith("course-harness")
+    }
+    if unlocked := sorted(installed - locked):
+        raise RuntimeError(f"Pinned install differs from uv.lock: {unlocked}")
+
+
 def main() -> None:
     repository = Path(__file__).resolve().parent.parent
     with tempfile.TemporaryDirectory(prefix="course-harness-distribution-") as directory:
@@ -112,6 +143,7 @@ def main() -> None:
         artifacts = temporary / "dist"
         build_environment = os.environ.copy()
         build_environment["UV_CACHE_DIR"] = str(temporary / "uv-build-cache")
+        build_environment["HATCH_PINNED_EXTRA_ENABLE"] = "1"
         subprocess.run(
             ["uv", "build", "--out-dir", str(artifacts)],
             cwd=repository,
@@ -133,6 +165,9 @@ def main() -> None:
             metadata = archive.read(metadata_name).decode("utf-8")
             if "License-Expression: MIT" not in metadata:
                 raise RuntimeError("Wheel metadata does not declare the MIT license")
+            if "Provides-Extra: pinned" not in metadata:
+                raise RuntimeError("Wheel metadata does not declare the pinned extra")
+        pinned = f"course-harness[pinned] @ {wheel.as_uri()}"
 
         workspace = temporary / "course"
         workspace.mkdir()
@@ -155,7 +190,7 @@ def main() -> None:
             "--torch-backend",
             "cpu",
             "--from",
-            str(wheel),
+            pinned,
             "course-harness",
             str(workspace),
             "--no-browser",
@@ -173,11 +208,12 @@ def main() -> None:
             "UV_CACHE_DIR": str(temporary / "uv-tool-cache"),
         }
         installed_executable = _install_tool(
-            str(wheel),
+            pinned,
             environment=tool_environment,
             temporary=temporary,
             label="uv tool wheel installation",
         )
+        _check_locked_versions(installed_executable, repository)
         tool_workspace = temporary / "tool-course"
         tool_workspace.mkdir()
         tool_port = _available_port()
@@ -218,7 +254,8 @@ def main() -> None:
         )
 
         print(
-            f"Verified uvx wheel, uv tool wheel, and direct local Git installations: {wheel.name}"
+            "Verified pinned uvx and uv tool wheel installations, and a direct local Git "
+            f"installation: {wheel.name}"
         )
 
 

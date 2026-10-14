@@ -72,6 +72,9 @@ jobs:
 
       - name: Build
         run: uv build
+        env:
+          # Adds the `pinned` extra with the exact versions from uv.lock.
+          HATCH_PINNED_EXTRA_ENABLE: "1"
 
       - name: Check metadata
         run: uvx twine check --strict dist/*

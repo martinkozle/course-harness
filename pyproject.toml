@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.14,<3.15"
 license = "MIT"
 license-files = ["LICENSE"]
+# Hatchling runs metadata hooks only when some field is dynamic, so this unused one lets the
+# pinned extra below be added. Removing it silently drops the extra.
+dynamic = ["maintainers"]
 keywords = ["course-authoring", "local-first", "presentations", "education"]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -57,8 +60,16 @@ Repository = "https://github.com/martinkozle/course-harness"
 Issues = "https://github.com/martinkozle/course-harness/issues"
 
 [build-system]
-requires = ["uv_build>=0.11.25,<0.12.0"]
-build-backend = "uv_build"
+requires = ["hatchling>=1.32.4,<2", "hatch-pinned-extra>=0.4.1,<0.5"]
+build-backend = "hatchling.build"
+
+# Releases add a `pinned` extra holding the exact versions from uv.lock that the release was
+# tested with; the release workflow and scripts/verify_distribution.py set
+# HATCH_PINNED_EXTRA_ENABLE=1.
+[tool.hatch.metadata.hooks.pinned_extra]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/uv.lock"]
 
 [dependency-groups]
 dev = [
