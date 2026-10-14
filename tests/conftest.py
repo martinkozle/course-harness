@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from pydantic_ai.mcp import MCPToolset
 
-from course_harness import connector_tools
+from course_harness import connector_tools, discovery
 from course_harness.connectors import ResolvedConnector
 
 
@@ -18,3 +18,10 @@ def offline_connectors(monkeypatch: pytest.MonkeyPatch) -> None:
         return MCPToolset("http://127.0.0.1:9/mcp", id=connector.id, init_timeout=2)
 
     monkeypatch.setattr(connector_tools, "connect", unreachable)
+
+
+@pytest.fixture(autouse=True)
+def unpaced_semantic_scholar(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep Semantic Scholar's one-request-per-second pacing and backoff out of unrelated tests."""
+    monkeypatch.setattr(discovery, "SEMANTIC_SCHOLAR_PACER", discovery.RequestPacer(0))
+    monkeypatch.setattr(discovery, "_SEMANTIC_SCHOLAR_BACKOFF", 0.0)

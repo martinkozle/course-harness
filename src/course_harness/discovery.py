@@ -1,5 +1,6 @@
 import asyncio
 import re
+import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -147,6 +148,30 @@ _SEMANTIC_SCHOLAR_FIELDS = (
 )
 
 
+class RequestPacer:
+    """Starts requests to one API at least `interval` seconds apart across this process."""
+
+    def __init__(self, interval: float) -> None:
+        self.interval = interval
+        self._next_start = 0.0
+
+    async def wait(self) -> None:
+        # Reserve a slot before sleeping. The event loop runs one coroutine at a
+        # time, so concurrent callers queue up one interval apart.
+        now = time.monotonic()
+        start = max(now, self._next_start)
+        self._next_start = start + self.interval
+        await asyncio.sleep(start - now)
+
+
+# A Semantic Scholar API key allows one request per second, and 429 responses
+# should be retried with exponential backoff.
+SEMANTIC_SCHOLAR_PACER = RequestPacer(1.0)
+_SEMANTIC_SCHOLAR_RETRIES = 3
+_SEMANTIC_SCHOLAR_BACKOFF = 1.0
+_MAX_RETRY_AFTER = 10.0
+
+
 async def search_semantic_scholar(
     query: str,
     limit: int = 15,
@@ -160,7 +185,7 @@ async def search_semantic_scholar(
     )
     # Without a key, requests share Semantic Scholar's public rate limit.
     headers = {"x-api-key": api_key} if api_key else None
-    return await _fetch_json(client, url, _parse_semantic_scholar, headers)
+    return await _fetch_semantic_scholar(client, url, headers)
 
 
 def _parse_semantic_scholar(data: dict[str, Any]) -> list[Candidate]:
@@ -555,6 +580,31 @@ async def _fetch_json(
     response = await client.get(url, headers=headers)
     response.raise_for_status()
     return parse(response.json())
+
+
+async def _fetch_semantic_scholar(
+    client: httpx2.AsyncClient | None,
+    url: str,
+    headers: dict[str, str] | None,
+) -> list[Candidate]:
+    if client is None:
+        async with product_connector_client(timeout=15) as owned_client:
+            return await _fetch_semantic_scholar(owned_client, url, headers)
+    delay = _SEMANTIC_SCHOLAR_BACKOFF
+    for attempt in range(_SEMANTIC_SCHOLAR_RETRIES + 1):
+        await SEMANTIC_SCHOLAR_PACER.wait()
+        response = await client.get(url, headers=headers)
+        if response.status_code != 429 or attempt == _SEMANTIC_SCHOLAR_RETRIES:
+            break
+        await asyncio.sleep(max(delay, _retry_after(response)))
+        delay *= 2
+    response.raise_for_status()
+    return _parse_semantic_scholar(response.json())
+
+
+def _retry_after(response: httpx2.Response) -> float:
+    value = response.headers.get("retry-after", "")
+    return min(float(value), _MAX_RETRY_AFTER) if value.isdigit() else 0.0
 
 
 async def _fetch_github(

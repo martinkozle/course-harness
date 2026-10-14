@@ -1,8 +1,11 @@
+import asyncio
+import time
 from unittest.mock import patch
 
 import httpx2
 import pytest
 
+from course_harness import discovery
 from course_harness import resources as res
 from course_harness.discovery import (
     _parse_arxiv,
@@ -11,6 +14,7 @@ from course_harness.discovery import (
     _parse_huggingface,
     discover,
     inspect_web_url,
+    search_semantic_scholar,
 )
 
 ARXIV_RESPONSE = """<?xml version="1.0" encoding="UTF-8"?>
@@ -207,6 +211,74 @@ async def test_discover_does_not_follow_unvalidated_redirects() -> None:
     ]
     assert results[0].candidates == []
     assert results[0].error is not None
+
+
+SEMANTIC_SCHOLAR_RESPONSE = {
+    "data": [{"paperId": "abc", "title": "Causal Inference", "url": "https://s2/abc"}]
+}
+
+
+@pytest.mark.anyio
+async def test_semantic_scholar_requests_are_spaced_by_the_pacer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(discovery, "SEMANTIC_SCHOLAR_PACER", discovery.RequestPacer(0.1))
+    started: list[float] = []
+
+    def mock_transport(_request: httpx2.Request) -> httpx2.Response:
+        started.append(time.monotonic())
+        return httpx2.Response(200, json=SEMANTIC_SCHOLAR_RESPONSE)
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(mock_transport)) as client:
+        results = await asyncio.gather(
+            *(search_semantic_scholar(query, client=client) for query in ("a", "b", "c"))
+        )
+
+    assert all(len(candidates) == 1 for candidates in results)
+    gaps = [later - earlier for earlier, later in zip(started, started[1:], strict=False)]
+    assert len(gaps) == 2
+    assert all(gap >= 0.09 for gap in gaps)
+
+
+@pytest.mark.anyio
+async def test_semantic_scholar_backs_off_exponentially_on_429(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(discovery, "_SEMANTIC_SCHOLAR_BACKOFF", 0.05)
+    started: list[float] = []
+
+    def mock_transport(_request: httpx2.Request) -> httpx2.Response:
+        started.append(time.monotonic())
+        if len(started) < 3:
+            return httpx2.Response(429)
+        return httpx2.Response(200, json=SEMANTIC_SCHOLAR_RESPONSE)
+
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(mock_transport)) as client:
+        candidates = await search_semantic_scholar("causal", client=client)
+
+    assert len(candidates) == 1
+    assert started[1] - started[0] >= 0.045
+    assert started[2] - started[1] >= 0.095
+
+
+@pytest.mark.anyio
+async def test_semantic_scholar_reports_429_after_the_last_retry() -> None:
+    attempts: list[httpx2.Request] = []
+
+    def mock_transport(request: httpx2.Request) -> httpx2.Response:
+        attempts.append(request)
+        return httpx2.Response(429)
+
+    request = res.DiscoveryRequest(query="causal", providers=["semantic_scholar"])
+    with patch(
+        "course_harness.discovery.httpx2.AsyncClient",
+        return_value=httpx2.AsyncClient(transport=httpx2.MockTransport(mock_transport)),
+    ):
+        results = await discover(request)
+
+    assert len(attempts) == 4
+    assert results[0].error is not None
+    assert "rate limiting" in results[0].error
 
 
 @pytest.mark.anyio
