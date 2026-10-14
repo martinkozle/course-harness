@@ -544,7 +544,7 @@ def create_app(
     if not logging.getLogger("course-harness").handlers:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
         # Connector clients log every MCP request at INFO.
-        for name in ("httpx", "mcp", "fastmcp"):
+        for name in ("httpx", "httpx2", "mcp", "fastmcp"):
             logging.getLogger(name).setLevel(logging.WARNING)
     logger = logging.getLogger("course-harness")
 

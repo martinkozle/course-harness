@@ -12,7 +12,7 @@ from dataclasses import replace
 from typing import Any, cast
 from uuid import uuid4
 
-import httpx
+import httpx2
 from ag_ui.core import ActivitySnapshotEvent, EventType
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
@@ -42,14 +42,12 @@ _ANY_ARGUMENTS = SchemaValidator(core_schema.any_schema())
 
 def _http_client(
     headers: dict[str, str] | None = None,
-    timeout: httpx.Timeout | None = None,
-    auth: httpx.Auth | None = None,
-    follow_redirects: bool = False,
-) -> httpx.AsyncClient:
+    timeout: httpx2.Timeout | None = None,
+    auth: httpx2.Auth | None = None,
+) -> httpx2.AsyncClient:
     # Like every product connector, ignore ambient proxy settings and never follow a
     # redirect outside the configured endpoint.
-    del follow_redirects
-    return httpx.AsyncClient(
+    return httpx2.AsyncClient(
         headers=headers, timeout=timeout, auth=auth, follow_redirects=False, trust_env=False
     )
 
@@ -80,7 +78,7 @@ class ConnectorToolCache:
             ToolDefinition(
                 name=tool.name,
                 description=tool.description,
-                parameters_json_schema=tool.inputSchema,
+                parameters_json_schema=tool.input_schema,
             )
             for tool in tools
         ]
@@ -127,7 +125,7 @@ async def fetch_via_connector(
                     (t for t in await toolset.list_tools() if t.name == connector.fetch_tool),
                     None,
                 )
-                properties = (tool.inputSchema or {}).get("properties", {}) if tool else {}
+                properties = (tool.input_schema or {}).get("properties", {}) if tool else {}
                 arguments: dict[str, Any]
                 if "urls" in properties:
                     arguments = {"urls": [url]}
