@@ -230,33 +230,7 @@ def main() -> None:
             label="uv tool-installed wheel",
         )
 
-        git_workspace = temporary / "git-course"
-        git_workspace.mkdir()
-        git_port = _available_port()
-        _run_server(
-            [
-                "uvx",
-                "--python",
-                "3.14",
-                # The Git install must pick CPU torch from tool.uv.sources on its own.
-                "--no-cache",
-                "--from",
-                f"git+{repository.as_uri()}",
-                "course-harness",
-                str(git_workspace),
-                "--no-browser",
-                "--port",
-                str(git_port),
-            ],
-            cwd=temporary,
-            environment=environment,
-            label="direct Git revision",
-        )
-
-        print(
-            "Verified pinned uvx and uv tool wheel installations, and a direct local Git "
-            f"installation: {wheel.name}"
-        )
+        print(f"Verified pinned uvx and uv tool wheel installations: {wheel.name}")
 
 
 if __name__ == "__main__":

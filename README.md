@@ -19,28 +19,7 @@ course-harness
 ```
 
 The `pinned` extra installs exactly the dependency versions each release was tested with, so an
-install keeps working as newer dependencies come out. Leave it off to use the newest compatible
-versions instead.
-
-To run the latest revision from GitHub, with the newest compatible dependencies:
-
-```bash
-uvx --from git+https://github.com/martinkozle/course-harness.git course-harness
-```
-
-### Optional: full Docling for difficult PDFs
-
-Documents are first read quickly on your device, without any models. For scanned PDFs, tables,
-and multi-column layouts you can reprocess a document with full Docling, which runs layout,
-table, and text recognition models locally. Install it as an extra:
-
-```bash
-uv tool install --torch-backend cpu 'course-harness[pinned,docling]'
-```
-
-`--torch-backend cpu` installs the CPU build of PyTorch. Without it, uv installs the CUDA build
-on Linux, which downloads several gigabytes of GPU libraries. Course Harness asks before it
-downloads the Docling models.
+install keeps working as newer dependencies come out.
 
 The command opens `http://127.0.0.1:8765` with the Workspace Launcher, where you create or open a
 Course Workspace. Useful options:
@@ -51,8 +30,23 @@ course-harness --no-browser               # do not open the browser
 course-harness --port 9000                # use another local port
 ```
 
-Optional: install LibreOffice (`libreoffice` or `soffice` on `PATH`) for high-fidelity slide
-thumbnails.
+## Set up a model
+
+Open **Models** to add a provider. Course Harness works with OpenRouter, OpenAI, Anthropic, Amazon
+Bedrock, and any OpenAI-compatible server. Under **Found on this computer**, it lists the provider
+credentials it can see and lets you add each one with a single click. It looks at
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `AWS_BEARER_TOKEN_BEDROCK`, AWS session
+variables (such as those set by awsume), and the profiles in `~/.aws`. None of these is used until
+you add it.
+
+For Bedrock, an AWS profile is the most robust choice: only its name is stored, and the AWS SDK
+refreshes SSO and role credentials by itself. Session variables are read from the shell that
+started Course Harness, so after they expire, refresh them and restart from that shell. Prompt
+caching is turned on for Anthropic and OpenRouter models, and for Bedrock models that support it.
+
+To use an OpenAI-compatible provider on another machine over plain HTTP, select **Allow HTTP to
+another host**. The API key and Course content are then sent unencrypted, so use it only on a
+network you trust.
 
 ## What it does
 
@@ -72,108 +66,27 @@ Canonical Course state lives in readable files in the Course Workspace. Caches, 
 credentials live in platform-native user locations outside it; credentials go to the operating
 system keyring when one is available. **Settings → Diagnostics** shows the exact locations.
 
-Each Course Agent run is also traced for debugging, beside its conversation in the chat store:
-`traces/<conversation id>.jsonl` holds one line per model request, response, and tool call, with
-timings, token usage (including cached input tokens), and only the messages that changed since the
-previous request. If a request sets `history_rewritten`, `instructions_changed`, or
-`tools_changed`, the provider could not reuse its prompt cache for the conversation so far. A trace
-is removed with its conversation, or after two weeks without new runs. The conversation itself is
-saved around every model request, so stopping a run keeps everything up to that point.
+## Optional extras
 
-**Models** works with OpenRouter, OpenAI, Anthropic, Amazon Bedrock, and any OpenAI-compatible
-server. Under **Found on this computer**, it lists the provider credentials it can see and lets you
-add each one with a single click. It looks at `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
-`OPENROUTER_API_KEY`, `AWS_BEARER_TOKEN_BEDROCK`, AWS session variables (such as those set by
-awsume), and the profiles in `~/.aws`. None of these is used until you add it. For Bedrock, an AWS
-profile is the most robust choice: only its name is stored, and the AWS SDK refreshes SSO and role
-credentials by itself. Session variables are read from the shell that started Course Harness, so
-after they expire, refresh them and restart from that shell. Prompt caching is turned on for
-Anthropic and OpenRouter models, and for Bedrock models that support it.
+**Full Docling for difficult PDFs.** For scanned PDFs, tables, and multi-column layouts you can
+reprocess a document with full Docling, which runs layout, table, and text recognition models
+locally:
 
-To use an OpenAI-compatible provider on another machine over plain HTTP, select **Allow HTTP to
-another host**. The API key and Course content are then sent unencrypted, so use it only on a
-network you trust.
+```bash
+uv tool install --torch-backend cpu 'course-harness[pinned,docling]'
+```
+
+`--torch-backend cpu` installs the CPU build of PyTorch. Without it, uv installs the CUDA build
+on Linux, which downloads several gigabytes of GPU libraries. Course Harness asks before it
+downloads the Docling models.
+
+**LibreOffice** (`libreoffice` or `soffice` on `PATH`) gives high-fidelity slide thumbnails.
 
 ## Development
 
-Development uses [Nix](https://nixos.org/) with flakes. The flake pins Python, uv, Bun, Node.js,
-Chromium, and Git; `uv.lock` and `bun.lock` pin application packages.
+See [CONTRIBUTING.md](https://github.com/martinkozle/course-harness/blob/main/CONTRIBUTING.md)
+to run Course Harness from a checkout, run the checks, and publish a release.
 
-```bash
-nix develop   # or `direnv allow` once with nix-direnv
-```
+## License
 
-Entering the shell installs the pre-commit and pre-push hooks (Biome, Ruff, ty, nixfmt, uv lock
-freshness, and hygiene checks). Their configuration lives in `flake.nix`.
-
-### Restricted networks and cloud agents
-
-Some sandboxes, such as cloud coding-agent containers, allow `git clone` from GitHub but refuse
-the archive downloads `nix develop` uses for flake inputs. `nix develop` then fails with
-`unable to download 'https://github.com/.../archive/<rev>.tar.gz': HTTP error 403`. Use the
-wrapper instead; it fetches the same locked revisions with git and leaves `flake.lock` unchanged:
-
-```bash
-scripts/nix-develop.sh                          # interactive shell
-scripts/nix-develop.sh -c pre-commit run --all-files
-scripts/nix-develop.sh -c uv run pytest
-```
-
-The first run builds the shell, including Chromium and LibreOffice, and can take several minutes;
-later runs reuse the Nix store. Run checks inside the shell rather than with tools installed
-elsewhere: the document conversion packages load native libraries, such as `libstdc++`, that the
-shell provides, and the pre-commit configuration only exists inside it.
-
-Launch from a checkout:
-
-```bash
-uv sync --locked
-bun install --frozen-lockfile
-bun run build
-uv run course-harness
-```
-
-For frontend hot reload, run the API and Vite side by side; Vite serves `http://127.0.0.1:5173`
-and proxies `/api`:
-
-```bash
-uv run course-harness /path/to/course-workspace --no-browser
-bun run dev
-```
-
-Checks:
-
-```bash
-pre-commit run --all-files
-uv run pytest
-bun run lint
-bun run typecheck
-bun run build
-bun run test:e2e   # Playwright smoke journey
-```
-
-Outside Nix, install the Playwright browser once with `bunx playwright install --with-deps chromium`
-or set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`.
-
-Build the wheel and smoke-test it through `uvx`, `uv tool install`, and a `git+file://` install of
-the current commit, all in isolated temporary environments. The script also checks that a
-`pinned` install holds exactly the versions in `uv.lock`:
-
-```bash
-uv run python scripts/verify_distribution.py
-```
-
-The Release workflow runs these checks on every push to `main`. To publish a version:
-
-```bash
-uv version --bump minor   # or patch/major; updates pyproject.toml and uv.lock
-git commit -am "Release 0.2.0" && git push
-```
-
-Then create a GitHub Release with a new tag `v0.2.0` on that commit (or push the tag with
-`git tag v0.2.0 && git push origin v0.2.0`). The tag must match the package version. The workflow
-publishes to PyPI through trusted publishing and attaches the wheel and source distribution to the
-Release.
-
-Without Nix, install Python 3.14, uv, Bun 1.3 or newer, Node.js, and Chromium, then use the same
-commands.
+[MIT](https://github.com/martinkozle/course-harness/blob/main/LICENSE)

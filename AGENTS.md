@@ -29,7 +29,7 @@ publishes on a `v*` tag; never upload from a local machine.
 
 ## Commands
 
-See `README.md` for setup and launch instructions. Before handing off implementation work, run
+See `CONTRIBUTING.md` for development setup and launch instructions. Before handing off implementation work, run
 all pre-commit hooks, Ruff, Ruff formatting, ty, the Python suite, frontend
 lint/typechecking/build, and the Playwright smoke journey.
 
