@@ -91,6 +91,7 @@ class ReleaseSourcePin(BaseModel):
     resource_id: str = Field(pattern=r"^resource-[0-9a-f]{12}$")
     source_version_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     label: str = Field(min_length=1, max_length=200)
+    representation: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class ReleaseTemplatePin(BaseModel):
@@ -519,6 +520,7 @@ def _source_pin(source: Source) -> ReleaseSourcePin:
         resource_id=source.resource_id,
         source_version_id=source.source_version_id,
         label=source.label,
+        representation=source.representation,
     )
 
 

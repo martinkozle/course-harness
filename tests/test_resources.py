@@ -3,6 +3,7 @@ import io
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import httpx2
@@ -59,7 +60,9 @@ async def test_model_download_reports_progress_while_running(tmp_path: Path) -> 
         cache.mkdir(exist_ok=True)
         (cache / "docling-models.ready").write_text("ready\n")
 
-    transport = httpx2.ASGITransport(app=_app(workspace, tmp_path / "library-data", cache_dir))
+    with patch("course_harness.docling_parser.full_docling_installed", return_value=True):
+        app = _app(workspace, tmp_path / "library-data", cache_dir)
+    transport = httpx2.ASGITransport(app=app)
     async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
         with patch("course_harness.docling_parser.download_models", side_effect=fake_download):
             task = asyncio.create_task(client.post("/api/resources/parser-models"))
@@ -75,6 +78,22 @@ async def test_model_download_reports_progress_while_running(tmp_path: Path) -> 
             completed = await task
     assert completed.json()["ready"] is True
     assert completed.json()["completed_steps"] == 3
+
+
+@pytest.mark.anyio
+async def test_model_download_needs_full_docling_installed(tmp_path: Path) -> None:
+    workspace = tmp_path / "resource-course"
+    workspace.mkdir()
+    with patch("course_harness.docling_parser.full_docling_installed", return_value=False):
+        app = _app(workspace, tmp_path / "library-data", tmp_path / "library-cache")
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        status = await client.get("/api/resources/parser-models")
+        download = await client.post("/api/resources/parser-models")
+
+    assert status.json()["installed"] is False
+    assert download.status_code == 409
+    assert "course-harness[docling]" in download.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -350,7 +369,7 @@ async def test_process_code_resource(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_process_pdf_requires_models_then_indexes_docling_result(tmp_path: Path) -> None:
+async def test_pdf_upload_is_read_quickly_without_models(tmp_path: Path) -> None:
     workspace = tmp_path / "resource-course"
     workspace.mkdir()
     data_dir = tmp_path / "library-data"
@@ -358,55 +377,33 @@ async def test_process_pdf_requires_models_then_indexes_docling_result(tmp_path:
     fixture = FIXTURES / "teaching.pdf"
     transport = httpx2.ASGITransport(app=_app(workspace, data_dir, cache_dir))
 
-    def fake_download(cache: Path, on_progress: Callable[[str, int], None]) -> None:
-        cache.mkdir(exist_ok=True)
-        (cache / "docling-models.ready").write_text("ready\n")
-
     async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
-        status = await client.get("/api/resources/parser-models")
-        assert status.json()["ready"] is False
-        missing = await client.post(
+        response = await client.post(
             "/api/resources/upload",
             files={"file": ("teaching.pdf", fixture.read_bytes(), "application/pdf")},
         )
-        assert missing.status_code == 409
-        assert (await client.get("/api/resources")).json() == []
-        with patch(
-            "course_harness.docling_parser.download_models",
-            side_effect=fake_download,
-        ):
-            installed = await client.post("/api/resources/parser-models")
-        assert installed.json()["ready"] is True
-        with patch.object(
-            res, "convert_document", return_value=("# Page 1\n\nPDF teaching evidence\n", "{}")
-        ):
-            response = await client.post(
-                "/api/resources/upload",
-                files={"file": ("teaching.pdf", fixture.read_bytes(), "application/pdf")},
+        resource_id = response.json()["resource_id"]
+        with patch("course_harness.docling_parser.full_docling_installed", return_value=False):
+            docling = await client.post(
+                f"/api/resources/{resource_id}/reprocess", json={"processor": "docling"}
             )
-            resource_id = response.json()["resource_id"]
-            (cache_dir / "docling-models.ready").unlink()
-            blocked = await client.post(f"/api/resources/{resource_id}/reprocess")
-            assert blocked.status_code == 409
-            assert search_raw(cache_dir, "teaching")
-            preserved = await client.get(f"/api/resources/{resource_id}")
-            assert preserved.json()["status"] == "ready"
-            assert preserved.json()["indexed"] is True
-            with patch(
-                "course_harness.docling_parser.download_models",
-                side_effect=fake_download,
-            ):
-                await client.post("/api/resources/parser-models")
-            reprocessed = await client.post(f"/api/resources/{resource_id}/reprocess")
+        preserved = await client.get(f"/api/resources/{resource_id}")
 
     assert response.status_code == 201
     assert response.json()["status"] == "ready"
     assert response.json()["indexed"] is True
-    assert reprocessed.status_code == 200
+    assert response.json()["processing"]["processor"] == "local-quick"
+    assert response.json()["processing"]["hosted"] is False
     extracted = cache_dir / "derived" / response.json()["snapshot"]["content_hash"] / "extracted.md"
     assert extracted.read_text(encoding="utf-8") == "# Page 1\n\nPDF teaching evidence\n"
     assert (extracted.parent / "docling.json").is_file()
+    assert (extracted.parent / "processing.json").is_file()
     assert search_raw(cache_dir, "teaching")
+    # Full Docling is an optional extra: asking for it says how to install it.
+    assert docling.status_code == 409
+    assert "course-harness[docling]" in docling.json()["detail"]
+    assert preserved.json()["status"] == "ready"
+    assert preserved.json()["indexed"] is True
 
 
 @pytest.mark.anyio
@@ -444,13 +441,13 @@ async def test_process_powerpoint_extracts_slides_tables_and_notes(tmp_path: Pat
 
 
 @pytest.mark.anyio
-async def test_local_pdf_reports_missing_models(tmp_path: Path) -> None:
+async def test_local_pdf_is_processed_without_models(tmp_path: Path) -> None:
     workspace = tmp_path / "resource-course"
     workspace.mkdir()
     data_dir = tmp_path / "library-data"
     cache_dir = tmp_path / "library-cache"
 
-    fixture = FIXTURES / "sample.pdf"
+    fixture = FIXTURES / "teaching.pdf"
     transport = httpx2.ASGITransport(app=_app(workspace, data_dir, cache_dir))
 
     async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -467,9 +464,9 @@ async def test_local_pdf_reports_missing_models(tmp_path: Path) -> None:
         process = await client.post(f"/api/resources/{resource_id}/process")
         detail = await client.get(f"/api/resources/{resource_id}")
 
-    assert process.status_code == 409
-    assert "Download PDF processing models" in process.json()["detail"]
-    assert detail.json()["status"] == "unprocessed"
+    assert process.status_code == 200
+    assert detail.json()["status"] == "ready"
+    assert detail.json()["processing"]["quality"]["passed"] is True
 
 
 @pytest.mark.anyio
@@ -482,16 +479,13 @@ async def test_blank_pdf_is_not_ready(tmp_path: Path) -> None:
     writer.add_blank_page(width=612, height=792)
     stream = io.BytesIO()
     writer.write(stream)
-    cache_dir.mkdir()
-    (cache_dir / "docling-models.ready").write_text("ready\n")
     transport = httpx2.ASGITransport(app=_app(workspace, data_dir, cache_dir))
 
     async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
-        with patch.object(res, "convert_document", return_value=("", "{}")):
-            response = await client.post(
-                "/api/resources/upload",
-                files={"file": ("blank.pdf", stream.getvalue(), "application/pdf")},
-            )
+        response = await client.post(
+            "/api/resources/upload",
+            files={"file": ("blank.pdf", stream.getvalue(), "application/pdf")},
+        )
         resources = await client.get("/api/resources")
 
     assert response.status_code == 201
@@ -762,10 +756,12 @@ async def test_remote_add_returns_while_processing_continues(tmp_path: Path) -> 
     release = threading.Event()
     original_process = res.process_snapshot
 
-    def slow_process(cache_dir: Path, content_hash: str, media_type: str, content: bytes):
+    def slow_process(
+        cache_dir: Path, content_hash: str, media_type: str, content: bytes, **options: Any
+    ):
         started.set()
         assert release.wait(timeout=5)
-        return original_process(cache_dir, content_hash, media_type, content)
+        return original_process(cache_dir, content_hash, media_type, content, **options)
 
     app = _app(workspace, tmp_path / "library-data", tmp_path / "library-cache")
     transport = httpx2.ASGITransport(app=app)
@@ -1084,11 +1080,11 @@ async def test_a_slow_upload_conversion_does_not_hold_up_other_library_changes(
     process_snapshot = res.process_snapshot
 
     def slow_process_snapshot(
-        cache: Path, content_hash: str, media_type: str, content: bytes
+        cache: Path, content_hash: str, media_type: str, content: bytes, **options: Any
     ) -> res.ResourceState:
         converting.set()
         release.wait(timeout=10)
-        return process_snapshot(cache, content_hash, media_type, content)
+        return process_snapshot(cache, content_hash, media_type, content, **options)
 
     transport = httpx2.ASGITransport(app=_app(workspace, data_dir, cache_dir))
     async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:

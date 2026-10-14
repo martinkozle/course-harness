@@ -1,6 +1,7 @@
 import {
 	AlertCircle,
 	AlertTriangle,
+	Cloud,
 	ExternalLink,
 	FilePlus2,
 	FileText,
@@ -9,6 +10,7 @@ import {
 	MoreHorizontal,
 	RefreshCw,
 	RotateCcw,
+	ScanText,
 	Search,
 	Trash2,
 	X,
@@ -476,15 +478,15 @@ function CourseTab({
 							resource.snapshot !== null &&
 							source.source_version_id !== resource.snapshot.content_hash;
 						const kind = fileKind(resource);
-						const menuItems: MenuItem[] = [];
-						if (resource?.snapshot && resource.status !== "processing")
-							menuItems.push({
-								label: "Process again",
-								detail: "Re-read the file to refresh search",
-								icon: <RotateCcw aria-hidden="true" />,
-								disabled: Boolean(busy),
-								onSelect: () => void library.reprocess(resource.resource_id),
-							});
+						const menuItems: MenuItem[] = resource
+							? reprocessItems(resource, library, Boolean(busy))
+							: [];
+						const keptText =
+							source.representation &&
+							resource?.processing &&
+							source.representation !== resource.processing.processor
+								? processorLabel(library, source.representation)
+								: null;
 						if (resource?.kind === "remote")
 							menuItems.push({
 								label: "Check for a newer version",
@@ -541,7 +543,11 @@ function CourseTab({
 												Newer version available
 											</span>
 										) : null}
+										{resource ? (
+											<ProcessingTags resource={resource} keptText={keptText} />
+										) : null}
 									</div>
+									{resource ? <QualityNote resource={resource} /> : null}
 									{error ? (
 										<p className="row-error" role="alert">
 											{error}
@@ -549,6 +555,13 @@ function CourseTab({
 									) : null}
 								</div>
 								<div className="row-actions">
+									{resource ? (
+										<UpgradeButton
+											resource={resource}
+											library={library}
+											busy={Boolean(busy)}
+										/>
+									) : null}
 									{updateAvailable ? (
 										<button
 											type="button"
@@ -758,15 +771,11 @@ function LibraryRow({
 		);
 	}
 
-	const menuItems: MenuItem[] = [];
-	if (resource.snapshot && resource.status !== "processing")
-		menuItems.push({
-			label: "Process again",
-			detail: "Re-read the file to refresh search",
-			icon: <RotateCcw aria-hidden="true" />,
-			disabled: Boolean(busy),
-			onSelect: () => void library.reprocess(id),
-		});
+	const menuItems: MenuItem[] = reprocessItems(
+		resource,
+		library,
+		Boolean(busy),
+	);
 	if (remote && resource.snapshot)
 		menuItems.push({
 			label: "Check for a newer version",
@@ -818,7 +827,13 @@ function LibraryRow({
 					{resource.snapshot ? (
 						<span>{formatBytes(resource.snapshot.byte_count)}</span>
 					) : null}
+					{resource.status === "ready" && !busy ? (
+						<ProcessingTags resource={resource} keptText={null} />
+					) : null}
 				</div>
+				{resource.status === "ready" && !busy ? (
+					<QualityNote resource={resource} />
+				) : null}
 				{error ? (
 					<p className="row-error" role="alert">
 						{error}
@@ -826,6 +841,11 @@ function LibraryRow({
 				) : null}
 			</div>
 			<div className="row-actions">
+				<UpgradeButton
+					resource={resource}
+					library={library}
+					busy={Boolean(busy)}
+				/>
 				{primary}
 				{menuItems.length > 0 ? (
 					<Menu
@@ -848,6 +868,123 @@ function LibraryRow({
 				</button>
 			</div>
 		</li>
+	);
+}
+
+/* ---------- Document Processors ---------- */
+
+function processorLabel(library: Library, processorId: string): string {
+	return (
+		library.processing?.processors.find((p) => p.id === processorId)?.label ??
+		processorId
+	);
+}
+
+/** "Process again" with the current processor, then every other processor for this file. */
+function reprocessItems(
+	resource: ResourceState,
+	library: Library,
+	busy: boolean,
+): MenuItem[] {
+	if (!resource.snapshot || resource.status === "processing") return [];
+	const items: MenuItem[] = [
+		{
+			label: "Process again",
+			detail: "Re-read the file to refresh search",
+			icon: <RotateCcw aria-hidden="true" />,
+			disabled: busy,
+			onSelect: () => void library.reprocess(resource.resource_id),
+		},
+	];
+	const current = resource.processing?.processor;
+	for (const processor of library.processorsFor(resource.media_type)) {
+		if (processor.id === current) continue;
+		items.push({
+			label: `Reprocess with ${processor.label}`,
+			detail: !processor.available
+				? processor.unavailable_action === "install"
+					? "Not installed: see Settings → Documents"
+					: (processor.unavailable_reason ?? "Not available yet")
+				: processor.hosted
+					? "Sends the file off this device"
+					: "Runs on this device",
+			icon: processor.hosted ? (
+				<Cloud aria-hidden="true" />
+			) : (
+				<ScanText aria-hidden="true" />
+			),
+			disabled: busy,
+			onSelect: () =>
+				void library.reprocessWith(resource.resource_id, processor.id),
+		});
+	}
+	return items;
+}
+
+function ProcessingTags({
+	resource,
+	keptText,
+}: {
+	resource: ResourceState;
+	keptText: string | null;
+}) {
+	const record = resource.processing;
+	if (!record) return null;
+	return (
+		<>
+			<span title={`Version ${record.processor_version}`}>
+				Read by {record.processor_label}
+				{record.hosted ? " (sent off this device)" : ""}
+			</span>
+			{record.quality && !record.quality.passed ? (
+				<span className="state is-warning">
+					<AlertTriangle aria-hidden="true" />
+					May be incomplete
+				</span>
+			) : null}
+			{keptText ? (
+				<span title="Citations in this course point into the text it was added with.">
+					Course uses the text read by {keptText}
+				</span>
+			) : null}
+		</>
+	);
+}
+
+function QualityNote({ resource }: { resource: ResourceState }) {
+	const quality = resource.processing?.quality;
+	if (!quality || quality.passed) return null;
+	return (
+		<p className="row-note">
+			{quality.findings.map((finding) => finding.message).join(" ")}
+		</p>
+	);
+}
+
+/** The one-click upgrade to the processor suggested for an incomplete-looking file. */
+function UpgradeButton({
+	resource,
+	library,
+	busy,
+}: {
+	resource: ResourceState;
+	library: Library;
+	busy: boolean;
+}) {
+	const suggested = resource.suggested_processor;
+	if (!suggested || resource.status !== "ready") return null;
+	return (
+		<button
+			type="button"
+			className="btn btn-small"
+			disabled={busy}
+			onClick={() =>
+				void library.reprocessWith(resource.resource_id, suggested)
+			}
+		>
+			<ScanText aria-hidden="true" />
+			Read with {processorLabel(library, suggested)}
+		</button>
 	);
 }
 

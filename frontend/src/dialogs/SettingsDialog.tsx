@@ -1,6 +1,6 @@
 import {
 	Bot,
-	Check,
+	FileScan,
 	FileText,
 	Folder,
 	FolderOpen,
@@ -12,6 +12,7 @@ import { type ReactNode, useEffect, useState } from "react";
 
 import { responseError } from "../api";
 import { ConnectorSettings } from "../ConnectorSettings";
+import { DocumentProcessingSettings } from "../DocumentProcessingSettings";
 import type {
 	ModelCatalog,
 	TemplateProfileSummary,
@@ -27,6 +28,7 @@ import type { Library } from "../useLibrary";
 
 export type SettingsSection =
 	| "models"
+	| "documents"
 	| "connectors"
 	| "templates"
 	| "workspace"
@@ -34,6 +36,11 @@ export type SettingsSection =
 
 const sections: { id: SettingsSection; label: string; icon: ReactNode }[] = [
 	{ id: "models", label: "Models", icon: <Bot aria-hidden="true" /> },
+	{
+		id: "documents",
+		label: "Documents",
+		icon: <FileScan aria-hidden="true" />,
+	},
 	{
 		id: "connectors",
 		label: "Research",
@@ -114,6 +121,8 @@ export function SettingsDialog({
 							catalog={catalog}
 							onCatalogChange={onCatalogChange}
 						/>
+					) : section === "documents" ? (
+						<DocumentProcessingSettings library={library} />
 					) : section === "connectors" ? (
 						<div className="model-settings">
 							<ConnectorSettings />
@@ -210,28 +219,6 @@ function Diagnostics({ library }: { library: Library }) {
 				aria-labelledby="document-processing-heading"
 			>
 				<h3 id="document-processing-heading">Document processing</h3>
-				<div className="settings-control">
-					<div>
-						<strong>PDF support</strong>
-						<p className="meta">
-							Local models read layout, tables, and scanned text in PDFs.
-						</p>
-					</div>
-					{library.modelStatus?.ready ? (
-						<span className="state is-success">
-							<Check aria-hidden="true" />
-							PDF support is ready
-						</span>
-					) : (
-						<button
-							type="button"
-							className="btn btn-small"
-							onClick={library.requestModelDownload}
-						>
-							Download PDF models
-						</button>
-					)}
-				</div>
 				<div className="settings-control">
 					<div>
 						<strong>Search index</strong>

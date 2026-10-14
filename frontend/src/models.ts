@@ -83,6 +83,61 @@ export type ResourceState = {
 	indexed: boolean;
 	error: string | null;
 	snapshot: Snapshot | null;
+	/** Which Document Processor produced the current text, and how it fared. */
+	processing?: ProcessingRecord | null;
+	/** A better Document Processor to offer when the current text looks incomplete. */
+	suggested_processor?: string | null;
+};
+
+export type QualityFinding = {
+	kind: "little-text" | "image-heavy" | "garbled-text";
+	message: string;
+	pages: number[];
+};
+
+export type ProcessingRecord = {
+	processor: string;
+	processor_label: string;
+	processor_version: string;
+	hosted: boolean;
+	processed_at: string;
+	quality: {
+		passed: boolean;
+		page_count: number;
+		findings: QualityFinding[];
+	} | null;
+};
+
+export type DocumentProcessorView = {
+	id: string;
+	label: string;
+	description: string;
+	hosted: boolean;
+	vendor: string | null;
+	media_types: string[];
+	available: boolean;
+	unavailable_reason: string | null;
+	unavailable_action:
+		| "install"
+		| "download-models"
+		| "add-key"
+		| "choose-model"
+		| null;
+	consented: boolean;
+};
+
+export type ProcessorKey = {
+	vendor: "llamaparse" | "mistral";
+	label: string;
+	configured: boolean;
+	credential_storage: Connector["credential_storage"];
+};
+
+export type DocumentProcessing = {
+	preferred_processor: string | null;
+	auto_upgrade: boolean;
+	processors: DocumentProcessorView[];
+	keys: ProcessorKey[];
 };
 
 export type Source = {
@@ -91,6 +146,8 @@ export type Source = {
 	source_version_id: string;
 	label: string;
 	admitted_at: string;
+	/** The Document Processor whose text this Source's Citations point into. */
+	representation?: string | null;
 };
 
 export type SearchResult = {

@@ -146,7 +146,7 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	expect(firstLecture).toBeDefined();
 	expect(secondLecture).toBeDefined();
 
-	// Sources: discovery disclosure, PDF model consent, upload, preview, and inclusion.
+	// Sources: discovery disclosure, a PDF read quickly on this device, preview, and inclusion.
 	await navigator.getByRole("button", { name: /Sources/ }).click();
 	await expect(
 		page.getByRole("heading", { name: "Sources", exact: true }),
@@ -156,75 +156,54 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 		page.getByText(/Searching sends only your query to these public services/),
 	).toBeVisible();
 	await page.getByRole("tab", { name: /Library/ }).click();
-	let modelDownloadStarted = false;
-	let modelDownloadCompleted = false;
-	await page.route("**/api/resources/parser-models", async (route) => {
-		if (route.request().method() === "POST") {
-			modelDownloadStarted = true;
-			await new Promise((resolve) => setTimeout(resolve, 1200));
-			modelDownloadCompleted = true;
-			await route.fulfill({
-				json: {
-					ready: true,
-					downloading: false,
-					stage: "Ready",
-					completed_steps: 3,
-					total_steps: 3,
-					error: null,
-				},
-			});
-			return;
-		}
-		await route.fulfill({
-			json: {
-				ready: modelDownloadCompleted,
-				downloading: modelDownloadStarted && !modelDownloadCompleted,
-				stage: modelDownloadCompleted
-					? "Ready"
-					: modelDownloadStarted
-						? "Downloading layout models"
-						: null,
-				completed_steps: modelDownloadCompleted ? 3 : 0,
-				total_steps: 3,
-				error: null,
-			},
-		});
-	});
 	const libraryUpload = page.getByLabel("Add files to Library");
 	await libraryUpload.setInputFiles(
 		resolve("tests/fixtures/resources/teaching.pdf"),
 	);
-	const consent = page.getByRole("dialog", {
-		name: "Download document processing models?",
-	});
-	await expect(consent).toBeVisible();
-	await consent.getByRole("button", { name: "Cancel" }).click();
-	await expect(consent).toBeHidden();
-	// Cancelling leaves a recoverable pending item rather than a false upload.
-	const uploads = page.getByRole("list", { name: "Files being added" });
-	await expect(uploads).toContainText("teaching.pdf");
-	await expect(uploads).toContainText("Needs PDF support");
-	await page.getByRole("button", { name: "Dismiss teaching.pdf" }).click();
-	await expect(uploads).toBeHidden();
+	// No model download stands between a PDF and the Library.
+	const pdfRow = page
+		.getByRole("list", { name: "Library" })
+		.getByRole("listitem")
+		.filter({ hasText: "teaching.pdf" });
+	await expect(pdfRow.getByText("Read by Quick local")).toBeVisible();
+	await expect(pdfRow.getByText("Searchable")).toBeVisible();
+	await expect(pdfRow.getByText("May be incomplete")).toHaveCount(0);
 
+	// Documents settings explain the optional local extra and ask before sending files.
 	await page.getByRole("button", { name: "Settings" }).click();
 	const settings = page.getByRole("dialog", { name: "Settings" });
 	await settings
 		.getByRole("navigation", { name: "Settings sections" })
-		.getByRole("button", { name: "Diagnostics" })
+		.getByRole("button", { name: "Documents" })
 		.click();
-	await settings.getByRole("button", { name: "Download PDF models" }).click();
-	await consent.getByRole("button", { name: "Download models" }).click();
+	await expect(settings.getByText(/course-harness\[docling\]/)).toBeVisible();
+	await settings
+		.getByLabel("Offer to reprocess it with")
+		.selectOption("mistral-ocr");
 	await expect(
-		consent.getByRole("progressbar", {
-			name: "Model download stages completed",
+		settings.getByRole("checkbox", {
+			name: "Reprocess it automatically, without asking",
 		}),
+	).toBeDisabled();
+	await settings
+		.getByRole("button", { name: "Allow sending documents to Mistral OCR" })
+		.click();
+	const consent = page.getByRole("dialog", {
+		name: "Send documents to Mistral OCR?",
+	});
+	await expect(
+		consent.getByText(/The whole file leaves this computer/),
 	).toBeVisible();
-	await expect(consent.getByText("Downloading layout models")).toBeVisible();
+	await consent.getByRole("button", { name: "Allow" }).click();
 	await expect(consent).toBeHidden();
-	await expect(settings.getByText("PDF support is ready")).toBeVisible();
+	await expect(
+		settings.getByRole("button", { name: "Stop sending" }),
+	).toBeVisible();
+	await settings.getByRole("button", { name: "Stop sending" }).click();
+	await expect(
+		settings.getByRole("button", { name: "Stop sending" }),
+	).toHaveCount(0);
 	await settings.getByRole("button", { name: "Close" }).click();
-	await page.unroute("**/api/resources/parser-models");
 
 	await libraryUpload.setInputFiles(
 		resolve("tests/fixtures/search/chapter_causal.md"),

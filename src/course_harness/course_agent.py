@@ -931,10 +931,11 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
     ) -> ToolReturn:
         """Search the full text of Course Sources for relevant content."""
         from course_harness.search import enrich_search_results, search_raw  # noqa: PLC0415
+        from course_harness.sources import evidence_key  # noqa: PLC0415
 
         sources_by_version: dict[str, tuple[str, str, str]] = {}
         for s in ctx.deps.course_state.sources:
-            sources_by_version[s.source_version_id] = (s.id, s.resource_id, s.label)
+            sources_by_version[evidence_key(ctx.deps.cache_dir, s)] = (s.id, s.resource_id, s.label)
 
         hits = search_raw(ctx.deps.cache_dir, query, limit=limit)
         results = enrich_search_results(hits, sources_by_version)
@@ -984,8 +985,10 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             )
 
         from course_harness.library import derived_dir  # noqa: PLC0415
+        from course_harness.sources import evidence_key  # noqa: PLC0415
 
-        extracted = derived_dir(ctx.deps.cache_dir) / source.source_version_id / "extracted.md"
+        key = evidence_key(ctx.deps.cache_dir, source)
+        extracted = derived_dir(ctx.deps.cache_dir) / key / "extracted.md"
         if not extracted.is_file():
             return ToolReturn(
                 return_value=(
@@ -1159,12 +1162,7 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         else:
             failure = state.error or f"{url} could not be processed."
         if state is None or state.status != "ready":
-            hint = (
-                " Ask the Course Author to download the PDF models in Settings → Diagnostics, "
-                "or try the Candidate's landing page url instead."
-                if "PDF processing models" in failure
-                else " Try the Candidate's other url if it has one."
-            )
+            hint = " Try the Candidate's other url if it has one."
             return ToolReturn(return_value=f"Could not add {url}: {failure}{hint}")
         return admit(ctx, state.resource_id, label)
 

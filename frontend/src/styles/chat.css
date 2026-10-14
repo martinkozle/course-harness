@@ -458,10 +458,6 @@
 	color: var(--danger);
 }
 
-.upload-row.is-needs-models > svg {
-	color: var(--warning);
-}
-
 .upload-name {
 	overflow: hidden;
 	font-weight: 600;

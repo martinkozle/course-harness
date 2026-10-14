@@ -18,7 +18,8 @@ classifiers = [
   "Topic :: Education",
 ]
 dependencies = [
-  "docling>=2.59",
+  # The default Document Processor: model-free PDF, Office, and HTML conversion (ADR 0015).
+  "docling-slim[convert-core,format-html,format-office,format-pdf]>=2.129",
   "fastapi",
   # pydantic-ai 2.13 reads MCP SDK v1 field names; fastmcp 4 moved to SDK v2.
   "fastmcp-slim[client]<4",
@@ -27,14 +28,18 @@ dependencies = [
   "keyring>=25.6",
   "pillow>=12.3.0",
   "pydantic-ai-slim[ag-ui,anthropic,bedrock,mcp,openai]",
+  # docling-slim imports packaging from a backend without declaring it.
+  "packaging",
   "python-multipart>=0.0.32",
   "python-pptx>=1.0.2",
   "pyyaml>=6.0.3",
-  "torch",
-  "torchvision",
   "typer",
   "uvicorn[standard]",
 ]
+
+[project.optional-dependencies]
+# Full Docling: layout, table, and OCR models for difficult PDFs. Course Harness never installs it.
+docling = ["docling>=2.129", "torch", "torchvision"]
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }]

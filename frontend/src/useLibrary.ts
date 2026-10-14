@@ -4,6 +4,8 @@ import { responseError } from "./api";
 import {
 	type Candidate,
 	candidateResource,
+	type DocumentProcessing,
+	type DocumentProcessorView,
 	type ResourceState,
 	type Source,
 } from "./models";
@@ -14,6 +16,8 @@ export const MATERIAL_ACCEPT =
 
 export type ModelDownloadStatus = {
 	ready: boolean;
+	/** Whether full Docling is installed; its models are useless without it. */
+	installed: boolean;
 	downloading: boolean;
 	stage: string | null;
 	completed_steps: number;
@@ -22,16 +26,21 @@ export type ModelDownloadStatus = {
 };
 
 export type ModelPrompt =
-	| { kind: "upload"; files: File[]; include: boolean }
-	| { kind: "process"; resourceId: string; reprocess: boolean }
+	| { kind: "process"; resourceId: string; processor: string }
 	| { kind: "manual" };
+
+/** A hosted Document Processor waiting for the Course Author to agree to send documents. */
+export type ConsentPrompt = {
+	resourceId: string | null;
+	processor: DocumentProcessorView;
+};
 
 /** One file the Course Author added, tracked until it is usable or fails. */
 export type UploadItem = {
 	id: string;
 	name: string;
 	include: boolean;
-	state: "uploading" | "including" | "needs-models" | "failed";
+	state: "uploading" | "including" | "failed";
 	error: string | null;
 	file: File;
 };
@@ -59,6 +68,11 @@ export function useLibrary({
 	const [busy, setBusy] = useState<Map<string, string>>(new Map());
 	const [errors, setErrors] = useState<Map<string, string>>(new Map());
 	const [modelPrompt, setModelPrompt] = useState<ModelPrompt | null>(null);
+	const [consentPrompt, setConsentPrompt] = useState<ConsentPrompt | null>(
+		null,
+	);
+	const [consentError, setConsentError] = useState<string | null>(null);
+	const [processing, setProcessing] = useState<DocumentProcessing | null>(null);
 	const [modelStatus, setModelStatus] = useState<ModelDownloadStatus | null>(
 		null,
 	);
@@ -84,6 +98,20 @@ export function useLibrary({
 		onSourcesChange(latest);
 		return latest;
 	}, [onSourcesChange]);
+
+	const reloadProcessing = useCallback(async () => {
+		const response = await fetch("/api/document-processing");
+		if (!response.ok) throw new Error(await responseError(response));
+		const latest = (await response.json()) as DocumentProcessing;
+		setProcessing(latest);
+		return latest;
+	}, []);
+
+	useEffect(() => {
+		void reloadProcessing().catch(() => {
+			// Reprocessing reports the problem when the Course Author asks for it.
+		});
+	}, [reloadProcessing]);
 
 	const hasRemoteProcessing = resources.some(
 		(resource) =>
@@ -214,14 +242,6 @@ export function useLibrary({
 		}
 	}
 
-	async function checkModels(): Promise<boolean> {
-		const response = await fetch("/api/resources/parser-models");
-		if (!response.ok) throw new Error(await responseError(response));
-		const next = (await response.json()) as ModelDownloadStatus;
-		setModelStatus(next);
-		return next.ready;
-	}
-
 	async function addFiles(files: File[], include: boolean) {
 		if (files.length === 0) return;
 		const items: UploadItem[] = files.map((file) => ({
@@ -233,50 +253,12 @@ export function useLibrary({
 			file,
 		}));
 		setUploads((current) => [...current, ...items]);
-		const pdfs = items.filter((item) =>
-			item.name.toLowerCase().endsWith(".pdf"),
-		);
-		let modelsReady = true;
-		if (pdfs.length > 0) {
-			try {
-				modelsReady = await checkModels();
-			} catch (caught) {
-				for (const item of pdfs)
-					updateUpload(item.id, {
-						state: "failed",
-						error: errorMessage(caught, "PDF support could not be checked."),
-					});
-				modelsReady = false;
-			}
-		}
-		const waiting = modelsReady ? [] : pdfs;
-		for (const item of waiting)
-			updateUpload(item.id, { state: "needs-models", error: null });
-		if (waiting.length > 0) {
-			setModelError(null);
-			setModelPrompt({
-				kind: "upload",
-				files: waiting.map((item) => item.file),
-				include,
-			});
-		}
-		await Promise.all(
-			items.filter((item) => !waiting.includes(item)).map(uploadOne),
-		);
+		await Promise.all(items.map(uploadOne));
 	}
 
 	function retryUpload(id: string) {
 		const item = uploads.find((candidate) => candidate.id === id);
 		if (!item) return;
-		if (item.state === "needs-models") {
-			setModelError(null);
-			setModelPrompt({
-				kind: "upload",
-				files: [item.file],
-				include: item.include,
-			});
-			return;
-		}
 		void uploadOne(item);
 	}
 
@@ -284,7 +266,11 @@ export function useLibrary({
 		updateUpload(id, null);
 	}
 
-	async function runProcess(resourceId: string, reprocess: boolean) {
+	async function runProcess(
+		resourceId: string,
+		reprocess: boolean,
+		processor?: string,
+	) {
 		await withResource(
 			resourceId,
 			reprocess ? "Reprocessing…" : "Processing…",
@@ -292,17 +278,66 @@ export function useLibrary({
 			async () => {
 				const response = await fetch(
 					`/api/resources/${encodeURIComponent(resourceId)}/${reprocess ? "reprocess" : "process"}`,
-					{ method: "POST" },
+					processor
+						? {
+								method: "POST",
+								headers: { "Content-Type": "application/json" },
+								body: JSON.stringify({ processor }),
+							}
+						: { method: "POST" },
 				);
-				if (response.status === 409) {
-					setModelError(null);
-					setModelPrompt({ kind: "process", resourceId, reprocess });
-					return;
-				}
 				if (!response.ok) throw new Error(await responseError(response));
 				await reloadResources();
 			},
 		);
+	}
+
+	/** Reprocess with a chosen Document Processor, asking first for anything it needs. */
+	function reprocessWith(resourceId: string, processorId: string) {
+		const processor = processing?.processors.find(
+			(candidate) => candidate.id === processorId,
+		);
+		if (!processor) return runProcess(resourceId, true, processorId);
+		if (!processor.available) {
+			if (processor.unavailable_action === "download-models") {
+				setModelError(null);
+				setModelPrompt({ kind: "process", resourceId, processor: processorId });
+			} else {
+				reportError(
+					resourceId,
+					processor.unavailable_reason ??
+						`${processor.label} is not available.`,
+				);
+			}
+			return Promise.resolve();
+		}
+		if (processor.hosted && !processor.consented) {
+			setConsentError(null);
+			setConsentPrompt({ resourceId, processor });
+			return Promise.resolve();
+		}
+		return runProcess(resourceId, true, processorId);
+	}
+
+	async function confirmConsent() {
+		if (!consentPrompt?.processor.vendor) return;
+		const pending = consentPrompt;
+		setConsentError(null);
+		try {
+			const response = await fetch(
+				`/api/document-processing/consent/${encodeURIComponent(pending.processor.vendor ?? "")}`,
+				{ method: "PUT" },
+			);
+			if (!response.ok) throw new Error(await responseError(response));
+			setProcessing((await response.json()) as DocumentProcessing);
+			setConsentPrompt(null);
+			if (pending.resourceId)
+				await runProcess(pending.resourceId, true, pending.processor.id);
+		} catch (caught) {
+			setConsentError(
+				errorMessage(caught, "Your choice could not be saved. Please retry."),
+			);
+		}
 	}
 
 	async function confirmModelDownload() {
@@ -317,20 +352,22 @@ export function useLibrary({
 			if (!response.ok) throw new Error(await responseError(response));
 			setModelStatus((await response.json()) as ModelDownloadStatus);
 			setModelPrompt(null);
-			if (pending.kind === "upload") {
-				const waiting = uploads.filter(
-					(item) =>
-						item.state === "needs-models" && pending.files.includes(item.file),
-				);
-				await Promise.all(waiting.map(uploadOne));
-			} else if (pending.kind === "process") {
-				await runProcess(pending.resourceId, pending.reprocess);
-			}
+			await reloadProcessing();
+			if (pending.kind === "process")
+				await runProcess(pending.resourceId, true, pending.processor);
 		} catch (caught) {
 			setModelError(errorMessage(caught, "Models could not be downloaded."));
 		} finally {
 			setDownloading(false);
 		}
+	}
+
+	/** The Document Processors that can read a Resource of this media type. */
+	function processorsFor(mediaType: string | null | undefined) {
+		if (!mediaType || !processing) return [];
+		return processing.processors.filter((processor) =>
+			processor.media_types.includes(mediaType),
+		);
 	}
 
 	function include(resourceId: string) {
@@ -488,6 +525,19 @@ export function useLibrary({
 		deleteResource,
 		process: (id: string) => runProcess(id, false),
 		reprocess: (id: string) => runProcess(id, true),
+		reprocessWith,
+		processorsFor,
+		processing,
+		setProcessing,
+		reloadProcessing,
+		consentPrompt,
+		consentError,
+		requestConsent: (processor: DocumentProcessorView) => {
+			setConsentError(null);
+			setConsentPrompt({ resourceId: null, processor });
+		},
+		cancelConsent: () => setConsentPrompt(null),
+		confirmConsent,
 		refreshRemote,
 		adoptVersion,
 		addRemote,

@@ -14,6 +14,7 @@ import {
 } from "./chat/ConversationDialogs";
 import { ModelDownloadDialog } from "./dialogs/ModelDownloadDialog";
 import { ModelSetupDialog } from "./dialogs/ModelSetupDialog";
+import { ProcessorConsentDialog } from "./dialogs/ProcessorConsentDialog";
 import { SettingsDialog, type SettingsSection } from "./dialogs/SettingsDialog";
 import { Launcher, type RecentWorkspace } from "./Launcher";
 import type {
@@ -654,6 +655,9 @@ function CourseWorkspace({
 			</div>
 
 			{library.modelPrompt ? <ModelDownloadDialog library={library} /> : null}
+			{library.consentPrompt ? (
+				<ProcessorConsentDialog library={library} />
+			) : null}
 			{modelSetupOpen ? (
 				<ModelSetupDialog
 					catalog={catalog}

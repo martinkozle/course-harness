@@ -230,14 +230,17 @@ def rebuild_index(cache_dir: Path, data_dir: Path) -> None:
     for resource in index.resources:
         if resource.snapshot_hash is None:
             continue
-        extracted = derived / resource.snapshot_hash / "extracted.md"
-        if not extracted.is_file():
-            continue
-        try:
-            text = extracted.read_text(encoding="utf-8")
-        except OSError, UnicodeError:
-            continue
-        index_resource(cache_dir, resource.snapshot_hash, text)
+        # Representations kept for a pinning Source are searched under their own key.
+        kept = sorted(path.name for path in derived.glob(f"{resource.snapshot_hash}@*"))
+        for key in [resource.snapshot_hash, *kept]:
+            extracted = derived / key / "extracted.md"
+            if not extracted.is_file():
+                continue
+            try:
+                text = extracted.read_text(encoding="utf-8")
+            except OSError, UnicodeError:
+                continue
+            index_resource(cache_dir, key, text)
 
 
 def _line_offsets(text: str) -> list[int]:

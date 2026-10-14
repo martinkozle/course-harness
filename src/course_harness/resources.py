@@ -13,11 +13,12 @@ from uuid import uuid4
 import httpx2
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from course_harness.docling_parser import (
-    HTML_MEDIA_TYPES,
-    OFFICE_MEDIA_TYPES,
-    PDF_MEDIA_TYPE,
-    convert_document,
+from course_harness.docling_parser import HTML_MEDIA_TYPES, OFFICE_MEDIA_TYPES, PDF_MEDIA_TYPE
+from course_harness.document_processors import (
+    DocumentProcessor,
+    ProcessingRecord,
+    QuickLocalProcessor,
+    check_quality,
 )
 
 ResourceKind = Literal["local-file", "upload", "remote"]
@@ -53,6 +54,8 @@ class Resource(BaseModel):
     snapshot_history: list[str] = Field(default_factory=list)
     # The Connector that read the current Snapshot when the page could not be fetched directly.
     captured_via: str | None = None
+    # The Document Processor the Course Author chose for the current representation.
+    processor: str | None = None
 
 
 class Snapshot(BaseModel):
@@ -76,6 +79,10 @@ class ResourceState(BaseModel):
     error: str | None = None
     snapshot: Snapshot | None = None
     captured_via: str | None = None
+    # Which Document Processor produced the current representation, and how it fared.
+    processing: ProcessingRecord | None = None
+    # A better Document Processor to offer when the current result fails its check.
+    suggested_processor: str | None = None
 
 
 class LibraryIndex(BaseModel):
@@ -239,9 +246,9 @@ def redirect_target(current_url: str, location: str | None) -> str:
 
 
 MEDIA_TYPE_PROCESSORS: dict[str, str] = {
-    PDF_MEDIA_TYPE: "docling",
-    **dict.fromkeys(OFFICE_MEDIA_TYPES, "docling"),
-    **dict.fromkeys(HTML_MEDIA_TYPES, "docling"),
+    PDF_MEDIA_TYPE: "document",
+    **dict.fromkeys(OFFICE_MEDIA_TYPES, "document"),
+    **dict.fromkeys(HTML_MEDIA_TYPES, "document"),
     "text/plain": "text",
     "text/markdown": "text",
     "text/x-markdown": "text",
@@ -357,8 +364,19 @@ def create_snapshot(snapshots_dir: Path, resource_id: str, content: bytes) -> Sn
 
 
 def process_snapshot(
-    cache_dir: Path, content_hash: str, media_type: str, content: bytes
+    cache_dir: Path,
+    content_hash: str,
+    media_type: str,
+    content: bytes,
+    *,
+    processor: DocumentProcessor | None = None,
+    data_dir: Path | None = None,
 ) -> ResourceState:
+    """Build the current Derived Representation of a Snapshot.
+
+    ``processor`` applies to documents only and defaults to the quick local one.
+    ``data_dir`` is where a hosted processor's output is kept durably.
+    """
     processor_name = resolve_processor(media_type)
     derived_dir = cache_dir / "derived" / content_hash
     derived_dir.mkdir(parents=True, exist_ok=True)
@@ -389,30 +407,85 @@ def process_snapshot(
         (derived_dir / "extracted.md").write_text(reference, encoding="utf-8")
         return ResourceState(resource_id="", status="ready")
 
-    if processor_name == "docling":
-        try:
-            extracted, structured = convert_document(media_type, content, cache_dir)
-        except Exception as error:
-            return ResourceState(
-                resource_id="",
-                status="failed",
-                error=f"Could not process the document: {error}",
-            )
-        if not extracted.strip():
-            return ResourceState(
-                resource_id="",
-                status="failed",
-                error="No readable content was found in the document.",
-            )
-        (derived_dir / "extracted.md").write_text(extracted, encoding="utf-8")
-        (derived_dir / "docling.json").write_text(structured, encoding="utf-8")
-        return ResourceState(resource_id="", status="ready")
+    if processor_name == "document":
+        return _process_document(
+            derived_dir,
+            content_hash,
+            media_type,
+            content,
+            processor or QuickLocalProcessor(cache_dir),
+            data_dir,
+        )
 
     return ResourceState(
         resource_id="",
         status="unprocessed",
         error=f"No processor available for {media_type}; content stored as immutable Snapshot.",
     )
+
+
+def _process_document(
+    derived_dir: Path,
+    content_hash: str,
+    media_type: str,
+    content: bytes,
+    processor: DocumentProcessor,
+    data_dir: Path | None,
+) -> ResourceState:
+    from course_harness import representations  # noqa: PLC0415
+
+    if (
+        processor.hosted
+        and data_dir is not None
+        and representations.restore_durable(data_dir, content_hash, processor.id, derived_dir)
+    ):
+        return ResourceState(
+            resource_id="",
+            status="ready",
+            processing=representations.read_record(derived_dir),
+        )
+    if not processor.supports(media_type):
+        return ResourceState(
+            resource_id="",
+            status="failed",
+            error=f"{processor.label} cannot read this type of file.",
+        )
+    unavailable = processor.unavailable()
+    if unavailable is not None:
+        return ResourceState(
+            resource_id="",
+            status="failed",
+            error=f"{processor.label} is not available. {unavailable.reason}",
+        )
+    try:
+        conversion = processor.convert(media_type, content)
+    except Exception as error:
+        return ResourceState(
+            resource_id="",
+            status="failed",
+            error=f"Could not process the document: {error}",
+        )
+    pages = conversion.pages
+    if not conversion.markdown.strip() or (
+        pages and all(page.characters == 0 and page.image_coverage == 0 for page in pages)
+    ):
+        return ResourceState(
+            resource_id="",
+            status="failed",
+            error="No readable content was found in the document.",
+        )
+    record = ProcessingRecord(
+        processor=processor.id,
+        processor_label=processor.label,
+        processor_version=processor.version(),
+        hosted=processor.hosted,
+        processed_at=datetime.now(UTC).isoformat(),
+        quality=check_quality(media_type, pages),
+    )
+    representations.write_representation(derived_dir, conversion, record)
+    if processor.hosted and data_dir is not None:
+        representations.save_durable(data_dir, content_hash, derived_dir)
+    return ResourceState(resource_id="", status="ready", processing=record)
 
 
 def image_dimensions(content: bytes) -> tuple[int, int]:

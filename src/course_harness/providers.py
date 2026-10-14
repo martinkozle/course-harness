@@ -1167,12 +1167,19 @@ def resolve_selected_model(
     """The selected model and its stored key; AWS credential accounts have no stored key."""
     store = _credential_store(store_path, credential_store)
     catalog = read_model_catalog(store_path, credential_store=store)
+    if catalog.selected_model_id is None:
+        return None
+    return resolve_model_preset(store_path, catalog.selected_model_id, credential_store=store)
+
+
+def resolve_model_preset(
+    store_path: Path, preset_id: str, *, credential_store: CredentialStore | None = None
+) -> tuple[ProviderConfiguration, str | None] | None:
+    """A Model Preset's configuration and its stored key, or ``None`` if it cannot be used."""
+    store = _credential_store(store_path, credential_store)
+    catalog = read_model_catalog(store_path, credential_store=store)
     preset = next(
-        (
-            candidate
-            for candidate in catalog.model_presets
-            if candidate.id == catalog.selected_model_id
-        ),
+        (candidate for candidate in catalog.model_presets if candidate.id == preset_id),
         None,
     )
     if preset is None:
