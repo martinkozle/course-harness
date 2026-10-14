@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated, Any
 from uuid import uuid4
 
-import httpx
+import httpx2
 from ag_ui.core import ActivitySnapshotEvent, EventType, StateSnapshotEvent
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent, BinaryContent, RunContext, ToolReturn
@@ -1761,18 +1761,18 @@ def create_reconciliation_agent() -> Agent[CourseAgentDeps, str]:
     return agent
 
 
-def _isolated_model_http_client() -> httpx.AsyncClient:
+def _isolated_model_http_client() -> httpx2.AsyncClient:
     # Match Pydantic AI's `create_async_http_client` defaults while opting out of
     # ambient proxy and credential environment variables. The explicit timeout
-    # matters because httpx defaults to five seconds for every phase, whereas
+    # matters because httpx2 defaults to five seconds for every phase, whereas
     # model responses may legitimately stream for much longer.
-    return httpx.AsyncClient(
-        timeout=httpx.Timeout(timeout=600, connect=5),
+    return httpx2.AsyncClient(
+        timeout=httpx2.Timeout(timeout=600, connect=5),
         trust_env=False,
     )
 
 
-def _own_provider_http_client(provider: Any, client: httpx.AsyncClient) -> Any:
+def _own_provider_http_client(provider: Any, client: httpx2.AsyncClient) -> Any:
     """Give a Pydantic AI provider lifecycle ownership of our isolated client."""
     provider._own_http_client = client
     provider._http_client_factory = _isolated_model_http_client

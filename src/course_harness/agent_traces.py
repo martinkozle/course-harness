@@ -25,6 +25,7 @@ from typing import Any
 from pydantic_ai import RunContext
 from pydantic_ai.capabilities import (
     AbstractCapability,
+    CapabilityOrdering,
     WrapModelRequestHandler,
     WrapRunHandler,
     WrapToolExecuteHandler,
@@ -83,6 +84,14 @@ def _dump_messages(messages: list[ModelMessage]) -> list[dict[str, Any]]:
     return _without_binary_data(dumped)
 
 
+def _message_digest(message: dict[str, Any]) -> str:
+    # Run and Conversation identifiers are stamped on a request once it is committed, and
+    # are never sent to the provider, so they do not break prompt-cache reuse.
+    return _digest(
+        {key: value for key, value in message.items() if key not in {"run_id", "conversation_id"}}
+    )
+
+
 def _digest(value: object) -> str:
     encoded = json.dumps(value, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:16]
@@ -126,6 +135,11 @@ class AgentTrace(AbstractCapability[Any]):
         except OSError as error:
             logger.warning("Agent trace state could not be saved: %s", error)
 
+    def get_ordering(self) -> CapabilityOrdering:
+        # Innermost, so the trace sees each request after every other capability's
+        # `before_model_request`, such as history processing, exactly as it is sent.
+        return CapabilityOrdering(position="innermost")
+
     async def wrap_run(
         self, ctx: RunContext[Any], *, handler: WrapRunHandler
     ) -> AgentRunResult[Any]:
@@ -160,13 +174,9 @@ class AgentTrace(AbstractCapability[Any]):
                 }
             )
 
-    async def wrap_model_request(
-        self,
-        ctx: RunContext[Any],
-        *,
-        request_context: ModelRequestContext,
-        handler: WrapModelRequestHandler,
-    ) -> ModelResponse:
+    async def before_model_request(
+        self, ctx: RunContext[Any], request_context: ModelRequestContext
+    ) -> ModelRequestContext:
         # The request is written before it is sent, so a request that never returns shows.
         request: dict[str, Any] = {"event": "model_request", "at": _now(), "run_id": ctx.run_id}
         try:
@@ -174,6 +184,15 @@ class AgentTrace(AbstractCapability[Any]):
         except Exception as error:  # A trace must never stop a run.
             logger.warning("Agent trace could not describe a model request: %s", error)
         self._write(request)
+        return request_context
+
+    async def wrap_model_request(
+        self,
+        ctx: RunContext[Any],
+        *,
+        request_context: ModelRequestContext,
+        handler: WrapModelRequestHandler,
+    ) -> ModelResponse:
         record: dict[str, Any] = {"event": "model_response", "run_id": ctx.run_id}
         started = time.monotonic()
         try:
@@ -200,7 +219,7 @@ class AgentTrace(AbstractCapability[Any]):
     ) -> dict[str, Any]:
         messages = request_context.messages
         dumped = _dump_messages(messages)
-        hashes = [_digest(message) for message in dumped]
+        hashes = [_message_digest(message) for message in dumped]
         latest = messages[-1] if messages else None
         instructions = latest.instructions if isinstance(latest, ModelRequest) else None
         parameters = request_context.model_request_parameters

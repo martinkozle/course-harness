@@ -8,7 +8,7 @@ import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypeIs, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -487,7 +487,7 @@ def read_chat_history(
     return history
 
 
-def is_course_state_part(part: object) -> bool:
+def is_course_state_part(part: object) -> TypeIs[UserPromptPart]:
     """Whether a request part is a Course state snapshot rather than Course Author text."""
     return (
         isinstance(part, UserPromptPart)
