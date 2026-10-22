@@ -2737,7 +2737,11 @@ def create_app(
             template_file = tpl.profile_dir(templates_data, resolved_profile.id) / "template.pptx"
 
         if resolved_profile.id != tpl.BUILTIN_DEFAULT_ID:
-            issues = validate_export_mapping(resolved_profile, template_file)
+            issues = validate_export_mapping(
+                resolved_profile,
+                template_file,
+                used_layouts={slide.layout for slide in pres.slides},
+            )
             blocking = [i for i in issues if i["level"] == "blocking"]
             if blocking:
                 errors = "; ".join(i["message"] for i in blocking)

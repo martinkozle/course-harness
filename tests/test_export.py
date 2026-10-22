@@ -927,3 +927,31 @@ def test_code_slide_shows_only_the_code_in_a_monospace_font() -> None:
     assert [p.text for p in paragraphs] == ["def hello():", "    return 1"]
     assert all(run.font.name == "Courier New" for p in paragraphs for run in p.runs)
     assert all(p._p.pPr.find(qn("a:buNone")) is not None for p in paragraphs)
+
+
+def test_export_validation_ignores_a_broken_mapping_for_an_unused_layout(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.pptx"
+    template = PPTXPresentation()
+    layout = template.slide_layouts[3]
+    layout.placeholders[2].left = layout.placeholders[1].left
+    template.save(str(template_path))
+    profile = TemplateProfile(
+        id="tpl-000000000001",
+        name="Stacked content",
+        version=1,
+        template_filename="template.pptx",
+        slide_width=12_192_000,
+        slide_height=6_858_000,
+        slide_count=11,
+        layouts=[
+            TemplateLayoutMapping(
+                semantic_layout="two_column",
+                template_layout_index=3,
+                confidence=1,
+                rationale="Not actually two columns",
+            )
+        ],
+    )
+
+    assert validate_export_mapping(profile, template_path, used_layouts={"title"}) == []
+    assert validate_export_mapping(profile, template_path, used_layouts={"two_column"}) != []

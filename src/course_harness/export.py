@@ -541,7 +541,9 @@ TITLE_LIKE_TYPES = {1, 3}  # TITLE, CENTER_TITLE
 def validate_export_mapping(
     profile: TemplateProfile,
     template_path: Path | None = None,
+    used_layouts: set[str] | None = None,
 ) -> list[dict]:
+    """Check the template mapping, limited to ``used_layouts`` when an export names them."""
     issues: list[dict] = []
     if profile.id == "_builtin-default":
         return issues
@@ -555,6 +557,8 @@ def validate_export_mapping(
 
     for m in profile.layouts:
         semantic = m.semantic_layout
+        if used_layouts is not None and semantic not in used_layouts:
+            continue
         idx = m.template_layout_index
         if idx >= len(slide_layouts):
             issues.append(
