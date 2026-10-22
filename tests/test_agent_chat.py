@@ -15,6 +15,7 @@ from pydantic_ai.messages import (
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
+    RetryPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -1388,6 +1389,78 @@ async def test_autonomous_agent_can_create_a_semantic_revision_without_deadlock(
     assert [revision["summary"] for revision in revisions.json()] == [
         "Create the initial Course Plan"
     ]
+
+
+@pytest.mark.anyio
+async def test_rejected_course_plan_changes_are_returned_to_the_agent_to_fix(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    retries: list[str] = []
+
+    def plan_call(call_id: str, lectures: list[dict[str, object]]) -> dict[int, DeltaToolCall]:
+        command = {"title": "MCP", "audience": "Students", "lectures": lectures}
+        return {
+            0: DeltaToolCall(
+                name="replace_course_plan",
+                json_args=json.dumps({"command": command}),
+                tool_call_id=call_id,
+            )
+        }
+
+    async def correcting_model(
+        messages: list[ModelMessage], _info: AgentInfo
+    ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
+        retries.extend(
+            part.model_response()
+            for message in messages[-1:]
+            for part in message.parts
+            if isinstance(part, RetryPromptPart)
+        )
+        calls = sum(isinstance(message, ModelResponse) for message in messages)
+        if calls == 0:
+            yield plan_call(
+                "missing-source", [{"title": "One", "source_focus": ["source-123456abcdef"]}]
+            )
+        elif calls == 1:
+            yield plan_call("valid", [{"title": "One"}])
+        elif calls == 2:
+            yield plan_call("lost-ids", [{"title": "Renamed"}])
+        else:
+            yield "The Course Plan is ready."
+
+    app = create_app(
+        workspace,
+        provider_store_path=tmp_path / "provider",
+        chat_store_path=tmp_path / "chat",
+        agent_model=FunctionModel(stream_function=correcting_model),
+        provider_validator=_verified_capabilities,
+    )
+    run_input = {
+        "threadId": "course-agent",
+        "runId": "correcting-run",
+        "state": {},
+        "messages": [{"id": "user-1", "role": "user", "content": "Plan the Course."}],
+        "tools": [],
+        "context": [],
+        "forwardedProps": {"mode": "autonomous"},
+    }
+
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.put("/api/provider", json=_provider_request())
+        stream_status, _ = await _post_stream(app, "/api/agent", run_input)
+        state = await client.get("/api/workspace/current-state")
+
+    assert stream_status == 200
+    assert len(retries) == 2
+    assert "Source Focus references missing Source source-123456abcdef" in retries[0]
+    assert "must preserve existing Lecture IDs" in retries[1]
+    plan = read_course_plan(workspace)
+    assert plan is not None
+    assert [lecture.title for lecture in plan.lectures] == ["One"]
+    assert state.json()["validation"]["valid"] is True
 
 
 @pytest.mark.anyio

@@ -820,11 +820,14 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
     ) -> ToolReturn:
         """Replace the Course Plan through one validated application command."""
         protect_mutation(ctx)
-        plan = apply_course_plan_command(
-            ctx.deps.workspace,
-            command,
-            expected=_agent_precondition(ctx.deps, "course.yaml"),
-        )
+        try:
+            plan = apply_course_plan_command(
+                ctx.deps.workspace,
+                command,
+                expected=_agent_precondition(ctx.deps, "course.yaml"),
+            )
+        except ValueError as error:
+            raise ModelRetry(f"The Course Plan was not saved: {error}") from error
         confirm_mutation(ctx, {"course.yaml": serialize_course_plan(plan)})
         ctx.deps.course_state = CourseAgentState(
             course=plan,
