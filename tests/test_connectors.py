@@ -415,3 +415,13 @@ async def test_a_run_connects_only_when_a_connector_tool_is_called(tmp_path: Pat
     assert after_test == 1
     assert after_quiet_run == 1
     assert len(connections) == 2
+
+
+@pytest.mark.anyio
+async def test_connector_client_accepts_the_mcp_redirect_request_without_following_it() -> None:
+    from course_harness.connector_tools import _http_client
+
+    # FastMCP's streamable HTTP transport asks its client factory to follow redirects.
+    async with _http_client(headers={}, auth=None, follow_redirects=True) as client:
+        assert client.follow_redirects is False
+        assert client.trust_env is False

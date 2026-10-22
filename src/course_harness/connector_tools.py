@@ -44,9 +44,10 @@ def _http_client(
     headers: dict[str, str] | None = None,
     timeout: httpx2.Timeout | None = None,
     auth: httpx2.Auth | None = None,
+    follow_redirects: bool = False,  # noqa: ARG001
 ) -> httpx2.AsyncClient:
     # Like every product connector, ignore ambient proxy settings and never follow a
-    # redirect outside the configured endpoint.
+    # redirect outside the configured endpoint, even when the MCP client asks to.
     return httpx2.AsyncClient(
         headers=headers, timeout=timeout, auth=auth, follow_redirects=False, trust_env=False
     )
