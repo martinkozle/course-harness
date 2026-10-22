@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -55,10 +56,16 @@ def search_db_path(cache_dir: Path) -> Path:
     return cache_dir / "fts" / "search.db"
 
 
+# SQLite allows one writer at a time; parallel Source admissions take turns here
+# instead of failing with "database is locked" after the default five seconds.
+_WRITE_LOCK = threading.Lock()
+WRITE_TIMEOUT_SECONDS = 60
+
+
 def open_search_db(cache_dir: Path) -> sqlite3.Connection:
     path = search_db_path(cache_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), timeout=WRITE_TIMEOUT_SECONDS)
     conn.execute("PRAGMA journal_mode=WAL")
 
     cursor = conn.execute(
@@ -90,36 +97,39 @@ def open_search_db(cache_dir: Path) -> sqlite3.Connection:
 
 
 def index_resource(cache_dir: Path, content_hash: str, text: str) -> None:
-    conn = open_search_db(cache_dir)
-
-    conn.execute("DELETE FROM source_content WHERE content_hash = ?", (content_hash,))
-    conn.execute("DELETE FROM content_lines WHERE content_hash = ?", (content_hash,))
-
     offsets = _line_offsets(text)
     lines = text.split("\n")
-    for line_number, line_text in enumerate(lines):
-        conn.execute(
-            "INSERT INTO source_content (content_hash, line_number, content) VALUES (?, ?, ?)",
-            (content_hash, line_number, line_text),
-        )
-        conn.execute(
-            "INSERT INTO content_lines (content_hash, line_number, char_offset) VALUES (?, ?, ?)",
-            (content_hash, line_number, offsets[line_number]),
-        )
-
-    conn.commit()
-    conn.close()
+    with _WRITE_LOCK:
+        conn = open_search_db(cache_dir)
+        try:
+            conn.execute("DELETE FROM source_content WHERE content_hash = ?", (content_hash,))
+            conn.execute("DELETE FROM content_lines WHERE content_hash = ?", (content_hash,))
+            conn.executemany(
+                "INSERT INTO source_content (content_hash, line_number, content) VALUES (?, ?, ?)",
+                [(content_hash, number, line) for number, line in enumerate(lines)],
+            )
+            conn.executemany(
+                "INSERT INTO content_lines (content_hash, line_number, char_offset) "
+                "VALUES (?, ?, ?)",
+                [(content_hash, number, offsets[number]) for number in range(len(lines))],
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
 
 def deindex_resource(cache_dir: Path, content_hash: str) -> None:
     path = search_db_path(cache_dir)
     if not path.is_file():
         return
-    conn = sqlite3.connect(str(path))
-    conn.execute("DELETE FROM source_content WHERE content_hash = ?", (content_hash,))
-    conn.execute("DELETE FROM content_lines WHERE content_hash = ?", (content_hash,))
-    conn.commit()
-    conn.close()
+    with _WRITE_LOCK:
+        conn = sqlite3.connect(str(path), timeout=WRITE_TIMEOUT_SECONDS)
+        try:
+            conn.execute("DELETE FROM source_content WHERE content_hash = ?", (content_hash,))
+            conn.execute("DELETE FROM content_lines WHERE content_hash = ?", (content_hash,))
+            conn.commit()
+        finally:
+            conn.close()
 
 
 def search_raw(
