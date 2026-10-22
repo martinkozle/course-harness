@@ -1765,7 +1765,7 @@ def create_app(
             nonlocal run_snapshot
             if run_snapshot is None:
                 raise RuntimeError("Course Agent run boundary was unavailable")
-            run_snapshot = checkpoint_run_mutation(active, run_snapshot)
+            run_snapshot = checkpoint_run_mutation(active, run_snapshot, written)
             if run_provenance_permitted and written:
                 # Trust each completed edit now, so an interrupted run leaves only
                 # its unfinished work as Workspace Drift. Bytes that no longer match

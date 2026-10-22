@@ -15,11 +15,13 @@ from course_harness.course_plan import (
     LectureInput,
     create_course_plan,
     read_course_plan,
+    serialize_course_plan,
     write_course_plan,
 )
 from course_harness.presentation import Presentation, SlideCitation, TitleSlide, write_presentation
 from course_harness.workspace_history import (
     DriftAcceptRequest,
+    InvalidAgentMutationError,
     ReconciliationApplyRequest,
     ReconciliationFile,
     RevisionCreateRequest,
@@ -1044,6 +1046,35 @@ def test_run_checkpoint_preserves_external_invalid_drift_after_agent_work(tmp_pa
     assert state.validation.valid is False
     assert state.drift == "drift"
     assert (workspace / "course.yaml").read_text(encoding="utf-8") == "not: [valid"
+
+
+def test_invalid_agent_mutation_is_undone_so_a_new_course_is_not_left_stuck(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    initialize_repository(workspace)
+    plan = create_course_plan(
+        CoursePlanInput(
+            title="Course",
+            audience="Authors",
+            lectures=[LectureInput(title="Lecture", source_focus=["source-123456abcdef"])],
+        )
+    )
+
+    snapshot = begin_run_boundary(workspace)
+    mark_run_mutation(workspace, snapshot)
+    write_course_plan(workspace, plan)
+    with pytest.raises(InvalidAgentMutationError) as raised:
+        checkpoint_run_mutation(workspace, snapshot, {"course.yaml": serialize_course_plan(plan)})
+    history.finish_run_boundary(workspace, snapshot)
+    state = read_current_state(workspace)
+
+    assert raised.value.reverted is True
+    assert any("source-123456abcdef" in finding for finding in raised.value.findings)
+    assert not (workspace / "course.yaml").exists()
+    assert state.validation.valid is True
+    assert state.changes == []
 
 
 def test_completed_run_and_transaction_release_their_recovery_refs(tmp_path: Path) -> None:

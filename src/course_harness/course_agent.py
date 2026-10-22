@@ -12,7 +12,7 @@ from uuid import uuid4
 import httpx2
 from ag_ui.core import ActivitySnapshotEvent, EventType, StateSnapshotEvent
 from pydantic import BaseModel, ConfigDict, Field
-from pydantic_ai import Agent, BinaryContent, RunContext, ToolReturn
+from pydantic_ai import Agent, BinaryContent, ModelRetry, RunContext, ToolReturn
 from pydantic_ai.capabilities import ProcessHistory
 from pydantic_ai.messages import (
     ModelMessage,
@@ -77,6 +77,7 @@ from course_harness.template_profiles import (
 )
 from course_harness.workspace_history import (
     MAX_REVISION_SUMMARY_CHARACTERS,
+    InvalidAgentMutationError,
     ReconciliationApplyRequest,
     ReconciliationContext,
     ReconciliationFile,
@@ -732,7 +733,16 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         ctx: RunContext[CourseAgentDeps], written: Mapping[str, bytes | None]
     ) -> None:
         if ctx.deps.after_mutation is not None:
-            ctx.deps.after_mutation(written)
+            try:
+                ctx.deps.after_mutation(written)
+            except InvalidAgentMutationError as error:
+                if not error.reverted:
+                    raise
+                raise ModelRetry(
+                    "That change was rejected and undone because it left the Course invalid: "
+                    + "; ".join(error.findings)
+                    + ". Fix these problems and try again."
+                ) from error
         for path, content in written.items():
             _record_agent_output(ctx.deps, path, content)
 
@@ -745,6 +755,7 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
     agent = Agent(
         deps_type=CourseAgentDeps,
         name="course-agent",
+        retries=3,
         capabilities=[ProcessHistory[CourseAgentDeps](record_course_state)],
         instructions=(
             "You are the persistent Course Agent. Collaborate with the Course Author to create "

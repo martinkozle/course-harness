@@ -1216,15 +1216,51 @@ def mark_run_mutation(workspace: Path, snapshot: str) -> None:
     _ACTIVE_RUNS[workspace.resolve()] = (snapshot, baseline_valid, True, ref)
 
 
+class InvalidAgentMutationError(ValueError):
+    """An agent mutation left Current State invalid."""
+
+    def __init__(self, findings: list[str], *, reverted: bool) -> None:
+        self.findings = findings
+        self.reverted = reverted
+        outcome = "It was undone" if reverted else "It could not be undone"
+        super().__init__(
+            f"Course Agent mutation did not produce valid Current State. {outcome}: "
+            + "; ".join(findings)
+        )
+
+
 @_serialized
-def checkpoint_run_mutation(workspace: Path, snapshot: str) -> str:
-    """Record the exact valid tree reached by a completed agent mutation."""
+def checkpoint_run_mutation(
+    workspace: Path, snapshot: str, written: Mapping[str, bytes | None] | None = None
+) -> str:
+    """Record the exact valid tree reached by a completed agent mutation.
+
+    An invalid result is reverted to the last checkpoint for the paths in ``written``,
+    but only while those paths still hold exactly what the agent wrote.
+    """
     active = _parse_run_boundary(_read_private_record(workspace, RUN_BOUNDARY_FILE))
     if active is None or active[0] != "active" or active[1] != snapshot or not active[3]:
         raise WorkspaceHistoryError(HISTORY_UNSAFE)
     _phase, _snapshot, baseline_valid, _mutating, previous_ref = active
-    if not _read_current_state(workspace).validation.valid:
-        raise ValueError("Course Agent mutation did not produce valid Current State")
+    validation = _read_current_state(workspace).validation
+    if not validation.valid:
+        reverted = False
+        if written:
+            target = _tree_blobs(workspace, snapshot)
+            reverted = restore_canonical_mutation(
+                workspace,
+                expected_current={
+                    path: CanonicalFile.missing()
+                    if content is None
+                    else CanonicalFile(content=content, mode=0o644)
+                    for path, content in written.items()
+                },
+                restore={path: _canonical_file(target.get(path)) for path in written},
+            )
+        if reverted and _read_current_state(workspace).validation.valid:
+            _write_run_boundary(workspace, "active", snapshot, baseline_valid, False, previous_ref)
+            _ACTIVE_RUNS[workspace.resolve()] = (snapshot, baseline_valid, False, previous_ref)
+        raise InvalidAgentMutationError(validation.findings, reverted=reverted)
     ref, checkpoint = _recovery_snapshot(workspace)
     _write_run_boundary(workspace, "active", checkpoint, baseline_valid, False, ref)
     _ACTIVE_RUNS[workspace.resolve()] = (checkpoint, baseline_valid, False, ref)
