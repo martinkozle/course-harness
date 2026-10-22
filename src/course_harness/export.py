@@ -39,6 +39,7 @@ from course_harness.template_slots import (
     find_slot_placeholder,
     find_slot_placeholder_or,
     find_subtitle_or_body_placeholder,
+    find_subtitle_placeholder,
     find_title_placeholder,
 )
 
@@ -358,9 +359,15 @@ def _place_image(pptx_slide, placeholder, image: SourceImage) -> None:
     )
 
 
+def find_quote_body_placeholder(slide):
+    return find_body_placeholder(slide) or find_subtitle_placeholder(slide)
+
+
 def _populate_quote_slide(slide: QuoteSlide, pptx_slide, slot_mappings: dict[str, int]) -> None:
     title_ph = find_slot_placeholder_or(pptx_slide, slot_mappings, "title", find_title_placeholder)
-    body_ph = find_slot_placeholder_or(pptx_slide, slot_mappings, "body", find_body_placeholder)
+    body_ph = find_slot_placeholder_or(
+        pptx_slide, slot_mappings, "body", find_quote_body_placeholder
+    )
     if title_ph and slide.title:
         title_ph.text_frame.text = slide.title
     if body_ph:
@@ -532,7 +539,8 @@ PLACEHOLDER_REQUIREMENTS: dict[str, dict[str, str]] = {
     "closing": {"title": "TITLE or CENTER_TITLE"},
     "code": {"title": "TITLE or CENTER_TITLE", "body": "BODY or OBJECT"},
     "image": {},
-    "quote": {"title": "TITLE or CENTER_TITLE", "body": "BODY or OBJECT"},
+    # A template's own Quote layout usually holds the quote in a subtitle placeholder.
+    "quote": {"title": "TITLE or CENTER_TITLE", "body": "BODY, OBJECT or SUBTITLE"},
 }
 
 TITLE_LIKE_TYPES = {1, 3}  # TITLE, CENTER_TITLE
@@ -588,11 +596,12 @@ def validate_export_mapping(
             if slot in m.slot_mappings:
                 required_indices[slot] = m.slot_mappings[slot]
                 continue
-            fallback = (
-                find_title_placeholder(layout)
-                if ph_desc == "TITLE or CENTER_TITLE"
-                else find_body_placeholder(layout)
-            )
+            if ph_desc == "TITLE or CENTER_TITLE":
+                fallback = find_title_placeholder(layout)
+            elif ph_desc == "BODY, OBJECT or SUBTITLE":
+                fallback = find_quote_body_placeholder(layout)
+            else:
+                fallback = find_body_placeholder(layout)
             required_indices[slot] = (
                 fallback.placeholder_format.idx if fallback is not None else None
             )
@@ -647,7 +656,10 @@ def validate_export_mapping(
                         ),
                     }
                 )
-            elif ph_desc == "BODY or OBJECT" and actual not in CONTENT_LIKE_TYPES:
+            elif (ph_desc == "BODY or OBJECT" and actual not in CONTENT_LIKE_TYPES) or (
+                ph_desc == "BODY, OBJECT or SUBTITLE"
+                and actual not in CONTENT_LIKE_TYPES | {PP_PLACEHOLDER.SUBTITLE}
+            ):
                 issues.append(
                     {
                         "level": "blocking",

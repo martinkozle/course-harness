@@ -955,3 +955,28 @@ def test_export_validation_ignores_a_broken_mapping_for_an_unused_layout(tmp_pat
 
     assert validate_export_mapping(profile, template_path, used_layouts={"title"}) == []
     assert validate_export_mapping(profile, template_path, used_layouts={"two_column"}) != []
+
+
+def test_quote_text_fills_a_quote_layout_with_only_title_and_subtitle(tmp_path: Path) -> None:
+    template_path = tmp_path / "template.pptx"
+    PPTXPresentation().save(str(template_path))
+    profile = TemplateProfile(
+        id="tpl-000000000001",
+        name="Quote by subtitle",
+        version=1,
+        template_filename="template.pptx",
+        slide_width=12_192_000,
+        slide_height=6_858_000,
+        slide_count=11,
+        layouts=[
+            TemplateLayoutMapping(
+                semantic_layout="quote",
+                template_layout_index=0,
+                confidence=1,
+                rationale="Title Slide has a centered title and a subtitle",
+                slot_mappings={"title": 0},
+            )
+        ],
+    )
+
+    assert validate_export_mapping(profile, template_path) == []
