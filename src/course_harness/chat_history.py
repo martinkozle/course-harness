@@ -20,6 +20,7 @@ from pydantic_ai.messages import (
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
+    RetryPromptPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -75,6 +76,7 @@ class ChatMessage(BaseModel):
 
 class PendingApproval(BaseModel):
     id: str
+    ids: list[str]
     message: str
 
 
@@ -422,23 +424,40 @@ def delete_conversation(
 
 
 def _pending_approval(history: list[ModelMessage]) -> PendingApproval | None:
-    returned_ids = {
+    # Only the latest response can still wait for approval; earlier calls were
+    # answered by a result or a retry prompt.
+    response_index = next(
+        (
+            index
+            for index in range(len(history) - 1, -1, -1)
+            if isinstance(history[index], ModelResponse)
+        ),
+        None,
+    )
+    if response_index is None:
+        return None
+    answered_ids = {
         part.tool_call_id
-        for message in history
+        for message in history[response_index + 1 :]
         if isinstance(message, ModelRequest)
         for part in message.parts
-        if isinstance(part, ToolReturnPart)
+        if isinstance(part, ToolReturnPart | RetryPromptPart)
     }
-    for message in reversed(history):
-        if not isinstance(message, ModelResponse):
-            continue
-        for part in reversed(message.parts):
-            if isinstance(part, ToolCallPart) and part.tool_call_id not in returned_ids:
-                return PendingApproval(
-                    id=f"int-{part.tool_call_id}",
-                    message=f"Approve {part.tool_name}({part.args_as_json_str()})?",
-                )
-    return None
+    response = history[response_index]
+    assert isinstance(response, ModelResponse)
+    pending = [
+        part
+        for part in response.parts
+        if isinstance(part, ToolCallPart) and part.tool_call_id not in answered_ids
+    ]
+    if not pending:
+        return None
+    first = pending[0]
+    return PendingApproval(
+        id=f"int-{first.tool_call_id}",
+        ids=[f"int-{part.tool_call_id}" for part in pending],
+        message=f"Approve {first.tool_name}({first.args_as_json_str()})?",
+    )
 
 
 def _has_pending_approval(store_path: Path, workspace: Path, conversation_id: str) -> bool:

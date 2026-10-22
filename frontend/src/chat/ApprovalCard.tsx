@@ -110,6 +110,7 @@ export function ApprovalCard({
 	onResolve: (approved: boolean) => void;
 }) {
 	const parsed = parseApproval(approval);
+	const others = (approval.ids?.length ?? 1) - 1;
 	const lectureTitle = (lectureId: string | null | undefined) =>
 		course?.lectures.find((lecture) => lecture.id === lectureId)?.title ??
 		"this Lecture";
@@ -218,6 +219,12 @@ export function ApprovalCard({
 			</div>
 			{body}
 			{scope ? <p className="meta">{scope}</p> : null}
+			{others > 0 ? (
+				<p className="meta">
+					Your choice also applies to {others} other proposed{" "}
+					{others === 1 ? "change" : "changes"} from this step.
+				</p>
+			) : null}
 			<div className="approval-actions">
 				<button
 					type="button"

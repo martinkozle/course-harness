@@ -2,6 +2,8 @@ import { responseError } from "./api";
 
 export type AgentInterrupt = {
 	id: string;
+	// Every interrupt resolved together with this one, including itself.
+	ids?: string[];
 	message?: string;
 };
 

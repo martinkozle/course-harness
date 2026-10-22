@@ -318,7 +318,11 @@ export function useCourseAgent({
 							await callbacks.current.onPresentationsChange();
 					},
 					onInterrupt: (interrupt) => {
-						setApproval(interrupt);
+						setApproval((current) =>
+							current
+								? { ...current, ids: [...(current.ids ?? [current.id]), interrupt.id] }
+								: interrupt,
+						);
 					},
 				},
 				controller.signal,
@@ -519,9 +523,11 @@ export function useCourseAgent({
 		const pending = approval;
 		setApproval(null);
 		void run([], {
-			resume: [
-				{ interruptId: pending.id, status: "resolved", payload: { approved } },
-			],
+			resume: (pending.ids ?? [pending.id]).map((interruptId) => ({
+				interruptId,
+				status: "resolved",
+				payload: { approved },
+			})),
 			mode: "guided",
 		});
 	}

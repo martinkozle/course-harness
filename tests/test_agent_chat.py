@@ -1473,6 +1473,7 @@ async def test_rejected_course_plan_changes_are_returned_to_the_agent_to_fix(
         await client.put("/api/provider", json=_provider_request())
         stream_status, _ = await _post_stream(app, "/api/agent", run_input)
         state = await client.get("/api/workspace/current-state")
+        chat = await client.get("/api/chat")
 
     assert stream_status == 200
     assert len(retries) == 2
@@ -1482,6 +1483,7 @@ async def test_rejected_course_plan_changes_are_returned_to_the_agent_to_fix(
     assert plan is not None
     assert [lecture.title for lecture in plan.lectures] == ["One"]
     assert state.json()["validation"]["valid"] is True
+    assert chat.json()["approval"] is None
 
 
 @pytest.mark.anyio
