@@ -434,10 +434,32 @@ def apply_course_plan_command(
         lecture.id for lecture in command.lectures if lecture.id in existing_by_id
     }
     if existing.lectures and not supplied_existing_ids and not command.replace_all_lectures:
-        raise ValueError(
-            "Revising a Course Plan must preserve existing Lecture IDs. Set "
-            "replace_all_lectures only when the Course Author explicitly approves replacing them."
-        )
+        # Before any Presentation links to a Lecture, a same-length revision that
+        # omits every ID can keep the existing IDs in order without losing work.
+        if (
+            len(command.lectures) == len(existing.lectures)
+            and all(lecture.id is None for lecture in command.lectures)
+            and all(lecture.presentation_id is None for lecture in existing.lectures)
+        ):
+            command = command.model_copy(
+                update={
+                    "lectures": [
+                        lecture.model_copy(update={"id": current.id})
+                        for lecture, current in zip(
+                            command.lectures, existing.lectures, strict=True
+                        )
+                    ]
+                }
+            )
+        else:
+            existing_ids = ", ".join(
+                f"{lecture.id} ({lecture.title})" for lecture in existing.lectures
+            )
+            raise ValueError(
+                "Revising a Course Plan must preserve existing Lecture IDs: set the id field "
+                f"of each kept Lecture to one of {existing_ids}. Set replace_all_lectures only "
+                "when the Course Author explicitly approves replacing them."
+            )
     used_ids: set[str] = set()
     lectures: list[Lecture] = []
     for command_lecture, draft_lecture in zip(command.lectures, draft.lectures, strict=True):

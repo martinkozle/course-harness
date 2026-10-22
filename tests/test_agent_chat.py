@@ -156,6 +156,27 @@ def test_course_plan_revisions_cannot_silently_replace_lecture_identity(tmp_path
     with pytest.raises(ValueError, match="must preserve existing Lecture IDs"):
         apply_course_plan_command(
             workspace,
+            _plan_command(lectures=[{"title": "Renamed foundations"}, {"title": "Added"}]),
+        )
+
+    by_position = apply_course_plan_command(
+        workspace,
+        _plan_command(lectures=[{"title": "Renamed foundations"}]),
+    )
+    assert by_position.lectures[0].id == original.lectures[0].id
+    write_course_plan(
+        workspace,
+        original.model_copy(
+            update={
+                "lectures": [
+                    original.lectures[0].model_copy(update={"presentation_id": "pres-123456abcdef"})
+                ]
+            }
+        ),
+    )
+    with pytest.raises(ValueError, match="must preserve existing Lecture IDs"):
+        apply_course_plan_command(
+            workspace,
             _plan_command(lectures=[{"title": "Renamed foundations"}]),
         )
 
@@ -1426,7 +1447,7 @@ async def test_rejected_course_plan_changes_are_returned_to_the_agent_to_fix(
         elif calls == 1:
             yield plan_call("valid", [{"title": "One"}])
         elif calls == 2:
-            yield plan_call("lost-ids", [{"title": "Renamed"}])
+            yield plan_call("lost-ids", [{"title": "Renamed"}, {"title": "Two"}])
         else:
             yield "The Course Plan is ready."
 
