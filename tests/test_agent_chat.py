@@ -193,6 +193,41 @@ def test_course_plan_revisions_cannot_silently_replace_lecture_identity(tmp_path
     assert updated.template_profile_version == original.template_profile_version
 
 
+def test_course_plan_revision_keeps_lectures_sent_back_by_title_without_ids(
+    tmp_path: Path,
+) -> None:
+    from course_harness.course_plan import write_course_plan
+
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    original = apply_course_plan_command(
+        workspace,
+        _plan_command(lectures=[{"title": "Foundations"}, {"title": "Estimation"}]),
+    )
+    presented = original.lectures[0].model_copy(update={"presentation_id": "pres-123456abcdef"})
+    write_course_plan(
+        workspace,
+        original.model_copy(update={"lectures": [presented, original.lectures[1]]}),
+    )
+
+    updated = apply_course_plan_command(
+        workspace,
+        _plan_command(
+            lectures=[
+                {"title": "Foundations", "source_focus": []},
+                {"title": "Estimation"},
+                {"title": "Sensitivity analysis"},
+            ]
+        ),
+    )
+
+    assert [lecture.id for lecture in updated.lectures[:2]] == [
+        lecture.id for lecture in original.lectures
+    ]
+    assert updated.lectures[0].presentation_id == "pres-123456abcdef"
+    assert updated.lectures[2].id not in {lecture.id for lecture in original.lectures}
+
+
 def test_agent_course_command_preserves_a_same_path_external_edit_during_save(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

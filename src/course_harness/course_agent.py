@@ -3,6 +3,7 @@ import enum
 import json
 import logging
 import subprocess
+from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -430,6 +431,28 @@ def apply_course_plan_command(
         return draft
 
     existing_by_id = {lecture.id: lecture for lecture in existing.lectures}
+    # A Lecture sent back without its ID but with its exact current title is the
+    # same Lecture; models often drop IDs when only revising Source Focus.
+    claimed_ids = {lecture.id for lecture in command.lectures if lecture.id is not None}
+    title_counts = Counter(lecture.title for lecture in existing.lectures)
+    command_title_counts = Counter(lecture.title for lecture in command.lectures)
+    id_by_title = {
+        lecture.title: lecture.id
+        for lecture in existing.lectures
+        if title_counts[lecture.title] == 1
+        and command_title_counts[lecture.title] == 1
+        and lecture.id not in claimed_ids
+    }
+    command = command.model_copy(
+        update={
+            "lectures": [
+                lecture.model_copy(update={"id": id_by_title[lecture.title]})
+                if lecture.id is None and lecture.title in id_by_title
+                else lecture
+                for lecture in command.lectures
+            ]
+        }
+    )
     supplied_existing_ids = {
         lecture.id for lecture in command.lectures if lecture.id in existing_by_id
     }
