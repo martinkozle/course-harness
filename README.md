@@ -1,7 +1,15 @@
 # Course Harness
 
+[![PyPI](https://img.shields.io/pypi/v/course-harness)](https://pypi.org/project/course-harness/)
+[![Python](https://img.shields.io/pypi/pyversions/course-harness)](https://pypi.org/project/course-harness/)
+[![License: MIT](https://img.shields.io/pypi/l/course-harness)](https://github.com/martinkozle/course-harness/blob/main/LICENSE)
+
 Course Harness is a local-first application for creating source-grounded Courses in a
-human-readable Course Workspace.
+human-readable Course Workspace. You plan the Course with a Course Agent, ground it in papers and
+documents you choose, and get Lectures with speaker notes and citations that export to PowerPoint
+in your own template.
+
+![A Course Agent conversation beside a cited Lecture Slide](https://raw.githubusercontent.com/martinkozle/course-harness/main/docs/images/workspace.png)
 
 ## Install and launch
 
@@ -61,6 +69,25 @@ network you trust.
   and works without a key.
 - **History**: save and restore Course Revisions, publish Releases, and export Lectures to
   PowerPoint.
+
+<table>
+  <tr>
+    <td width="50%"><img src="https://raw.githubusercontent.com/martinkozle/course-harness/main/docs/images/slides.png" alt="A Slide with its purpose, speaker notes, and citations"></td>
+    <td width="50%"><img src="https://raw.githubusercontent.com/martinkozle/course-harness/main/docs/images/sources.png" alt="The Sources a Course can cite"></td>
+  </tr>
+  <tr>
+    <td align="center">Slides with purpose, speaker notes, and citations</td>
+    <td align="center">Sources the Course Agent can read and cite</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="https://raw.githubusercontent.com/martinkozle/course-harness/main/docs/images/course-plan.png" alt="A Course Plan with three Lectures"></td>
+    <td width="50%"><img src="https://raw.githubusercontent.com/martinkozle/course-harness/main/docs/images/history.png" alt="Course Revisions in History"></td>
+  </tr>
+  <tr>
+    <td align="center">The Course Plan</td>
+    <td align="center">Course Revisions you can restore</td>
+  </tr>
+</table>
 
 Canonical Course state lives in readable files in the Course Workspace. Caches, conversations, and
 credentials live in platform-native user locations outside it; credentials go to the operating
