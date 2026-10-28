@@ -301,8 +301,15 @@
 
 .citation-list {
 	display: grid;
+	grid-template-columns: minmax(0, 1fr);
 	justify-items: start;
 	gap: 6px;
+}
+
+/* Keep long labels inside the panel so they truncate instead of overflowing. */
+.citation-list > li {
+	max-width: 100%;
+	min-width: 0;
 }
 
 .citation-chip:disabled {

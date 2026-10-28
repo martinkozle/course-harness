@@ -1109,7 +1109,9 @@ function SlideDetails({
 										}}
 									>
 										<span className="citation-marker">{index + 1}</span>
-										<span className="citation-label">{citation.label}</span>
+										<span className="citation-label" title={citation.label}>
+											{citation.label}
+										</span>
 										{citation.line_start != null ? (
 											<span className="citation-where">
 												{lineRangeLabel(
