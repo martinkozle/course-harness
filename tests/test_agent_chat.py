@@ -1454,6 +1454,7 @@ async def test_rejected_course_plan_changes_are_returned_to_the_agent_to_fix(
     workspace = tmp_path / "course"
     workspace.mkdir()
     retries: list[str] = []
+    returns: list[str] = []
 
     def plan_call(call_id: str, lectures: list[dict[str, object]]) -> dict[int, DeltaToolCall]:
         command = {"title": "MCP", "audience": "Students", "lectures": lectures}
@@ -1473,6 +1474,12 @@ async def test_rejected_course_plan_changes_are_returned_to_the_agent_to_fix(
             for message in messages[-1:]
             for part in message.parts
             if isinstance(part, RetryPromptPart)
+        )
+        returns.extend(
+            str(part.content)
+            for message in messages[-1:]
+            for part in message.parts
+            if isinstance(part, ToolReturnPart)
         )
         calls = sum(isinstance(message, ModelResponse) for message in messages)
         if calls == 0:
@@ -1517,6 +1524,10 @@ async def test_rejected_course_plan_changes_are_returned_to_the_agent_to_fix(
     plan = read_course_plan(workspace)
     assert plan is not None
     assert [lecture.title for lecture in plan.lectures] == ["One"]
+    # The saved Lecture IDs reach the agent in the same turn, before any new Course state.
+    assert returns == [
+        f"The validated Course Plan was saved. Its Lectures:\n- {plan.lectures[0].id}: One"
+    ]
     assert state.json()["validation"]["valid"] is True
     assert chat.json()["approval"] is None
 

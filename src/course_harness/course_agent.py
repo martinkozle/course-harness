@@ -530,7 +530,11 @@ def apply_presentation_command(
 
     lecture = next((lec for lec in course_plan.lectures if lec.id == command.lecture_id), None)
     if lecture is None:
-        raise ValueError(f"Lecture does not exist in this Course Plan: {command.lecture_id}")
+        lecture_ids = ", ".join(f"{lec.id} ({lec.title})" for lec in course_plan.lectures)
+        raise ValueError(
+            f"Lecture does not exist in this Course Plan: {command.lecture_id}. "
+            f"Use one of {lecture_ids}."
+        )
 
     existing = read_presentation_for_lecture(workspace, command.lecture_id)
 
@@ -879,8 +883,9 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             sources=ctx.deps.course_state.sources,
             presentations=ctx.deps.course_state.presentations,
         )
+        lecture_ids = "\n".join(f"- {lecture.id}: {lecture.title}" for lecture in plan.lectures)
         return ToolReturn(
-            return_value="The validated Course Plan was saved.",
+            return_value=f"The validated Course Plan was saved. Its Lectures:\n{lecture_ids}",
             metadata=[
                 ActivitySnapshotEvent(
                     type=EventType.ACTIVITY_SNAPSHOT,
