@@ -440,6 +440,12 @@ def _create_annotated_tag(workspace: Path, tag: str, revision: str, manifest: by
     try:
         run_git(
             workspace,
+            "-c",
+            "tag.gpgSign=false",
+            "-c",
+            "user.name=Course Harness",
+            "-c",
+            "user.email=course-harness@localhost",
             "tag",
             "--annotate",
             "--cleanup=verbatim",

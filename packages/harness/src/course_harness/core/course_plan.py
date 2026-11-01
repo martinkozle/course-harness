@@ -8,6 +8,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from course_harness.core.canonical_mutation import CanonicalFile, apply_canonical_mutation
+from course_harness.core.canonical_yaml import load_canonical_yaml
 
 Goal = Annotated[str, Field(min_length=1, max_length=500)]
 Outcome = Annotated[str, Field(min_length=1, max_length=500)]
@@ -90,7 +91,7 @@ def read_course_plan(workspace: Path) -> CoursePlan | None:
     if not course_path.exists():
         return None
     try:
-        payload = yaml.safe_load(course_path.read_text(encoding="utf-8"))
+        payload = load_canonical_yaml(course_path.read_text(encoding="utf-8"))
         return CoursePlan.model_validate(payload)
     except (OSError, UnicodeError, yaml.YAMLError, ValidationError) as error:
         raise InvalidCoursePlan(str(error)) from error

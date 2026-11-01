@@ -4,6 +4,10 @@ A Release is an annotated ``course-release/<slug>`` tag whose message is the can
 manifest and whose commit holds the canonical Course files. Everything here reads Git objects
 with ``git cat-file``, ``git ls-tree`` and ``git for-each-ref``: it works the same on a Course
 Workspace and on a bare mirror, never checks anything out, and never runs hooks.
+
+A mirror is untrusted. Git runs against the named repository only, without user or system
+configuration; every object's size is checked before it is read; canonical YAML may not use
+anchors or aliases; and reading one Release has a cumulative byte and time budget.
 """
 
 from __future__ import annotations
@@ -15,7 +19,10 @@ import re
 import selectors
 import subprocess
 import time
-from contextlib import suppress
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -23,6 +30,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from course_harness.core.canonical_yaml import load_canonical_yaml
 from course_harness.core.course_plan import CoursePlan
 from course_harness.core.presentation import Presentation
 from course_harness.core.release_validation import (
@@ -39,6 +47,9 @@ MAX_MANIFEST_BYTES = 512_000
 MAX_ARTIFACT_BYTES = 64_000_000
 MAX_RELEASES = 10_000
 MAX_CANONICAL_BLOB_BYTES = 8_000_000
+MAX_TAG_OBJECT_BYTES = MAX_MANIFEST_BYTES + 16_000
+MAX_RELEASE_READ_BYTES = 64_000_000
+RELEASE_READ_SECONDS = 30
 SLUG_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\Z")
 OID_PATTERN = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 
@@ -104,40 +115,156 @@ class CourseRelease(BaseModel):
     artifacts: list[ReleaseArtifact] = Field(default_factory=list, max_length=1_000)
 
 
+@dataclass(frozen=True)
+class RejectedTag:
+    """A Release tag that is not a valid Release, and why."""
+
+    name: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class ReleaseScan:
+    """Valid Releases, newest first, and the Release tags that were rejected."""
+
+    releases: list[CourseRelease]
+    rejected: list[RejectedTag]
+
+    @property
+    def newest(self) -> CourseRelease | None:
+        return self.releases[0] if self.releases else None
+
+
+@dataclass
+class ReadBudget:
+    """What reading one Release may still spend."""
+
+    deadline: float
+    remaining_bytes: int
+
+
+ACTIVE_READ_BUDGET: ContextVar[ReadBudget | None] = ContextVar("release_read_budget", default=None)
+
+
 def list_releases(repository: Path) -> list[CourseRelease]:
-    """List valid immutable Release manifests in a repository, newest tag first."""
-    result = run_git(
-        repository, "for-each-ref", "--format=%(refname:strip=2)", "refs/tags/course-release"
+    """List valid Releases, newest first; raise ``ReleaseError`` if any Release tag is invalid."""
+    scan = scan_releases(repository)
+    if scan.rejected:
+        raise ReleaseError(scan.rejected[0].reason)
+    return scan.releases
+
+
+def scan_releases(repository: Path) -> ReleaseScan:
+    """Read every Release tag, keeping valid Releases and why the other tags were rejected.
+
+    One bad tag never hides the others. Releases are ordered newest first by publication time.
+    """
+    valid: list[CourseRelease] = []
+    rejected: list[RejectedTag] = []
+    for name in release_tag_names(repository):
+        try:
+            release = read_release_tag(repository, name)
+        except ReleaseError as error:
+            rejected.append(RejectedTag(name=display_tag_name(name), reason=str(error)))
+            continue
+        if release is not None:
+            valid.append(release)
+    return ReleaseScan(releases=sorted(valid, key=published_time, reverse=True), rejected=rejected)
+
+
+def newest_release(repository: Path) -> ReleaseScan:
+    """Find the newest valid Release, trying Release tags newest first by tag creation date.
+
+    Reading stops at the first valid Release, so ``releases`` holds at most one; ``rejected``
+    lists the newer tags that were skipped.
+    """
+    rejected: list[RejectedTag] = []
+    for name in release_tag_names(repository, newest_first=True):
+        try:
+            release = read_release_tag(repository, name)
+        except ReleaseError as error:
+            rejected.append(RejectedTag(name=display_tag_name(name), reason=str(error)))
+            continue
+        if release is not None:
+            return ReleaseScan(releases=[release], rejected=rejected)
+    return ReleaseScan(releases=[], rejected=rejected)
+
+
+def release_tag_names(repository: Path, *, newest_first: bool = False) -> list[bytes]:
+    """List raw Release tag names below ``refs/tags/``; Git does not require them to be UTF-8."""
+    order = ["--sort=-creatordate"] if newest_first else []
+    output = run_git(
+        repository,
+        "for-each-ref",
+        *order,
+        "--format=%(refname:strip=2)",
+        "refs/tags/course-release",
     )
-    names = [line for line in result.decode("utf-8").splitlines() if line]
+    names = [line for line in output.split(b"\n") if line]
     if len(names) > MAX_RELEASES:
-        raise ReleaseError("Course Workspace has too many Releases")
-    slugs = []
-    for name in names:
-        prefix = "course-release/"
-        slug = name.removeprefix(prefix)
-        if not name.startswith(prefix) or not SLUG_PATTERN.fullmatch(slug):
-            raise ReleaseError("Course Workspace contains an unsafe Release tag")
-        slugs.append(slug)
-    releases = [read_release(repository, slug) for slug in slugs]
-    return sorted(
-        [release for release in releases if release is not None],
-        key=lambda release: release.published_at,
-        reverse=True,
+        raise ReleaseError("Repository has too many Releases")
+    return names
+
+
+def read_release_tag(repository: Path, name: bytes) -> CourseRelease | None:
+    """Read the Release that a raw tag name such as ``course-release/fall-2026`` names."""
+    prefix = "course-release/"
+    try:
+        decoded = name.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise ReleaseError("Repository contains an unsafe Release tag") from error
+    slug = decoded.removeprefix(prefix)
+    if not decoded.startswith(prefix) or not SLUG_PATTERN.fullmatch(slug):
+        raise ReleaseError("Repository contains an unsafe Release tag")
+    return read_release(repository, slug)
+
+
+def display_tag_name(name: bytes) -> str:
+    return name.decode("utf-8", errors="backslashreplace")[:200]
+
+
+def published_time(release: CourseRelease) -> datetime:
+    """Parse a Release's timezone-aware publication time."""
+    try:
+        published = datetime.fromisoformat(release.published_at)
+    except ValueError as error:
+        raise ReleaseError("Release publication time is invalid") from error
+    if published.utcoffset() is None:
+        raise ReleaseError("Release publication time is invalid")
+    return published
+
+
+@contextmanager
+def release_read_budget() -> Iterator[None]:
+    """Bound the cumulative Git output and time spent reading one Release."""
+    budget = ReadBudget(
+        deadline=time.monotonic() + RELEASE_READ_SECONDS,
+        remaining_bytes=MAX_RELEASE_READ_BYTES,
     )
+    token = ACTIVE_READ_BUDGET.set(budget)
+    try:
+        yield
+    finally:
+        ACTIVE_READ_BUDGET.reset(token)
 
 
 def read_release(repository: Path, slug: str) -> CourseRelease | None:
-    """Read and verify one Release manifest from its annotated tag.
+    """Read and verify one Release manifest from its annotated tag, within a read budget.
 
     ``repository`` is a Course Workspace or a bare repository such as a mirror.
     """
+    with release_read_budget():
+        return read_verified_release(repository, slug)
+
+
+def read_verified_release(repository: Path, slug: str) -> CourseRelease | None:
     if not SLUG_PATTERN.fullmatch(slug):
         raise ReleaseError("Release slug is invalid")
     tag = f"course-release/{slug}"
     if not tag_exists(repository, tag):
         return None
-    raw = run_git(repository, "cat-file", "tag", f"refs/tags/{tag}")
+    tag_oid = sized_object_id(repository, f"refs/tags/{tag}", max_bytes=MAX_TAG_OBJECT_BYTES)
+    raw = run_git(repository, "cat-file", "tag", tag_oid, max_output_bytes=MAX_TAG_OBJECT_BYTES)
     try:
         header, message = raw.split(b"\n\n", 1)
         headers = dict(line.split(b" ", 1) for line in header.splitlines() if b" " in line)
@@ -165,10 +292,7 @@ def read_release(repository: Path, slug: str) -> CourseRelease | None:
 
 def verify_release_manifest(repository: Path, release: CourseRelease) -> None:
     """Check a manifest against the canonical Course files of its tagged Revision."""
-    try:
-        datetime.fromisoformat(release.published_at)
-    except ValueError as error:
-        raise ReleaseError("Release publication time is invalid") from error
+    published_time(release)
     selection = release.validation.selection
     if (
         release.tag != f"course-release/{release.slug}"
@@ -271,7 +395,7 @@ def sha256_hex(content: bytes) -> str:
 
 def tagged_plan(repository: Path, commit_oid: str) -> CoursePlan:
     try:
-        payload = yaml.safe_load(
+        payload = load_canonical_yaml(
             read_commit_blob(repository, commit_oid, "course.yaml").decode("utf-8")
         )
         return CoursePlan.model_validate(payload)
@@ -286,7 +410,7 @@ def tagged_sources(repository: Path, commit_oid: str) -> SourcesIndex:
     if names != b"sources.yaml\n":
         raise ReleaseError("Tagged Sources index cannot be identified safely")
     try:
-        payload = yaml.safe_load(
+        payload = load_canonical_yaml(
             read_commit_blob(repository, commit_oid, "sources.yaml").decode("utf-8")
         )
         return SourcesIndex.model_validate(payload)
@@ -299,7 +423,8 @@ def tagged_presentation(repository: Path, commit_oid: str, presentation_id: str)
         raise ReleaseError("Release Presentation identity is invalid")
     path = f"presentations/{presentation_id}.yaml"
     try:
-        payload = yaml.safe_load(read_commit_blob(repository, commit_oid, path).decode("utf-8"))
+        content = read_commit_blob(repository, commit_oid, path)
+        payload = load_canonical_yaml(content.decode("utf-8"))
         presentation = Presentation.model_validate(payload)
     except (UnicodeError, yaml.YAMLError, ValidationError, ValueError) as error:
         raise ReleaseError("Tagged Presentation is invalid") from error
@@ -311,19 +436,69 @@ def tagged_presentation(repository: Path, commit_oid: str, presentation_id: str)
 def read_commit_blob(repository: Path, commit_oid: str, path: str) -> bytes:
     if not OID_PATTERN.fullmatch(commit_oid):
         raise ReleaseError("Course Revision identity is invalid")
+    blob_oid = sized_object_id(
+        repository, f"{commit_oid}:{path}", max_bytes=MAX_CANONICAL_BLOB_BYTES
+    )
     return run_git(
-        repository,
-        "cat-file",
-        "blob",
-        f"{commit_oid}:{path}",
-        max_output_bytes=MAX_CANONICAL_BLOB_BYTES,
+        repository, "cat-file", "blob", blob_oid, max_output_bytes=MAX_CANONICAL_BLOB_BYTES
     )
 
 
-def git_environment() -> dict[str, str]:
+def sized_object_id(repository: Path, name: str, *, max_bytes: int) -> str:
+    """Resolve an object name and check its size before anything reads its content."""
+    output = run_git(repository, "cat-file", "--batch-check", input_data=f"{name}\n".encode())
+    fields = output.split()
+    try:
+        oid, size = fields[0].decode("ascii"), int(fields[2])
+    except (IndexError, UnicodeError, ValueError) as error:
+        raise ReleaseError("Repository object is missing") from error
+    if len(fields) != 3 or not OID_PATTERN.fullmatch(oid):
+        raise ReleaseError("Repository object is missing")
+    if size > max_bytes:
+        raise ReleaseError("Repository object is too large")
+    budget = ACTIVE_READ_BUDGET.get()
+    if budget is not None and size > budget.remaining_bytes:
+        raise ReleaseError("Release exceeds its read budget")
+    return oid
+
+
+def repository_git_dir(repository: Path) -> Path:
+    """Use a Course Workspace's ``.git`` or a bare repository itself, never a parent repository."""
+    dot_git = repository / ".git"
+    return dot_git if dot_git.exists() else repository
+
+
+def git_command(repository: Path, *arguments: str) -> list[str]:
+    """Run Git against exactly this repository, trusting it whoever owns it."""
+    root = repository.resolve()
+    git_dir = repository_git_dir(root)
+    return [
+        "git",
+        f"--git-dir={git_dir}",
+        "--literal-pathspecs",
+        "-c",
+        f"safe.directory={root}",
+        "-c",
+        f"safe.directory={git_dir}",
+        "-c",
+        "core.bigFileThreshold=1m",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.pager=cat",
+        *arguments,
+    ]
+
+
+def git_environment(repository: Path) -> dict[str, str]:
+    """Ignore user and system Git configuration and never search parent directories."""
     environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     environment.update(
         {
+            "GIT_CEILING_DIRECTORIES": str(repository.resolve().parent),
+            "GIT_CONFIG_GLOBAL": "/dev/null",
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_NO_REPLACE_OBJECTS": "1",
             "GIT_OPTIONAL_LOCKS": "0",
@@ -339,50 +514,37 @@ def run_git(
     input_data: bytes | None = None,
     max_output_bytes: int = MAX_GIT_OUTPUT_BYTES,
 ) -> bytes:
-    command = [
-        "git",
-        "--literal-pathspecs",
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "core.pager=cat",
-        "-c",
-        "tag.gpgSign=false",
-        "-c",
-        "user.name=Course Harness",
-        "-c",
-        "user.email=course-harness@localhost",
-        *arguments,
-    ]
+    deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
+    budget = ACTIVE_READ_BUDGET.get()
+    if budget is not None:
+        deadline = min(deadline, budget.deadline)
+        max_output_bytes = min(max_output_bytes, budget.remaining_bytes)
     process: subprocess.Popen[bytes] | None = None
     selector = selectors.DefaultSelector()
     try:
         process = subprocess.Popen(
-            command,
+            git_command(repository, *arguments),
             cwd=repository,
             stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            env=git_environment(),
+            env=git_environment(repository),
         )
         if input_data is not None and process.stdin is not None:
             process.stdin.write(input_data)
             process.stdin.close()
         if process.stdout is None:
-            raise ReleaseError("Course Release Git operation failed")
+            raise ReleaseError("Repository Git operation failed")
         os.set_blocking(process.stdout.fileno(), False)
         selector.register(process.stdout, selectors.EVENT_READ)
-        deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
         output = bytearray()
         while selector.get_map():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise ReleaseError("Course Release Git operation timed out")
+                raise ReleaseError("Repository Git operation timed out")
             events = selector.select(remaining)
             if not events:
-                raise ReleaseError("Course Release Git operation timed out")
+                raise ReleaseError("Repository Git operation timed out")
             for key, _mask in events:
                 chunk = os.read(key.fd, min(65_536, max_output_bytes + 1 - len(output)))
                 if not chunk:
@@ -390,13 +552,15 @@ def run_git(
                     continue
                 output.extend(chunk)
                 if len(output) > max_output_bytes:
-                    raise ReleaseError("Course Release Git output is too large")
+                    raise ReleaseError("Repository Git output is too large")
         returncode = process.wait(timeout=max(0.001, deadline - time.monotonic()))
         if returncode != 0:
-            raise ReleaseError("Course Release Git operation failed")
+            raise ReleaseError("Repository Git operation failed")
+        if budget is not None:
+            budget.remaining_bytes -= len(output)
         return bytes(output)
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise ReleaseError("Course Release Git operation failed") from error
+        raise ReleaseError("Repository Git operation failed") from error
     finally:
         selector.close()
         if process is not None and process.poll() is None:
@@ -406,29 +570,19 @@ def run_git(
 
 
 def tag_exists(repository: Path, tag: str) -> bool:
-    command = [
-        "git",
-        "--literal-pathspecs",
-        "-c",
-        "core.hooksPath=/dev/null",
-        "show-ref",
-        "--verify",
-        "--quiet",
-        f"refs/tags/{tag}",
-    ]
     try:
         result = subprocess.run(
-            command,
+            git_command(repository, "show-ref", "--verify", "--quiet", f"refs/tags/{tag}"),
             cwd=repository,
             check=False,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=GIT_TIMEOUT_SECONDS,
-            env=git_environment(),
+            env=git_environment(repository),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise ReleaseError("Course Release Git operation failed") from error
+        raise ReleaseError("Repository Git operation failed") from error
     if result.returncode not in {0, 1}:
-        raise ReleaseError("Course Release Git operation failed")
+        raise ReleaseError("Repository Git operation failed")
     return result.returncode == 0

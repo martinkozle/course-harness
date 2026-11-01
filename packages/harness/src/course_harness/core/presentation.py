@@ -15,6 +15,7 @@ from pydantic import (
 )
 
 from course_harness.core.canonical_mutation import CanonicalFile, apply_canonical_mutation
+from course_harness.core.canonical_yaml import load_canonical_yaml
 
 # A leading bullet or list number the Course Agent typed.  Templates add their own
 # bullets, so a typed one would show twice.  The marker must be followed by space so
@@ -245,7 +246,7 @@ def read_presentation(workspace: Path, presentation_id: str) -> Presentation | N
     if not path.exists():
         return None
     try:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        payload = load_canonical_yaml(path.read_text(encoding="utf-8"))
         return Presentation.model_validate(payload)
     except (OSError, UnicodeError, yaml.YAMLError, ValidationError, ValueError) as error:
         raise InvalidPresentation(str(error)) from error
@@ -257,7 +258,7 @@ def read_presentation_for_lecture(workspace: Path, lecture_id: str) -> Presentat
         return None
     for path in sorted(directory.glob("*.yaml")):
         try:
-            payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+            payload = load_canonical_yaml(path.read_text(encoding="utf-8"))
             if payload.get("lecture_id") == lecture_id:
                 return Presentation.model_validate(payload)
         except OSError, UnicodeError, yaml.YAMLError, ValidationError, ValueError:
@@ -272,7 +273,7 @@ def list_presentations(workspace: Path) -> list[Presentation]:
     results: list[Presentation] = []
     for path in sorted(directory.glob("*.yaml")):
         try:
-            payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+            payload = load_canonical_yaml(path.read_text(encoding="utf-8"))
             results.append(Presentation.model_validate(payload))
         except OSError, UnicodeError, yaml.YAMLError, ValidationError, ValueError:
             continue

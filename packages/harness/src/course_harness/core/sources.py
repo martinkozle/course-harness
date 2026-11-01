@@ -14,6 +14,7 @@ from course_harness.core.canonical_mutation import (
     CanonicalFile,
     apply_canonical_mutation,
 )
+from course_harness.core.canonical_yaml import load_canonical_yaml
 
 
 class Source(BaseModel):
@@ -73,7 +74,7 @@ def read_sources_index(workspace: Path) -> SourcesIndex | None:
     if not sources_path.exists():
         return None
     try:
-        payload = yaml.safe_load(sources_path.read_text(encoding="utf-8"))
+        payload = load_canonical_yaml(sources_path.read_text(encoding="utf-8"))
         return SourcesIndex.model_validate(payload)
     except (OSError, UnicodeError, yaml.YAMLError, ValueError) as error:
         raise InvalidSourcesIndex(str(error)) from error
