@@ -8,12 +8,13 @@ picked that Option; :func:`learner_quizzes` is the only Quiz view sent ahead of 
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from pydantic import BaseModel
 
 from course_harness.core.presentation import SlideCitation
 from course_harness.core.quiz import QuizOption, QuizQuestion, correct_option, option_by_id
+from course_harness.core.sources import SourceLocator, citation_link
 from course_harness_classroom.served import ServedLecture, ServedSnapshot
 from course_harness_classroom.store import Answer
 
@@ -44,12 +45,53 @@ class OptionFeedback(BaseModel):
     citations: list[SlideCitation]
 
 
+class CourseSource(BaseModel):
+    """A Source of the served Release as a Learner sees it: its label and public link."""
+
+    id: str
+    label: str
+    url: str | None
+    doi: str | None
+    arxiv_id: str | None
+
+
 class QuestionProgress(BaseModel):
     lecture_id: str
     question_id: str
     correct: bool
     # The Options the student picked, first pick first, each once.
     tried: list[OptionFeedback]
+
+
+def source_locators(snapshot: ServedSnapshot) -> dict[str, SourceLocator]:
+    """The public locators of the served Release's Sources, by Source ID."""
+    return {pin.id: pin.locator for pin in snapshot.manifest.sources if pin.locator is not None}
+
+
+def course_sources(snapshot: ServedSnapshot) -> list[CourseSource]:
+    """Every Source the served Release pins, in Course order, with its link when it has one."""
+    return [
+        CourseSource(
+            id=pin.id,
+            label=pin.label,
+            url=pin.locator.link() if pin.locator else None,
+            doi=pin.locator.doi if pin.locator else None,
+            arxiv_id=pin.locator.arxiv_id if pin.locator else None,
+        )
+        for pin in snapshot.manifest.sources
+    ]
+
+
+def linked_citations(
+    citations: Iterable[SlideCitation], locators: Mapping[str, SourceLocator]
+) -> list[SlideCitation]:
+    """Citations whose ``url`` is where they link: their own, else their Source's locator."""
+    return [
+        citation.model_copy(
+            update={"url": citation_link(citation.url, locators.get(citation.source_id))}
+        )
+        for citation in citations
+    ]
 
 
 def shuffled_options(question: QuizQuestion, seed: str) -> list[QuizOption]:
@@ -101,12 +143,14 @@ def is_correct(question: QuizQuestion, option_id: str) -> bool:
     return key is not None and key.id == option_id
 
 
-def feedback(question: QuizQuestion, option: QuizOption) -> OptionFeedback:
+def feedback(
+    question: QuizQuestion, option: QuizOption, locators: Mapping[str, SourceLocator]
+) -> OptionFeedback:
     return OptionFeedback(
         option_id=option.id,
         correct=is_correct(question, option.id),
         explanation=option.explanation,
-        citations=list(option.citations),
+        citations=linked_citations(option.citations, locators),
     )
 
 
@@ -121,13 +165,14 @@ def progress(snapshot: ServedSnapshot, answers: Iterable[Answer]) -> list[Questi
         picked = picks.setdefault((answer.lecture_id, answer.question_id), [])
         if answer.option_id not in picked:
             picked.append(answer.option_id)
+    locators = source_locators(snapshot)
     result: list[QuestionProgress] = []
     for lecture in snapshot.lectures:
         if lecture.quiz is None:
             continue
         for question in lecture.quiz.questions:
             tried = [
-                feedback(question, option)
+                feedback(question, option, locators)
                 for option_id in picks.get((lecture.id, question.id), [])
                 if (option := option_by_id(question, option_id)) is not None
             ]

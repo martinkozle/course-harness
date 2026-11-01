@@ -38,11 +38,12 @@ from course_harness.core.course_plan import LECTURE_ID_PATTERN, CoursePlan
 from course_harness.core.presentation import Presentation
 from course_harness.core.quiz import InvalidQuiz, Quiz, parse_quiz, quiz_path
 from course_harness.core.release_validation import (
+    SOURCE_WITHOUT_LOCATOR,
     InvalidWaiver,
     ReleaseValidationResult,
     validate_release,
 )
-from course_harness.core.sources import Source, SourcesIndex
+from course_harness.core.sources import Source, SourceLocator, SourcesIndex
 from course_harness.core.template_profiles import BUILTIN_DEFAULT_ID, TemplateProfile
 
 GIT_TIMEOUT_SECONDS = 5
@@ -73,6 +74,8 @@ class ReleaseSourcePin(BaseModel):
     source_version_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     label: str = Field(min_length=1, max_length=200)
     representation: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    # Omitted when absent so manifests of Releases published before locators stay exact.
+    locator: SourceLocator | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class ReleaseTemplatePin(BaseModel):
@@ -440,6 +443,12 @@ def verify_release_manifest(repository: Path, release: CourseRelease) -> None:
             selection=selection,
             waivers=release.validation.waivers,
             quizzes=quizzes,
+            # A Release published before Sources had locators recorded no locator warnings.
+            # One published since records them whenever they apply, so checking only then
+            # still re-derives its validation exactly.
+            check_source_locators=any(
+                finding.code == SOURCE_WITHOUT_LOCATOR for finding in release.validation.findings
+            ),
         )
     except InvalidWaiver as error:
         raise ReleaseError("Release manifest contains an invalid Waiver") from error
@@ -455,6 +464,7 @@ def source_pin(source: Source) -> ReleaseSourcePin:
         source_version_id=source.source_version_id,
         label=source.label,
         representation=source.representation,
+        locator=source.locator,
     )
 
 

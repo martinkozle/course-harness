@@ -1,5 +1,5 @@
-import { Tabs } from "@course-harness/ui";
-import { ArrowRight } from "lucide-react";
+import { safeHttpUrl, Tabs } from "@course-harness/ui";
+import { ArrowRight, ExternalLink } from "lucide-react";
 
 import type { CourseSummary, LectureSummary } from "./api";
 import type { LearnerState } from "./CourseShell";
@@ -13,14 +13,16 @@ import {
 	lecturePath,
 	navigate,
 	QUIZ_ANCHOR,
+	sourcesPath,
 } from "./router";
 
-export type CourseTab = "lectures" | "exercises" | "insights";
+export type CourseTab = "lectures" | "exercises" | "sources" | "insights";
 type Tab = Exclude<CourseTab, "insights">;
 
 const TAB_PATH: Record<CourseTab, (slug: string) => string> = {
 	lectures: coursePath,
 	exercises: exercisesPath,
+	sources: sourcesPath,
 	insights: insightsPath,
 };
 
@@ -39,6 +41,7 @@ export function CourseTabs({
 			label: "Exercises",
 			count: course.lectures.filter((lecture) => lecture.has_quiz).length,
 		},
+		{ id: "sources", label: "Sources", count: course.sources.length },
 	];
 	if (course.role === "instructor")
 		tabs.push({ id: "insights", label: "Insights" });
@@ -177,7 +180,48 @@ function Exercises({ state }: { state: LearnerState }) {
 	);
 }
 
-/** A course's Lectures in order, and its Exercises: every Quiz with the student's progress. */
+function hostName(href: string) {
+	return new URL(href).hostname.replace(/^www\./, "");
+}
+
+/** What the course cites: each Source's label, linked to where it is published when known. */
+function SourceList({ state }: { state: LearnerState }) {
+	const { sources } = state.course;
+	if (!sources.length)
+		return <p className="meta">This course cites no Sources.</p>;
+	return (
+		<ol className="source-list">
+			{sources.map((source) => {
+				const href = safeHttpUrl(source.url);
+				return (
+					<li key={source.id} className="source-row">
+						{href ? (
+							<a
+								className="source-label"
+								href={href}
+								target="_blank"
+								rel="noopener noreferrer"
+							>
+								{source.label}
+								<ExternalLink aria-hidden="true" />
+								<span className="visually-hidden"> (opens in a new tab)</span>
+							</a>
+						) : (
+							<span className="source-label">{source.label}</span>
+						)}
+						<span className="meta">
+							{href ? hostName(href) : "No public link"}
+							{source.doi ? ` · DOI ${source.doi}` : ""}
+							{source.arxiv_id ? ` · arXiv ${source.arxiv_id}` : ""}
+						</span>
+					</li>
+				);
+			})}
+		</ol>
+	);
+}
+
+/** A course's Lectures in order, its Exercises with the student's progress, and its Sources. */
 export function CoursePage({ tab, state }: { tab: Tab; state: LearnerState }) {
 	const { course, quizzes } = state;
 	const questions = course.lectures.reduce(
@@ -212,6 +256,8 @@ export function CoursePage({ tab, state }: { tab: Tab; state: LearnerState }) {
 					<CourseTabs course={course} tab={tab} />
 					{tab === "lectures" ? (
 						<LectureList state={state} />
+					) : tab === "sources" ? (
+						<SourceList state={state} />
 					) : (
 						<Exercises state={state} />
 					)}

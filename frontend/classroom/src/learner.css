@@ -275,6 +275,48 @@ a.bar-title:hover {
 	}
 }
 
+/* ---------- Sources ---------- */
+
+.source-list {
+	display: grid;
+	gap: 8px;
+}
+
+.source-row {
+	display: grid;
+	gap: 2px;
+	padding: 14px 16px;
+	border: 1px solid var(--rule);
+	border-radius: var(--radius-m);
+	background: var(--surface);
+	box-shadow: var(--shadow-card);
+	min-width: 0;
+}
+
+.source-label {
+	font-size: 1.0625rem;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+a.source-label {
+	color: inherit;
+	text-decoration: none;
+}
+
+a.source-label:hover {
+	color: var(--accent-ink);
+	text-decoration: underline;
+}
+
+a.source-label svg {
+	width: 0.875em;
+	height: 0.875em;
+	margin-left: 6px;
+	vertical-align: -0.0625em;
+	color: var(--ink-faint);
+}
+
 /* ---------- Lecture ---------- */
 
 .crumbs a {

@@ -18,7 +18,7 @@ from course_harness.core.presentation import (
     TitleSlide,
     write_presentation,
 )
-from course_harness.core.sources import Source, SourcesIndex, write_sources_index
+from course_harness.core.sources import Source, SourceLocator, SourcesIndex, write_sources_index
 from course_harness.workspace_history import (
     RevisionCreateRequest,
     create_revision,
@@ -88,6 +88,7 @@ def _add_coordinate_citation(
                     source_version_id=source_version_id,
                     label="Foundations",
                     admitted_at="2026-09-15T00:00:00+00:00",
+                    locator=SourceLocator(url="https://example.org/foundations"),
                 )
             ]
         ),

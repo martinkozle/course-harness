@@ -1,11 +1,13 @@
 """Admit Library Resources as Course Sources and resolve their pinned Source Versions."""
 
+import logging
 import os
 import stat
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from course_harness.core.canonical_mutation import CanonicalFile, capture_canonical_file
 from course_harness.core.sources import (
@@ -14,10 +16,19 @@ from course_harness.core.sources import (
     Source,
     SourceImage,
     SourceImageResolver,
+    SourceLocator,
     SourcesIndex,
+    public_locator,
     read_sources_index,
+    serialize_sources_index,
+    with_missing_locators,
     write_sources_index,
 )
+
+if TYPE_CHECKING:
+    from course_harness.resources import Resource
+
+logger = logging.getLogger("course-harness")
 
 MAX_EXTRACTED_EVIDENCE_BYTES = 8_000_000
 
@@ -170,6 +181,7 @@ def admit_source(
         label=label or resource.location.rsplit("/", 1)[-1].rsplit("\\", 1)[-1][:200],
         admitted_at=datetime.now(UTC).isoformat(),
         representation=representation,
+        locator=resource_locator(resource),
     )
     existing_index.sources.append(source)
     write_sources_index(workspace, existing_index, expected=expected)
@@ -228,6 +240,7 @@ def adopt_source_version(
             "representation": _pin_current_representation(
                 data_dir, cache_dir, resource.snapshot_hash
             ),
+            "locator": source.locator or resource_locator(resource),
         }
     )
     existing_index.sources = [
@@ -235,3 +248,64 @@ def adopt_source_version(
     ]
     write_sources_index(workspace, existing_index, expected=expected)
     return updated_source
+
+
+def resource_locator(resource: Resource) -> SourceLocator | None:
+    """The public locator of a Library Resource: only remote Resources have one.
+
+    A local file or upload is named by its label alone, so no local path is ever written.
+    """
+    if resource.kind != "remote":
+        return None
+    return public_locator(resource.location)
+
+
+def library_locators(data_dir: Path) -> dict[str, SourceLocator]:
+    """Public locators of every Library Resource that has one, by Resource ID."""
+    from course_harness.library import registry_path  # noqa: PLC0415
+    from course_harness.resources import read_library_index  # noqa: PLC0415
+
+    locators: dict[str, SourceLocator] = {}
+    for resource in read_library_index(registry_path(data_dir)).resources:
+        locator = resource_locator(resource)
+        if locator is not None:
+            locators[resource.id] = locator
+    return locators
+
+
+def backfill_source_locators(workspace: Path, data_dir: Path) -> bool:
+    """Give existing Sources the public locator their Library Resource has, as app-authored state.
+
+    Runs when a Workspace opens. It changes nothing unless Current State is valid and free of
+    Workspace Drift, never replaces a locator already present, and writes nothing when no
+    locator is missing; a skipped or failed backfill is retried the next time. Returns whether
+    ``sources.yaml`` changed.
+    """
+    from course_harness.workspace_history import (  # noqa: PLC0415
+        WorkspaceHistoryError,
+        read_current_state,
+        record_app_authored_entries,
+    )
+
+    try:
+        index = read_sources_index(workspace)
+        if index is None or all(source.locator is not None for source in index.sources):
+            return False
+        locators = library_locators(data_dir)
+        if with_missing_locators(index, locators) is None:
+            return False
+        state = read_current_state(workspace)
+        if state.drift != "clean" or not state.validation.valid:
+            return False
+        expected = capture_canonical_file(workspace, "sources.yaml")
+        index = read_sources_index(workspace)
+        updated = with_missing_locators(index, locators) if index is not None else None
+        if updated is None:
+            return False
+        write_sources_index(workspace, updated, expected=expected)
+        record_app_authored_entries(workspace, {"sources.yaml": serialize_sources_index(updated)})
+    except (OSError, ValueError, WorkspaceHistoryError) as error:
+        # Includes an invalid sources.yaml and a file that changed while it was being written.
+        logger.warning("Source locators were not filled in: %s", error)
+        return False
+    return True

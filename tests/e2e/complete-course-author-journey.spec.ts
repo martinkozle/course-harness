@@ -583,8 +583,20 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 		"causal-foundations-preview",
 	);
 	await page.getByRole("button", { name: "Check release" }).click();
-	await expect(page.getByText("No issues found.")).toBeVisible();
-	await page.getByRole("button", { name: "Publish release" }).click();
+	// The uploaded Source has no public locator, so Classroom Citations cannot link to it.
+	await expect(
+		page.getByText(
+			"Source “chapter_causal.md” has no public link, so its Citations show only their label in a Classroom.",
+		),
+	).toBeVisible();
+	const publishRelease = page.getByRole("button", { name: "Publish release" });
+	await expect(publishRelease).toBeDisabled();
+	await page
+		.getByRole("textbox", { name: "Publish anyway? Record why" })
+		.fill("The chapter is handed out in class.");
+	await page.getByRole("button", { name: "Check again" }).click();
+	await expect(publishRelease).toBeEnabled();
+	await publishRelease.click();
 	await expect(
 		page.getByRole("heading", { name: "Published Causal Foundations Preview" }),
 	).toBeVisible();

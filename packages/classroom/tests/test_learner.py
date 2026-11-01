@@ -362,8 +362,8 @@ def test_feedback_carries_the_picked_options_citations() -> None:
         ],
     )
 
-    wrong = feedback(question, question.options[1])
+    wrong = feedback(question, question.options[1], {})
 
     assert wrong.correct is False
     assert wrong.citations == [citation]
-    assert feedback(question, question.options[0]).correct is True
+    assert feedback(question, question.options[0], {}).correct is True

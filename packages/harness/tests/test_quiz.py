@@ -37,7 +37,7 @@ from course_harness.core.release_validation import (
     validate_release,
 )
 from course_harness.core.releases import ReleaseError
-from course_harness.core.sources import Source, SourcesIndex, write_sources_index
+from course_harness.core.sources import Source, SourceLocator, SourcesIndex, write_sources_index
 from course_harness.course_agent import (
     CoursePlanLectureCommand,
     ReplaceCoursePlanCommand,
@@ -86,6 +86,7 @@ def _sources() -> SourcesIndex:
                 source_version_id="a" * 64,
                 label="Causal Inference: What If",
                 admitted_at="2026-09-14T00:00:00+00:00",
+                locator=SourceLocator(url="https://example.org/foundations"),
             )
         ]
     )

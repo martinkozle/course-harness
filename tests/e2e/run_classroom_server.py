@@ -30,7 +30,12 @@ from course_harness.core.presentation import (
 )
 from course_harness.core.quiz import Quiz, QuizOption, QuizQuestion, read_quiz, write_quiz
 from course_harness.core.release_validation import ReleaseSelection, Waiver, validate_release
-from course_harness.core.sources import Source, SourcesIndex, write_sources_index
+from course_harness.core.sources import (
+    Source,
+    SourceLocator,
+    SourcesIndex,
+    write_sources_index,
+)
 from course_harness.release_service import (
     PublishReleaseRequest,
     backfill_release_files,
@@ -64,11 +69,9 @@ RUBIN = SlideCitation(
     line_start=11,
     line_end=14,
 )
-PEARL = SlideCitation(
-    source_id=OTHER_SOURCE_ID,
-    label="Pearl (2009), Causality",
-    url="https://bayes.cs.ucla.edu/BOOK-2K/",
-)
+# Pearl's Citations carry no URL of their own: they link through the Source Locator.
+PEARL = SlideCitation(source_id=OTHER_SOURCE_ID, label="Pearl (2009), Causality")
+PEARL_LOCATOR = SourceLocator(url="https://bayes.cs.ucla.edu/BOOK-2K/")
 
 
 def lecture_id(n: int) -> str:
@@ -240,8 +243,12 @@ def publish_fixture_course(root: Path) -> Path:
                 source_version_id=source[-1] * 64,
                 label=label,
                 admitted_at="2026-10-01T09:00:00+00:00",
+                locator=locator,
             )
-            for source, label in ((SOURCE_ID, RUBIN.label), (OTHER_SOURCE_ID, PEARL.label))
+            for source, label, locator in (
+                (SOURCE_ID, RUBIN.label, None),
+                (OTHER_SOURCE_ID, PEARL.label, PEARL_LOCATOR),
+            )
         ]
     )
     write_sources_index(workspace, sources)

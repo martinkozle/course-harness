@@ -50,12 +50,22 @@ export type LectureSummary = {
 	download_url: string | null;
 };
 
+/** A Source the served Release pins: its label and, when it has one, its public link. */
+export type CourseSource = {
+	id: string;
+	label: string;
+	url: string | null;
+	doi: string | null;
+	arxiv_id: string | null;
+};
+
 export type CourseSummary = {
 	slug: string;
 	title: string;
 	role: Role;
 	release: ServedRelease | null;
 	lectures: LectureSummary[];
+	sources: CourseSource[];
 };
 
 export type LectureLink = { id: string; title: string };

@@ -5,6 +5,7 @@ import {
 	Menu,
 	type MenuItem,
 	Notice,
+	safeHttpUrl,
 	Tabs,
 } from "@course-harness/ui";
 import {
@@ -33,9 +34,11 @@ import {
 	candidateResource,
 	type DiscoveryResult,
 	type GroupedSearchResult,
+	locatorLink,
 	type ReaderTarget,
 	type ResourceState,
 	type Source,
+	type SourceLocator,
 } from "../models";
 import type { AgentContext } from "../useCourseAgent";
 import { type Library, MATERIAL_ACCEPT, resourceName } from "../useLibrary";
@@ -76,6 +79,38 @@ function fileKind(resource: ResourceState | undefined): string | null {
 		txt: "Text",
 	};
 	return labels[extension.toLowerCase()] ?? extension.toUpperCase();
+}
+
+/**
+ * The public link a Source carries into Releases, or a note that it has none, in which case
+ * its Citations show only their label in a Classroom.
+ */
+function PublicLink({ locator }: { locator: SourceLocator | null | undefined }) {
+	const href = locator ? safeHttpUrl(locatorLink(locator)) : null;
+	if (!locator || !href)
+		return (
+			<span title="Citations of this Source show only their label in a Classroom.">
+				No public link
+			</span>
+		);
+	const text = locator.doi
+		? `DOI ${locator.doi}`
+		: locator.arxiv_id
+			? `arXiv ${locator.arxiv_id}`
+			: new URL(href).hostname.replace(/^www\./, "");
+	return (
+		<a
+			className="source-public-link"
+			href={href}
+			target="_blank"
+			rel="noopener noreferrer"
+			title={href}
+		>
+			{text}
+			<ExternalLink aria-hidden="true" />
+			<span className="visually-hidden"> (public link, opens in a new tab)</span>
+		</a>
+	);
 }
 
 /** Turns FTS snippets with literal <mark> tags into highlighted text safely. */
@@ -520,7 +555,8 @@ function CourseTab({
 										{source.label}
 									</button>
 									<div className="row-meta">
-										{kind ? <span>{kind}</span> : null}
+										{kind && !source.locator ? <span>{kind}</span> : null}
+										<PublicLink locator={source.locator} />
 										{resource?.snapshot ? (
 											<span>{formatBytes(resource.snapshot.byte_count)}</span>
 										) : null}

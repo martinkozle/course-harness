@@ -161,7 +161,24 @@ export type Source = {
 	admitted_at: string;
 	/** The Document Processor whose text this Source's Citations point into. */
 	representation?: string | null;
+	/** Public metadata a reader can find the Source by; absent for local files. */
+	locator?: SourceLocator | null;
 };
+
+/** A Source's public locator: a URL, DOI or arXiv ID, never a local path or secret. */
+export type SourceLocator = {
+	url?: string | null;
+	doi?: string | null;
+	arxiv_id?: string | null;
+};
+
+/** Where a Source Locator opens: its URL, else the DOI or arXiv resolver. */
+export function locatorLink(locator: SourceLocator): string | null {
+	if (locator.url) return locator.url;
+	if (locator.doi) return `https://doi.org/${locator.doi}`;
+	if (locator.arxiv_id) return `https://arxiv.org/abs/${locator.arxiv_id}`;
+	return null;
+}
 
 export type SearchResult = {
 	source_id: string;
@@ -406,7 +423,8 @@ export type ReleaseFindingTarget = {
 		| "citation"
 		| "quiz"
 		| "question"
-		| "option";
+		| "option"
+		| "source";
 	lecture_id: string | null;
 	artifact_id: string | null;
 	slide_id: string | null;

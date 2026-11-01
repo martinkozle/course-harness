@@ -814,6 +814,10 @@ def create_app(
             except WorkspaceHistoryError as error:
                 raise HTTPException(status_code=409, detail=str(error)) from error
             recovered_workspaces.add(resolved)
+            if not mutation_lock(workspace).locked():
+                # Existing Sources gain the public locators of their Library Resources; a
+                # Workspace with Drift or invalid state is left alone and retried next open.
+                sources_module.backfill_source_locators(workspace, data_dir)
         return workspace
 
     def require_bound_workspace() -> Path:

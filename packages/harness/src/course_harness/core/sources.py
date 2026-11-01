@@ -1,20 +1,159 @@
 """Canonical Course Sources: the Source schema and the ``sources.yaml`` index."""
 
+import ipaddress
 import os
+import re
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
+from urllib.parse import unquote, unquote_plus, urlsplit, urlunsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from course_harness.core.canonical_mutation import (
     CanonicalFile,
     apply_canonical_mutation,
 )
 from course_harness.core.canonical_yaml import load_canonical_yaml
+
+MAX_LOCATOR_URL_LENGTH = 2000
+DOI_PATTERN = r"^10\.\d{4,9}/[^\s]{1,300}$"
+ARXIV_ID_PATTERN = r"^(?:\d{4}\.\d{4,5}|[a-z][a-z.-]{0,30}/\d{7})$"
+# Query parameter names that carry credentials, signatures or session state, never public identity.
+_SECRET_QUERY_NAME = re.compile(
+    r"token|secret|passw|pwd|signature|credential|session|api[-_]?key|access[-_]?key"
+    r"|^auth$|^authorization$|^key$|^sig$|^sid$|^code$|^state$|^policy$|^expires$"
+    r"|^key-pair-id$|^x-amz-|^x-goog-",
+    re.IGNORECASE,
+)
+
+
+def public_url_problem(value: str) -> str | None:
+    """Why ``value`` is not a public http(s) address a Source Locator may hold, if it is not."""
+    if len(value) > MAX_LOCATOR_URL_LENGTH or any(
+        character.isspace() or not character.isprintable() for character in value
+    ):
+        return "must be a single printable URL of at most 2000 characters"
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"}:
+        return "must use http or https"
+    if parsed.username is not None or parsed.password is not None:
+        return "must not contain credentials"
+    hostname = parsed.hostname
+    if not hostname:
+        return "must name a host"
+    try:
+        _ = parsed.port
+    except ValueError:
+        return "has an invalid port"
+    if hostname == "localhost" or hostname.endswith((".localhost", ".local", ".internal")):
+        return "must name a public host"
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return None
+    if not address.is_global:
+        return "must name a public host"
+    return None
+
+
+class SourceLocator(BaseModel):
+    """Public metadata that lets a reader find a Source: never content, paths or secrets."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    doi: str | None = Field(
+        default=None, pattern=DOI_PATTERN, exclude_if=lambda value: value is None
+    )
+    arxiv_id: str | None = Field(
+        default=None, pattern=ARXIV_ID_PATTERN, exclude_if=lambda value: value is None
+    )
+
+    @field_validator("url")
+    @classmethod
+    def url_is_public(cls, value: str | None) -> str | None:
+        if value is not None and (problem := public_url_problem(value)) is not None:
+            raise ValueError(f"Source Locator URL {problem}")
+        return value
+
+    @model_validator(mode="after")
+    def names_something(self) -> SourceLocator:
+        if self.url is None and self.doi is None and self.arxiv_id is None:
+            raise ValueError("A Source Locator needs a URL, DOI or arXiv ID")
+        return self
+
+    def link(self) -> str:
+        """The address a reader opens: the URL, else the DOI or arXiv resolver."""
+        if self.url is not None:
+            return self.url
+        if self.doi is not None:
+            return f"https://doi.org/{self.doi}"
+        return f"https://arxiv.org/abs/{self.arxiv_id}"
+
+
+def public_locator(location: str) -> SourceLocator | None:
+    """The Source Locator for a remote Resource address, or ``None`` when it is not public.
+
+    Credentials, the fragment and query parameters that look like secrets are dropped; a DOI or
+    arXiv ID is recognised from doi.org and arxiv.org addresses.
+    """
+    try:
+        parsed = urlsplit(location.strip())
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            return None
+        port = parsed.port
+    except ValueError:
+        return None
+    hostname = parsed.hostname
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    netloc = host if port is None else f"{host}:{port}"
+    query = "&".join(
+        part
+        for part in parsed.query.split("&")
+        if part and not _SECRET_QUERY_NAME.search(unquote_plus(part.split("=", 1)[0]))
+    )
+    url = urlunsplit((parsed.scheme.lower(), netloc, parsed.path or "/", query, ""))
+    if public_url_problem(url) is not None:
+        return None
+    return SourceLocator(
+        url=url, doi=_doi_from(hostname, parsed.path), arxiv_id=_arxiv_from(hostname, parsed.path)
+    )
+
+
+def _doi_from(hostname: str, path: str) -> str | None:
+    if hostname not in {"doi.org", "dx.doi.org", "www.doi.org"}:
+        return None
+    doi = unquote(path).lstrip("/")
+    return doi if re.fullmatch(DOI_PATTERN, doi) else None
+
+
+def _arxiv_from(hostname: str, path: str) -> str | None:
+    if hostname not in {"arxiv.org", "www.arxiv.org", "export.arxiv.org"}:
+        return None
+    match = re.fullmatch(r"/(?:abs|pdf|html)/(.+?)(?:v\d+)?(?:\.pdf)?/?", path)
+    if match is None:
+        return None
+    identifier = match.group(1)
+    return identifier if re.fullmatch(ARXIV_ID_PATTERN, identifier) else None
+
+
+def citation_link(citation_url: str | None, locator: SourceLocator | None) -> str | None:
+    """Where a Citation links: its own http(s) URL wins, otherwise its Source's locator."""
+    if citation_url and _is_http_url(citation_url):
+        return citation_url
+    return locator.link() if locator is not None else None
+
+
+def _is_http_url(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.hostname)
 
 
 class Source(BaseModel):
@@ -27,6 +166,8 @@ class Source(BaseModel):
     admitted_at: str
     # The Document Processor whose representation Citations of this Source point into.
     representation: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    # Public metadata for finding the Resource; absent for local uploads and older Sources.
+    locator: SourceLocator | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class SourcesIndex(BaseModel):
@@ -34,6 +175,24 @@ class SourcesIndex(BaseModel):
 
     version: Literal[1] = 1
     sources: list[Source] = Field(default_factory=list)
+
+
+def with_missing_locators(
+    index: SourcesIndex, locators: Mapping[str, SourceLocator]
+) -> SourcesIndex | None:
+    """Fill each Source's missing locator from ``locators`` by Resource ID.
+
+    A locator already present is never replaced. Returns ``None`` when nothing changes.
+    """
+    changed = False
+    sources: list[Source] = []
+    for source in index.sources:
+        locator = locators.get(source.resource_id)
+        if source.locator is None and locator is not None:
+            source = source.model_copy(update={"locator": locator})
+            changed = True
+        sources.append(source)
+    return index.model_copy(update={"sources": sources}) if changed else None
 
 
 class SourceAdmissionRequest(BaseModel):

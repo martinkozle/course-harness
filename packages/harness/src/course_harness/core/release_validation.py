@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from course_harness.core.course_plan import LECTURE_ID_PATTERN, CoursePlan
 from course_harness.core.presentation import Presentation, SlideCitation
 from course_harness.core.quiz import Quiz, QuizOption, QuizQuestion, quiz_problems
-from course_harness.core.sources import SourcesIndex
+from course_harness.core.sources import SourcesIndex, citation_link
 
 FindingSeverity = Literal["error", "warning"]
 FindingScope = Literal[
@@ -21,7 +21,10 @@ FindingScope = Literal[
     "quiz",
     "question",
     "option",
+    "source",
 ]
+# Raised when a cited Source has no public locator, so its Citations cannot link anywhere.
+SOURCE_WITHOUT_LOCATOR = "citation.source-without-locator"
 LectureId = Annotated[str, Field(pattern=LECTURE_ID_PATTERN)]
 ArtifactId = Annotated[str, Field(pattern=r"^presentation-[0-9a-f]{12}$")]
 
@@ -103,10 +106,13 @@ def validate_release(
     waivers: list[Waiver] | None = None,
     evidence_line_counts: Mapping[str, int] | None = None,
     quizzes: Sequence[Quiz] = (),
+    check_source_locators: bool = True,
 ) -> ReleaseValidationResult:
     """Validate a proposed partial Release without mutating Course state.
 
     ``quizzes`` may hold any Quizzes; only those of selected Lectures are validated.
+    ``check_source_locators`` is off only when re-checking a Release published before
+    Sources had locators.
     """
 
     findings: list[ValidationFinding] = []
@@ -241,6 +247,15 @@ def validate_release(
             evidence_line_counts=evidence_line_counts,
         )
     )
+    if check_source_locators:
+        findings.extend(
+            _locator_findings(
+                presentations_by_id=presentations_by_id,
+                quizzes=quizzes,
+                selection=selection,
+                sources=sources,
+            )
+        )
 
     applied_waivers = _apply_waivers(findings, waivers or [])
     structurally_valid = not any(finding.severity == "error" for finding in findings)
@@ -360,6 +375,52 @@ def _quiz_findings(
                         )
                     )
                 findings.extend(_question_findings(question, lecture_id=lecture_id))
+    return findings
+
+
+def _locator_findings(
+    *,
+    presentations_by_id: Mapping[str, Presentation],
+    quizzes: Sequence[Quiz],
+    selection: ReleaseSelection,
+    sources: SourcesIndex,
+) -> list[ValidationFinding]:
+    """One warning per Source that some selected Citation names with no link of its own,
+    when the Source has no public locator either, in Source order."""
+    citations: list[SlideCitation] = []
+    for artifact_id in selection.artifact_ids:
+        presentation = presentations_by_id.get(artifact_id)
+        if presentation is None or presentation.lecture_id not in selection.lecture_ids:
+            continue
+        for slide in presentation.slides:
+            if not slide.archived:
+                citations.extend(slide.citations)
+    for quiz in quizzes:
+        if quiz.lecture_id not in selection.lecture_ids:
+            continue
+        for question in quiz.questions:
+            citations.extend(question.citations)
+            for option in question.options:
+                citations.extend(option.citations)
+    unlinked = {
+        citation.source_id for citation in citations if citation_link(citation.url, None) is None
+    }
+    findings: list[ValidationFinding] = []
+    for source in sources.sources:
+        if source.id not in unlinked or source.locator is not None:
+            continue
+        findings.append(
+            ValidationFinding(
+                id=f"{SOURCE_WITHOUT_LOCATOR}:{source.id}",
+                code=SOURCE_WITHOUT_LOCATOR,
+                severity="warning",
+                message=(
+                    f"Source “{source.label}” has no public link, so its Citations show "
+                    "only their label in a Classroom."
+                ),
+                target=FindingTarget(scope="source", source_id=source.id),
+            )
+        )
     return findings
 
 

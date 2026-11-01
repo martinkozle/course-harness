@@ -17,7 +17,7 @@ from course_harness.core.release_validation import (
     Waiver,
     validate_release,
 )
-from course_harness.core.sources import Source, SourcesIndex
+from course_harness.core.sources import Source, SourceLocator, SourcesIndex
 
 
 def test_missing_selected_lecture_is_a_blocking_structural_finding() -> None:
@@ -134,6 +134,7 @@ def test_broken_citation_references_are_errors_but_one_valid_citation_grounds_th
         source_version_id="a" * 64,
         label="Causal Foundations",
         admitted_at="2026-09-14T00:00:00+00:00",
+        locator=SourceLocator(url="https://example.org/foundations"),
     )
     lecture = Lecture(
         id="lecture-aaaaaaaaaaaa",
@@ -320,6 +321,7 @@ def test_selected_presentation_must_match_the_course_plan_and_citation_coordinat
         source_version_id="a" * 64,
         label="Foundations",
         admitted_at="2026-09-14T00:00:00+00:00",
+        locator=SourceLocator(url="https://example.org/foundations"),
     )
     lecture = Lecture(id="lecture-aaaaaaaaaaaa", title="Foundations")
     plan = CoursePlan(
@@ -367,6 +369,7 @@ def test_evidence_catalog_enforces_inclusive_citation_coordinates_and_targets_ev
         source_version_id="a" * 64,
         label="Foundations",
         admitted_at="2026-09-14T00:00:00+00:00",
+        locator=SourceLocator(url="https://example.org/foundations"),
     )
     lecture = Lecture(
         id="lecture-aaaaaaaaaaaa",
@@ -452,6 +455,7 @@ def test_evidence_catalog_requires_extracted_evidence_for_coordinate_citations()
         source_version_id="a" * 64,
         label="Foundations",
         admitted_at="2026-09-14T00:00:00+00:00",
+        locator=SourceLocator(url="https://example.org/foundations"),
     )
     lecture = Lecture(
         id="lecture-aaaaaaaaaaaa",

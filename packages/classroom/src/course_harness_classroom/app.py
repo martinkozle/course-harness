@@ -38,13 +38,18 @@ from course_harness_classroom.insights import (
     build_insights,
 )
 from course_harness_classroom.learning import (
+    CourseSource,
     LearnerQuiz,
     OptionFeedback,
     QuestionProgress,
+    course_sources,
+    feedback,
     find_question,
     is_correct,
     learner_quizzes,
+    linked_citations,
     progress,
+    source_locators,
 )
 from course_harness_classroom.repo_urls import InvalidRepoUrl, validate_repo_url
 from course_harness_classroom.security import (
@@ -239,6 +244,7 @@ class CourseResponse(BaseModel):
     role: Role
     release: ServedReleaseResponse | None
     lectures: list[LectureSummary]
+    sources: list[CourseSource]
 
 
 def _release_response(course: Course) -> ServedReleaseResponse | None:
@@ -532,6 +538,7 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
             role=role,
             release=_release_response(course) if snapshot else None,
             lectures=lectures,
+            sources=course_sources(snapshot) if snapshot is not None else [],
         )
 
     @app.get("/api/c/{slug}/lectures/{lecture_id}")
@@ -549,12 +556,16 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
         previews = (
             {slide.slide_id: slide for slide in lecture.preview.slides} if lecture.preview else {}
         )
+        locators = source_locators(snapshot)
         slides = []
         for slide in _visible_slides(lecture):
             preview = previews.get(slide.id)
+            linked = slide.model_copy(
+                update={"citations": linked_citations(slide.citations, locators)}
+            )
             slides.append(
                 LearnerSlide(
-                    slide=slide.model_dump(mode="json", exclude={"purpose"}),
+                    slide=linked.model_dump(mode="json", exclude={"purpose"}),
                     slots=preview.slots if preview else None,
                     background_url=preview.background_url if preview else None,
                 )
@@ -658,10 +669,7 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
             settled=lambda earlier: any(is_correct(question, picked) for picked in earlier),
         )
         return AnswerResponse(
-            option_id=option.id,
-            correct=is_correct(question, option.id),
-            explanation=option.explanation,
-            citations=list(option.citations),
+            **feedback(question, option, source_locators(snapshot)).model_dump(),
             recorded=recorded is not None,
         )
 

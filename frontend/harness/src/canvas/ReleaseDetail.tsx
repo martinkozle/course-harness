@@ -44,6 +44,8 @@ export function findingScope(
 		parts.push(target.content_block.replaceAll("_", " "));
 	if (target.citation_index !== null)
 		parts.push(`Citation ${target.citation_index + 1}`);
+	if (target.scope === "source" && target.source_id)
+		parts.push(`Source ${target.source_id}`);
 	if (parts.length === 0) parts.push(target.scope.replaceAll("_", " "));
 	return parts.join(" · ");
 }

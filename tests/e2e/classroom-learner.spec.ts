@@ -29,6 +29,22 @@ test("a Learner identifies, reads a Lecture and retries a Quiz until correct", a
 	await expect(
 		page.getByRole("heading", { name: "Causal Inference in Practice" }),
 	).toBeVisible();
+
+	// The Sources page lists every Source, linked where it has a public locator.
+	await page.getByRole("tab", { name: /Sources/ }).click();
+	await expect(page).toHaveURL(`${CLASSROOM}/c/causal/sources`);
+	await expect(
+		page.getByRole("link", { name: /Pearl \(2009\), Causality/ }),
+	).toHaveAttribute("href", "https://bayes.cs.ucla.edu/BOOK-2K/");
+	await expect(page.getByText("Rubin (1974)")).toBeVisible();
+	await expect(page.getByRole("link", { name: /Rubin \(1974\)/ })).toHaveCount(
+		0,
+	);
+	await expect(page.getByText("No public link")).toBeVisible();
+	await expectNoAccessibilityViolations(page, "The Sources page");
+	await page.getByRole("tab", { name: /Lectures/ }).click();
+	await expect(page).toHaveURL(`${CLASSROOM}/c/causal`);
+
 	await expect(
 		page.getByRole("heading", { name: "Foundations" }),
 	).toBeVisible();

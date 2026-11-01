@@ -88,6 +88,10 @@ _Avoid_: Resource, cache entry
 The immutable Snapshot of a Source pinned by a Course so its Evidence and Citations continue to refer to the content actually used.
 _Avoid_: Latest version, Resource URL
 
+**Source Locator**:
+The public metadata recorded with a Source—a canonical http(s) URL, plus a DOI or arXiv ID when known—by which a reader can find the Resource; it never holds content, local paths, or credentials, and a Source admitted from a local file has none.
+_Avoid_: Resource location, download link, Source Version
+
 **Course Workspace**:
 The directory opened by the app that contains one Course's human-readable inputs, authored state, and Artifacts, plus hidden derived runtime data.
 _Avoid_: Project, repository, database
@@ -165,7 +169,7 @@ A precise passage or block from a Derived Representation that maps back to human
 _Avoid_: Search result, Source, Citation
 
 **Citation**:
-A claim-level link to Evidence, rendered with the Resource's canonical identity and a resolvable human location.
+A claim-level link to Evidence, rendered with the Resource's canonical identity and a resolvable human location; it links to its own URL when it has one, otherwise to its Source Locator.
 _Avoid_: URL, Reference, chunk identifier
 
 **Validation Finding**:
