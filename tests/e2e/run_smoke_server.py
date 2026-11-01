@@ -189,12 +189,14 @@ def quiz_step(returned: set[str]) -> str | dict[int, DeltaToolCall]:
                 },
                 {
                     "text": "Outcome measurements are too noisy",
+                    "correct": False,
                     "explanation": "Noise is not the obstacle: even a perfect measurement "
                     "records only the outcome under the treatment received.",
                     "citations": cited,
                 },
                 {
                     "text": "Individual effects are always zero",
+                    "correct": False,
                     "explanation": "Individual effects can differ from zero; they are "
                     "*unobserved*, not absent.",
                 },
@@ -206,6 +208,7 @@ def quiz_step(returned: set[str]) -> str | dict[int, DeltaToolCall]:
             "options": [
                 {
                     "text": "The estimated size of each effect",
+                    "correct": False,
                     "explanation": "A causal graph holds no numbers; estimation comes later.",
                 },
                 {"text": "The assumptions about what causes what", "correct": True},

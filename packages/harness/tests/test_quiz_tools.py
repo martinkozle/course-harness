@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx2
 import pytest
+from pydantic import TypeAdapter, ValidationError
 from pydantic_ai import DeferredToolRequests, DeferredToolResults
 from pydantic_ai.messages import (
     ModelMessage,
@@ -51,8 +52,13 @@ from course_harness.course_agent import (
     course_state_snapshot,
 )
 from course_harness.quiz_authoring import (
-    QuizOptionCommand,
+    SPLIT_QUESTION_HINT,
+    NewQuizOption,
+    NewQuizQuestion,
+    QuizOptionChange,
+    QuizQuestionChange,
     QuizQuestionCommand,
+    QuizQuestionCommands,
     build_quiz,
     quiz_notes,
 )
@@ -112,13 +118,17 @@ def _existing() -> Quiz:
     )
 
 
-def _new_question(**changes: object) -> QuizQuestionCommand:
-    return QuizQuestionCommand.model_validate(
+def _new_question(**changes: object) -> NewQuizQuestion:
+    return NewQuizQuestion.model_validate(
         {
             "prompt": "Why randomize?",
             "options": [
                 {"text": "To make groups exchangeable", "correct": True},
-                {"text": "To increase the sample", "explanation": "Randomizing adds no units."},
+                {
+                    "text": "To increase the sample",
+                    "correct": False,
+                    "explanation": "Randomizing adds no units.",
+                },
             ],
             "citations": [CITATION],
             **changes,
@@ -142,9 +152,9 @@ def test_items_left_out_stay_unchanged_and_in_place() -> None:
     revision = build_quiz(
         LECTURE_ID,
         [
-            QuizQuestionCommand(
+            QuizQuestionChange(
                 id=Q1,
-                options=[QuizOptionCommand(id=EXCHANGEABILITY, text="Exchangeability (no bias)")],
+                options=[QuizOptionChange(id=EXCHANGEABILITY, text="Exchangeability (no bias)")],
             ),
         ],
         existing,
@@ -167,9 +177,11 @@ def test_new_items_go_at_the_end_unless_every_existing_item_is_listed() -> None:
         LECTURE_ID,
         [
             _new_question(),
-            QuizQuestionCommand(
+            QuizQuestionChange(
                 id=Q1,
-                options=[QuizOptionCommand(text="Interference", explanation="Spillover.")],
+                options=[
+                    NewQuizOption(correct=False, text="Interference", explanation="Spillover.")
+                ],
             ),
         ],
         existing,
@@ -182,15 +194,15 @@ def test_new_items_go_at_the_end_unless_every_existing_item_is_listed() -> None:
     reordered = build_quiz(
         LECTURE_ID,
         [
-            QuizQuestionCommand(id=Q2),
+            QuizQuestionChange(id=Q2),
             _new_question(),
-            QuizQuestionCommand(
+            QuizQuestionChange(
                 id=Q1,
                 options=[
-                    QuizOptionCommand(id=CONSISTENCY),
-                    QuizOptionCommand(text="Interference", explanation="Spillover."),
-                    QuizOptionCommand(id=POSITIVITY),
-                    QuizOptionCommand(id=EXCHANGEABILITY),
+                    QuizOptionChange(id=CONSISTENCY),
+                    NewQuizOption(correct=False, text="Interference", explanation="Spillover."),
+                    QuizOptionChange(id=POSITIVITY),
+                    QuizOptionChange(id=EXCHANGEABILITY),
                 ],
             ),
         ],
@@ -223,7 +235,7 @@ def test_listed_existing_items_swap_their_own_positions() -> None:
     )
     revision = build_quiz(
         LECTURE_ID,
-        [QuizQuestionCommand(id="question-cccccccccccc"), QuizQuestionCommand(id=Q1)],
+        [QuizQuestionChange(id="question-cccccccccccc"), QuizQuestionChange(id=Q1)],
         three,
     )
     assert [question.id for question in revision.quiz.questions] == [
@@ -236,7 +248,7 @@ def test_listed_existing_items_swap_their_own_positions() -> None:
 def test_removal_is_explicit() -> None:
     revision = build_quiz(
         LECTURE_ID,
-        [QuizQuestionCommand(id=Q1, remove_option_ids=[CONSISTENCY])],
+        [QuizQuestionChange(id=Q1, remove_option_ids=[CONSISTENCY])],
         _existing(),
         remove_question_ids=[Q2],
     )
@@ -250,7 +262,7 @@ def test_removal_is_explicit() -> None:
 def test_replacing_all_questions_removes_those_left_out() -> None:
     revision = build_quiz(
         LECTURE_ID,
-        [_new_question(), QuizQuestionCommand(id=Q2)],
+        [_new_question(), QuizQuestionChange(id=Q2)],
         _existing(),
         replace_all_questions=True,
     )
@@ -262,13 +274,13 @@ def test_moving_the_answer_keeps_ids_and_needs_new_explanations() -> None:
     revision = build_quiz(
         LECTURE_ID,
         [
-            QuizQuestionCommand(
+            QuizQuestionChange(
                 id=Q1,
                 options=[
-                    QuizOptionCommand(
+                    QuizOptionChange(
                         id=POSITIVITY, correct=False, explanation="Positivity is about overlap."
                     ),
-                    QuizOptionCommand(id=EXCHANGEABILITY, correct=True, explanation=""),
+                    QuizOptionChange(id=EXCHANGEABILITY, correct=True, explanation=""),
                 ],
             ),
         ],
@@ -290,31 +302,31 @@ def test_moving_the_answer_keeps_ids_and_needs_new_explanations() -> None:
     [
         ([], [Q1, Q2], "at least one Question. Use delete_quiz"),
         (
-            [QuizQuestionCommand(id="question-ffffffffffff")],
+            [QuizQuestionChange(id="question-ffffffffffff")],
             [],
             "question-ffffffffffff is not a Question of this Quiz",
         ),
         (
-            [QuizQuestionCommand(id=Q1), QuizQuestionCommand(id=Q1)],
+            [QuizQuestionChange(id=Q1), QuizQuestionChange(id=Q1)],
             [],
             f"Question {Q1} is given more than once",
         ),
-        ([QuizQuestionCommand(id=Q1)], [Q1], "either change it or remove it"),
+        ([QuizQuestionChange(id=Q1)], [Q1], "either change it or remove it"),
         ([], ["question-ffffffffffff"], "remove_question_ids: question-ffffffffffff is not"),
         (
-            [QuizQuestionCommand(id=Q1, remove_option_ids=["option-dddddddddddd"])],
+            [QuizQuestionChange(id=Q1, remove_option_ids=["option-dddddddddddd"])],
             [],
             "Question 1 remove_option_ids: option-dddddddddddd is not an Option of this Question",
         ),
         (
-            [QuizQuestionCommand(id=Q2, remove_option_ids=["option-eeeeeeeeeeee"])],
+            [QuizQuestionChange(id=Q2, remove_option_ids=["option-eeeeeeeeeeee"])],
             [],
             "Question 1 would have 1 Options; it needs 2 to 10",
         ),
         (
             [
-                QuizQuestionCommand(
-                    id=Q1, options=[QuizOptionCommand(id="option-dddddddddddd", text="Moved")]
+                QuizQuestionChange(
+                    id=Q1, options=[QuizOptionChange(id="option-dddddddddddd", text="Moved")]
                 )
             ],
             [],
@@ -322,10 +334,10 @@ def test_moving_the_answer_keeps_ids_and_needs_new_explanations() -> None:
         ),
         (
             [
-                QuizQuestionCommand(
+                QuizQuestionChange(
                     id=Q1,
                     options=[
-                        QuizOptionCommand(id=EXCHANGEABILITY, correct=True, explanation=""),
+                        QuizOptionChange(id=EXCHANGEABILITY, correct=True, explanation=""),
                     ],
                 )
             ],
@@ -334,8 +346,8 @@ def test_moving_the_answer_keeps_ids_and_needs_new_explanations() -> None:
         ),
         (
             [
-                QuizQuestionCommand(
-                    id=Q1, options=[QuizOptionCommand(id=EXCHANGEABILITY, correct=True)]
+                QuizQuestionChange(
+                    id=Q1, options=[QuizOptionChange(id=EXCHANGEABILITY, correct=True)]
                 )
             ],
             [],
@@ -343,18 +355,21 @@ def test_moving_the_answer_keeps_ids_and_needs_new_explanations() -> None:
             'longer fits. Give it a new explanation, or "" to remove it.',
         ),
         (
-            [QuizQuestionCommand(id=Q1, remove_option_ids=[POSITIVITY])],
+            [QuizQuestionChange(id=Q1, remove_option_ids=[POSITIVITY])],
             [],
             "Question 1 would have 0 correct Options",
         ),
-        ([QuizQuestionCommand(prompt="New?")], [], "Question 1 is new, so it needs its options"),
         (
             [_new_question(citations=[{**CITATION, "source_id": "x"}])],
             [],
             "Question 1 cites x, which is not a Source of this Course",
         ),
         (
-            [_new_question(options=[{"text": "Same", "correct": True}, {"text": "same"}])],
+            [
+                _new_question(
+                    options=[{"text": "Same", "correct": True}, {"text": "same", "correct": False}]
+                )
+            ],
             [],
             "two Options with the same text",
         ),
@@ -576,6 +591,83 @@ async def test_the_api_lists_quizzes_and_reads_one(tmp_path: Path) -> None:
     assert missing.status_code == 404
     assert malformed.status_code == 404
     assert invalid.status_code == 422
+
+
+# What a local model sent: each Question's prompt and its options as two separate items.
+SPLIT_QUESTIONS = [
+    {"prompt": "Which MCP primitive is model-controlled?", "citations": [CITATION]},
+    {
+        "options": [
+            {"text": "Tools", "correct": True},
+            {"text": "Resources", "correct": False},
+        ]
+    },
+    {"prompt": "Who picks a Prompt?", "citations": [CITATION]},
+    {"options": [{"text": "The user", "correct": True}, {"text": "The model", "correct": False}]},
+]
+
+
+def test_a_question_split_into_prompt_and_options_is_rejected_with_a_hint() -> None:
+    with pytest.raises(ValidationError) as error:
+        TypeAdapter(QuizQuestionCommands).validate_python(SPLIT_QUESTIONS)
+
+    assert "Question 2 has options but no prompt or id" in str(error.value)
+    assert SPLIT_QUESTION_HINT in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("questions", "message"),
+    [
+        ([{"options": SPLIT_QUESTIONS[1]["options"]}], "0.new_question.prompt\n  Field required"),
+        ([{"prompt": "New?"}], "0.new_question.options\n  Field required"),
+        (
+            [{"prompt": "New?", "options": [{"text": "Only one", "correct": True}]}],
+            "at least 2 items",
+        ),
+        (
+            [{"prompt": "New?", "options": [{"text": "Yes"}, {"text": "No"}]}],
+            "options.0.correct\n  Field required",
+        ),
+        (
+            [{"prompt": "New?", "options": [{"id": POSITIVITY, "text": "Yes", "correct": True}]}],
+            "options.0.id\n  Extra inputs are not permitted",
+        ),
+        ([{"id": "not-a-question"}], "question_change.id\n  String should match pattern"),
+    ],
+)
+def test_the_schema_says_what_a_new_question_needs(
+    questions: list[dict[str, object]], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=re.escape(message)):
+        TypeAdapter(QuizQuestionCommands).validate_python(questions)
+
+
+def test_a_null_id_marks_a_new_question_or_option() -> None:
+    question = _new_question().model_dump()
+    question["id"] = None
+    question["options"][0]["id"] = None
+
+    (command,) = TypeAdapter(QuizQuestionCommands).validate_python([question])
+
+    assert isinstance(command, NewQuizQuestion)
+    assert isinstance(command.options[0], NewQuizOption)
+
+
+@pytest.mark.anyio
+async def test_the_agent_is_told_to_join_a_split_question_before_anything_is_written(
+    tmp_path: Path,
+) -> None:
+    workspace, plan = _workspace(tmp_path)
+
+    (retry,) = await _run(
+        workspace,
+        tmp_path,
+        plan,
+        [("save_quiz", {"lecture_id": LECTURE_ID, "questions": SPLIT_QUESTIONS})],
+    )
+
+    assert SPLIT_QUESTION_HINT in retry
+    assert read_quiz(workspace, LECTURE_ID) is None
 
 
 @pytest.mark.anyio

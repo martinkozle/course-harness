@@ -80,7 +80,7 @@ from course_harness.core.sources import (
 )
 from course_harness.core.template_profiles import BUILTIN_DEFAULT_ID, TemplateProfile
 from course_harness.quiz_authoring import (
-    QuizQuestionCommand,
+    QuizQuestionCommands,
     build_quiz,
     quiz_notes,
     quiz_outline,
@@ -1881,16 +1881,18 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
     async def save_quiz(
         ctx: RunContext[CourseAgentDeps],
         lecture_id: str,
-        questions: list[QuizQuestionCommand],
+        questions: QuizQuestionCommands,
         remove_question_ids: list[str] | None = None,
         replace_all_questions: bool = False,
     ) -> ToolReturn:
         """Create a Lecture's Quiz, or change, add and remove some of its Questions.
 
-        Give the id of each existing Question or Option you change and leave the id out for a
-        new one; its ID is created for you. Fields you leave out or give as null keep their
-        current values, and Questions and Options you leave out stay unchanged. Nothing is
-        removed unless you name it in remove_question_ids or a Question's remove_option_ids.
+        Each item of questions is one whole Question. A new Question has no id and gives its
+        prompt and all its options in the same object; each new Option needs text and correct.
+        To change an existing Question or Option, give its id and only the fields that change:
+        fields you leave out or give as null keep their current values, and Questions and
+        Options you leave out stay unchanged. Nothing is removed unless you name it in
+        remove_question_ids or a Question's remove_option_ids.
         When you list every existing Question (or every Option of a Question) you keep, the
         order you give is used; otherwise existing ones keep their positions, the ones you list
         take their own positions in the order you list them, and new ones are added at the end.

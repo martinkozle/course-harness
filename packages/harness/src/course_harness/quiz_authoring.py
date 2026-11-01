@@ -1,9 +1,10 @@
 """How the Course Agent creates and revises a Lecture's Quiz.
 
 The agent refers to existing Questions and Options by ID and leaves the ID out for new ones,
-so it never invents an ID: :func:`build_quiz` mints them.  Nothing is removed unless the
-command names it: Questions and Options the command leaves out stay as they are, and a field
-left out or given as null keeps its current value.
+so it never invents an ID: :func:`build_quiz` mints them.  The schema tells the two apart: a new
+Question or Option gives every required field, a change gives an ID and only what changes.
+Nothing is removed unless the command names it: Questions and Options the command leaves out
+stay as they are, and a field of a change left out or given as null keeps its current value.
 
 Order follows one rule for Questions and for the Options of a Question:
 when the command lists every existing item it keeps, the order it gives is used, new items
@@ -13,8 +14,19 @@ own current positions in the order they are listed, and new items are added at t
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
+from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Discriminator,
+    Field,
+    Tag,
+    ValidationError,
+    model_validator,
+)
 
 from course_harness.core.presentation import SlideCitation
 from course_harness.core.quiz import (
@@ -36,61 +48,130 @@ ORDER_RULE = (
 )
 
 
-class QuizOptionCommand(BaseModel):
-    """One Option of a Question. Fields left out or given as null keep their current value."""
+def _drop_null_id(data: Any) -> Any:
+    """Read ``"id": null`` as no ID: weak models send it for every new item."""
+    if isinstance(data, dict) and "id" in data and data.get("id") is None:
+        return {key: value for key, value in data.items() if key != "id"}
+    return data
+
+
+def _kind(new: str, change: str) -> Callable[[object], str]:
+    """Route an item to its change model when it has an ID, else to its new model."""
+
+    def kind(value: object) -> str:
+        identity = value.get("id") if isinstance(value, dict) else getattr(value, "id", None)
+        return change if identity is not None else new
+
+    return kind
+
+
+EXPLANATION_DESCRIPTION = (
+    "Markdown shown when this Option is picked. For a wrong Option, say why it is wrong, "
+    "grounded in the Sources; for the correct Option it is optional."
+)
+OPTION_CITATIONS_DESCRIPTION = "Course Sources that support the Explanation, as on Slides."
+OPTION_TEXT_DESCRIPTION = "Plain text of the answer choice, without a letter or number in front."
+QUESTION_CITATIONS_DESCRIPTION = "Course Sources that support the Question and its correct answer."
+
+
+class NewQuizOption(BaseModel):
+    """A new Option; its ID is created for you."""
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str | None = Field(
-        default=None,
+    text: str = Field(min_length=1, max_length=1_000, description=OPTION_TEXT_DESCRIPTION)
+    correct: bool = Field(description="True for the one correct Option of the Question.")
+    explanation: str | None = Field(
+        default=None, max_length=4_000, description=EXPLANATION_DESCRIPTION
+    )
+    citations: list[SlideCitation] = Field(
+        default_factory=list, max_length=50, description=OPTION_CITATIONS_DESCRIPTION
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_null_id(cls, data: object) -> object:
+        return _drop_null_id(data)
+
+    @property
+    def id(self) -> None:
+        return None
+
+
+class QuizOptionChange(BaseModel):
+    """A change to an Option the Question has. Fields left out or null keep their value."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(
         pattern=OPTION_ID_PATTERN,
         description=(
-            "The ID of an Option this Question already has, to change it. Leave it out for a "
-            "new Option; a new ID is created. Keep the ID when you fix the wording, the "
-            "Explanation or which Option is correct; remove the Option and add a new one when "
-            "it comes to say something different."
+            "The ID of an Option this Question already has. Keep the ID when you fix the "
+            "wording, the Explanation or which Option is correct; remove the Option and add a "
+            "new one when it comes to say something different."
         ),
     )
-    text: str | None = Field(
-        default=None,
-        max_length=1_000,
-        description="Plain text of the answer choice, without a letter or number in front.",
-    )
+    text: str | None = Field(default=None, max_length=1_000, description=OPTION_TEXT_DESCRIPTION)
     correct: bool | None = Field(
         default=None,
         description=(
-            "True for the one correct Option of the Question. When you change it on an "
-            "existing Option, also give its new explanation."
+            "True for the one correct Option of the Question. When you change it, also give "
+            "the Option its new explanation."
         ),
     )
     explanation: str | None = Field(
         default=None,
         max_length=4_000,
-        description=(
-            "Markdown shown when this Option is picked. For a wrong Option, say why it is "
-            "wrong, grounded in the Sources; for the correct Option it is optional. Give an "
-            'empty string ("") to remove it.'
-        ),
+        description=EXPLANATION_DESCRIPTION + ' Give an empty string ("") to remove it.',
     )
     citations: list[SlideCitation] | None = Field(
-        default=None,
-        max_length=50,
-        description="Course Sources that support the Explanation, as on Slides.",
+        default=None, max_length=50, description=OPTION_CITATIONS_DESCRIPTION
     )
 
 
-class QuizQuestionCommand(BaseModel):
-    """One Question. Fields left out or given as null keep their current value."""
+QuizOptionCommand = Annotated[
+    Annotated[NewQuizOption, Tag("new_option")] | Annotated[QuizOptionChange, Tag("option_change")],
+    Discriminator(_kind("new_option", "option_change")),
+]
+"""An Option to add (no ``id``) or an Option to change (its ``id``)."""
+
+
+class NewQuizQuestion(BaseModel):
+    """A new Question with all its Options; its ID is created for you."""
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str | None = Field(
-        default=None,
-        pattern=QUESTION_ID_PATTERN,
-        description=(
-            "The ID of a Question this Quiz already has, to change it. Leave it out for a new "
-            "Question; a new ID is created."
-        ),
+    prompt: str = Field(min_length=1, max_length=2_000, description="The question, in Markdown.")
+    options: list[NewQuizOption] = Field(
+        min_length=2,
+        max_length=MAX_OPTIONS,
+        description=f"Two to {MAX_OPTIONS} Options, exactly one of them correct.",
+    )
+    citations: list[SlideCitation] = Field(
+        default_factory=list, max_length=50, description=QUESTION_CITATIONS_DESCRIPTION
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_null_id(cls, data: object) -> object:
+        return _drop_null_id(data)
+
+    @property
+    def id(self) -> None:
+        return None
+
+    @property
+    def remove_option_ids(self) -> list[str]:
+        return []
+
+
+class QuizQuestionChange(BaseModel):
+    """A change to a Question the Quiz has. Fields left out or null keep their value."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(
+        pattern=QUESTION_ID_PATTERN, description="The ID of a Question this Quiz already has."
     )
     prompt: str | None = Field(
         default=None, max_length=2_000, description="The question, in Markdown."
@@ -99,8 +180,9 @@ class QuizQuestionCommand(BaseModel):
         default=None,
         max_length=MAX_OPTIONS,
         description=(
-            f"Options to add or change; a Question has two to {MAX_OPTIONS} Options, exactly "
-            "one of them correct. Options you leave out stay unchanged. " + ORDER_RULE
+            "Options to add (without an id) or change (with their id); a Question has two to "
+            f"{MAX_OPTIONS} Options, exactly one of them correct. Options you leave out stay "
+            "unchanged. " + ORDER_RULE
         ),
     )
     remove_option_ids: list[str] = Field(
@@ -109,10 +191,52 @@ class QuizQuestionCommand(BaseModel):
         description="IDs of this Question's Options to remove.",
     )
     citations: list[SlideCitation] | None = Field(
-        default=None,
-        max_length=50,
-        description="Course Sources that support the Question and its correct answer.",
+        default=None, max_length=50, description=QUESTION_CITATIONS_DESCRIPTION
     )
+
+
+QuizQuestionCommand = Annotated[
+    Annotated[NewQuizQuestion, Tag("new_question")]
+    | Annotated[QuizQuestionChange, Tag("question_change")],
+    Discriminator(_kind("new_question", "question_change")),
+]
+"""A Question to add (no ``id``) or a Question to change (its ``id``)."""
+
+SPLIT_QUESTION_HINT = "Put each Question's options inside the same object as its prompt."
+
+
+def _joined_questions(value: object) -> object:
+    """Name the common mistake of sending a Question's prompt and options as two items."""
+    if not isinstance(value, list):
+        return value
+    for number, (before, item) in enumerate(pairwise(value), start=2):
+        if not (isinstance(before, dict) and isinstance(item, dict)):
+            continue
+        if (
+            before.get("prompt") is not None
+            and before.get("options") is None
+            and item.get("options") is not None
+            and item.get("prompt") is None
+            and item.get("id") is None
+        ):
+            raise ValueError(
+                f"Question {number} has options but no prompt or id, and Question "
+                f"{number - 1} before it has a prompt but no options. {SPLIT_QUESTION_HINT}"
+            )
+    return value
+
+
+QuizQuestionCommands = Annotated[
+    list[QuizQuestionCommand],
+    BeforeValidator(_joined_questions),
+    Field(
+        description=(
+            "Questions to add or change. A new Question has no id and gives its prompt and its "
+            "options together in one object; a change gives the Question's id and only what "
+            "changes. " + ORDER_RULE
+        )
+    ),
+]
 
 
 @dataclass(frozen=True)
@@ -260,10 +384,6 @@ def _build_options(
     option_owner: dict[str, str],
     known_sources: set[str] | None,
 ) -> tuple[list[QuizOption], list[str]]:
-    if previous is None and command.options is None:
-        raise ValueError(f"{label} is new, so it needs its options.")
-    if previous is None and command.remove_option_ids:
-        raise ValueError(f"{label} is new, so it has no Options to remove.")
     current = list(previous.options) if previous else []
     current_ids = {option.id: option for option in current}
     removed = _checked_removals(
