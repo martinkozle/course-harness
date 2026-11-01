@@ -5,7 +5,6 @@ bare remote, as a Course Author would; the Classroom attaches that remote, syncs
 Learner Share Link with a fixed token so the journey can open it.
 """
 
-import os
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -41,7 +40,7 @@ from course_harness_classroom.app import create_app
 from course_harness_classroom.config import ClassroomSettings
 from course_harness_classroom.security import token_hash
 
-PORT = int(os.environ.get("CLASSROOM_E2E_PORT", "18766"))
+PORT = 18766  # playwright.config.ts and classroom-learner.spec.ts use this port
 LEARNER_TOKEN = "e2e-learner-share-link-token-0123456789abcdef"
 SOURCE_ID = "source-aaaaaaaaaaaa"
 OTHER_SOURCE_ID = "source-bbbbbbbbbbbb"

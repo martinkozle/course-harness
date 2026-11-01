@@ -3,6 +3,7 @@ import { Check, X } from "lucide-react";
 import { useState } from "react";
 
 import {
+	ApiError,
 	api,
 	type LearnerQuestion,
 	type LearnerQuiz,
@@ -10,13 +11,14 @@ import {
 } from "./api";
 import type { Identity } from "./identity";
 import { Marks } from "./Marks";
-import { type ProgressMap, tally, tallySummary } from "./progress";
+import { type ProgressMap, questionKey, tally, tallySummary } from "./progress";
 
 const KEYS = "ABCDEFGHIJ";
 
-function Feedback({ feedback }: { feedback: OptionFeedback }) {
+function Feedback({ id, feedback }: { id: string; feedback: OptionFeedback }) {
 	return (
 		<div
+			id={id}
 			className={`quiz-feedback ${feedback.correct ? "is-correct" : "is-wrong"}`}
 		>
 			{feedback.explanation ? <Markdown text={feedback.explanation} /> : null}
@@ -36,6 +38,7 @@ function Question({
 	tried,
 	identity,
 	onAnswered,
+	onStale,
 }: {
 	slug: string;
 	lectureId: string;
@@ -45,6 +48,7 @@ function Question({
 	tried: OptionFeedback[];
 	identity: Identity;
 	onAnswered: (questionId: string, feedback: OptionFeedback) => void;
+	onStale: () => void;
 }) {
 	const [pending, setPending] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
@@ -69,9 +73,17 @@ function Question({
 			);
 			onAnswered(question.id, result);
 		} catch (caught) {
-			setError(
-				errorMessage(caught, "Your answer could not be sent. Try again."),
-			);
+			if (caught instanceof ApiError && caught.status === 422) {
+				// The course moved to a newer Release in which this question changed.
+				setError(
+					"This question changed in a newer version of the course. The questions were reloaded.",
+				);
+				onStale();
+			} else {
+				setError(
+					errorMessage(caught, "Your answer could not be sent. Try again."),
+				);
+			}
 		} finally {
 			setPending(null);
 		}
@@ -99,14 +111,23 @@ function Question({
 							? "correct"
 							: "wrong"
 						: "open";
+					// Not `disabled`: a picked Option keeps keyboard focus and reads its feedback.
+					const inactive = Boolean(feedback) || solved || pending !== null;
+					const feedbackId = `${lectureId}-${option.id}-feedback`;
+					const explained = Boolean(
+						feedback && (feedback.explanation || feedback.citations.length),
+					);
 					return (
 						<li key={option.id} className={`quiz-option is-${state}`}>
 							<button
 								type="button"
 								className="quiz-choice"
-								disabled={Boolean(feedback) || solved || pending !== null}
+								aria-disabled={inactive}
 								aria-busy={pending === option.id}
-								onClick={() => pick(option.id)}
+								aria-describedby={explained ? feedbackId : undefined}
+								onClick={() => {
+									if (!inactive) pick(option.id);
+								}}
 							>
 								<span className="quiz-key" aria-hidden="true">
 									{state === "correct" ? (
@@ -124,9 +145,8 @@ function Question({
 									</span>
 								) : null}
 							</button>
-							{feedback &&
-							(feedback.explanation || feedback.citations.length) ? (
-								<Feedback feedback={feedback} />
+							{feedback && explained ? (
+								<Feedback id={feedbackId} feedback={feedback} />
 							) : null}
 						</li>
 					);
@@ -151,6 +171,7 @@ export function Quiz({
 	progress,
 	identity,
 	onAnswered,
+	onStale,
 }: {
 	slug: string;
 	quiz: LearnerQuiz;
@@ -161,6 +182,8 @@ export function Quiz({
 		questionId: string,
 		feedback: OptionFeedback,
 	) => void;
+	/** Load the Quizzes again: the served Release no longer has a Question. */
+	onStale: () => void;
 }) {
 	const counts = tally(quiz, progress);
 	return (
@@ -178,11 +201,15 @@ export function Quiz({
 						question={question}
 						number={index + 1}
 						total={quiz.questions.length}
-						tried={progress.get(question.id)?.tried ?? []}
+						tried={
+							progress.get(questionKey(quiz.lecture_id, question.id))?.tried ??
+							[]
+						}
 						identity={identity}
 						onAnswered={(questionId, feedback) =>
 							onAnswered(quiz.lecture_id, questionId, feedback)
 						}
+						onStale={onStale}
 					/>
 				))}
 			</ol>

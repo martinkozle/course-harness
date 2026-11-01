@@ -1,6 +1,12 @@
 import { Dialog, errorMessage, Notice } from "@course-harness/ui";
 import { UserRound } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 
 import {
 	ApiError,
@@ -26,6 +32,7 @@ export type LearnerState = {
 		questionId: string,
 		feedback: OptionFeedback,
 	) => void;
+	reloadQuizzes: () => void;
 };
 
 function useCourse(slug: string) {
@@ -66,11 +73,21 @@ function useLearning(
 	const [quizzes, setQuizzes] = useState<LearnerQuiz[] | null>(null);
 	const [progress, setProgress] = useState<ProgressMap>(new Map());
 	const [error, setError] = useState<string | null>(null);
+	// Changes when the served Release no longer has a Question on the page, to load again.
+	const [generation, setGeneration] = useState(0);
+	const loadedFor = useRef<string | null>(null);
 	const hasRelease = Boolean(course?.release);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `generation` asks for a reload
 	useEffect(() => {
 		if (!studentId || !hasRelease) return;
 		let active = true;
 		setError(null);
+		if (loadedFor.current !== studentId) {
+			// Another student's Option order and progress must never show, even briefly.
+			loadedFor.current = studentId;
+			setQuizzes(null);
+			setProgress(new Map());
+		}
 		Promise.all([api.quizzes(slug, studentId), api.progress(slug, studentId)])
 			.then(([loaded, restored]) => {
 				if (!active) return;
@@ -84,7 +101,7 @@ function useLearning(
 		return () => {
 			active = false;
 		};
-	}, [slug, studentId, hasRelease]);
+	}, [slug, studentId, hasRelease, generation]);
 	const onAnswered = useCallback(
 		(lectureId: string, questionId: string, feedback: OptionFeedback) =>
 			setProgress((current) =>
@@ -92,7 +109,11 @@ function useLearning(
 			),
 		[],
 	);
-	return { quizzes, progress, error, onAnswered };
+	const reloadQuizzes = useCallback(
+		() => setGeneration((value) => value + 1),
+		[],
+	);
+	return { quizzes, progress, error, onAnswered, reloadQuizzes };
 }
 
 /** A course's pages, with its title and the student's identity in the bar above them. */
@@ -151,6 +172,7 @@ export function CourseShell({
 			quizzes: learning.quizzes,
 			progress: learning.progress,
 			onAnswered: learning.onAnswered,
+			reloadQuizzes: learning.reloadQuizzes,
 		};
 		content = (
 			<>

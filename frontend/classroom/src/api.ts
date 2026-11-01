@@ -132,10 +132,16 @@ export class ApiError extends Error {
 	}
 }
 
+/** The student ID travels in a header, never in a URL, so it stays out of access logs. */
+function studentHeader(studentId: string): Record<string, string> {
+	return { "X-Classroom-Student": encodeURIComponent(studentId) };
+}
+
 async function request<T>(
 	method: string,
 	path: string,
 	body?: unknown,
+	headers: Record<string, string> = {},
 ): Promise<T> {
 	const response = await fetch(path, {
 		method,
@@ -143,6 +149,7 @@ async function request<T>(
 		headers: {
 			"X-Classroom-Request": "1",
 			...(body === undefined ? {} : { "Content-Type": "application/json" }),
+			...headers,
 		},
 		body: body === undefined ? undefined : JSON.stringify(body),
 	});
@@ -193,12 +200,16 @@ export const api = {
 	quizzes: (slug: string, studentId: string) =>
 		request<LearnerQuiz[]>(
 			"GET",
-			`/api/c/${encodeURIComponent(slug)}/quizzes?${new URLSearchParams({ student_id: studentId })}`,
+			`/api/c/${encodeURIComponent(slug)}/quizzes`,
+			undefined,
+			studentHeader(studentId),
 		),
 	progress: (slug: string, studentId: string) =>
 		request<Progress>(
 			"GET",
-			`/api/c/${encodeURIComponent(slug)}/progress?${new URLSearchParams({ student_id: studentId })}`,
+			`/api/c/${encodeURIComponent(slug)}/progress`,
+			undefined,
+			studentHeader(studentId),
 		),
 	answer: (slug: string, answer: AnswerRequest) =>
 		request<AnswerResult>(

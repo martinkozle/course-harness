@@ -116,9 +116,9 @@ def progress(snapshot: ServedSnapshot, answers: Iterable[Answer]) -> list[Questi
     Correctness is derived against the served Release, so a fixed answer key regrades earlier
     Answers. Answers to Questions or Options the Release no longer has are left out.
     """
-    picks: dict[str, list[str]] = {}
+    picks: dict[tuple[str, str], list[str]] = {}
     for answer in answers:
-        picked = picks.setdefault(answer.question_id, [])
+        picked = picks.setdefault((answer.lecture_id, answer.question_id), [])
         if answer.option_id not in picked:
             picked.append(answer.option_id)
     result: list[QuestionProgress] = []
@@ -128,7 +128,7 @@ def progress(snapshot: ServedSnapshot, answers: Iterable[Answer]) -> list[Questi
         for question in lecture.quiz.questions:
             tried = [
                 feedback(question, option)
-                for option_id in picks.get(question.id, [])
+                for option_id in picks.get((lecture.id, question.id), [])
                 if (option := option_by_id(question, option_id)) is not None
             ]
             if tried:

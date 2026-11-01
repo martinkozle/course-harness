@@ -3,7 +3,7 @@
 import json
 import sqlite3
 from typing import Any, cast
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import pytest
 from fastapi import FastAPI
@@ -57,6 +57,10 @@ def _answer(
     )
 
 
+def _student(student_id: str) -> dict[str, str]:
+    return {"X-Classroom-Student": quote(student_id, safe="")}
+
+
 def _answers(settings: ClassroomSettings) -> list[dict[str, Any]]:
     connection = sqlite3.connect(settings.database_path)
     connection.row_factory = sqlite3.Row
@@ -89,8 +93,8 @@ def test_learner_payloads_before_an_answer_never_carry_the_answer_key(
 ) -> None:
     course = learner.get("/api/c/causal")
     lecture = learner.get(f"/api/c/causal/lectures/{LECTURE_ID}")
-    quizzes = learner.get("/api/c/causal/quizzes", params={"student_id": "s-1001"})
-    progress = learner.get("/api/c/causal/progress", params={"student_id": "s-1001"})
+    quizzes = learner.get("/api/c/causal/quizzes", headers=_student("s-1001"))
+    progress = learner.get("/api/c/causal/progress", headers=_student("s-1001"))
 
     for response in (course, lecture, quizzes, progress):
         assert response.status_code == 200, response.text
@@ -108,7 +112,7 @@ def test_options_are_shuffled_the_same_way_for_one_student_and_question(
     learner: TestClient,
 ) -> None:
     def order(student_id: str) -> list[str]:
-        quizzes = learner.get("/api/c/causal/quizzes", params={"student_id": student_id})
+        quizzes = learner.get("/api/c/causal/quizzes", headers=_student(student_id))
         return [option["id"] for option in quizzes.json()[0]["questions"][0]["options"]]
 
     assert order("s-1001") == order("s-1001")
@@ -195,6 +199,20 @@ def test_attempts_count_per_student_and_question_and_stop_after_a_correct_answer
     ]
 
 
+def test_picking_an_option_again_is_answered_but_not_recorded(
+    learner: TestClient, settings: ClassroomSettings
+) -> None:
+    assert _answer(learner, WRONG).json()["recorded"] is True
+    again = _answer(learner, WRONG).json()
+    assert again["recorded"] is False
+    assert again["explanation"] == "Randomisation does not remove sampling error."
+    assert _answer(learner, OTHER_WRONG).json()["recorded"] is True
+
+    # An attempt number is the count of distinct Options tried.
+    attempts = [(row["option_id"], row["attempt"]) for row in _answers(settings)]
+    assert attempts == [(WRONG, 1), (OTHER_WRONG, 2)]
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -229,11 +247,17 @@ def test_answers_need_an_identity_a_small_body_and_course_access(
     }
     blank = learner.post("/api/c/causal/answers", json={**base, "student_id": "  "})
     control = learner.post("/api/c/causal/answers", json={**base, "learner_name": "A\nB"})
+    unprintable = [
+        learner.post("/api/c/causal/answers", json={**base, field: f"A{character}da"})
+        for field in ("learner_name", "student_id")
+        for character in ("\x85", "\u202e", "\u2067", "\u2028")
+    ]
     extra = learner.post("/api/c/causal/answers", json={**base, "correct": True})
     large = learner.post("/api/c/causal/answers", json={**base, "learner_name": "x" * 5_000})
     stranger = make_client().post("/api/c/causal/answers", json=base)
 
     assert [blank.status_code, control.status_code, extra.status_code] == [422, 422, 422]
+    assert {response.status_code for response in unprintable} == {422}
     assert large.status_code == 413
     assert stranger.status_code == 401
     assert _answers(settings) == []
@@ -251,6 +275,21 @@ def test_answers_are_rate_limited_per_student_and_per_address(learner: TestClien
     assert _answer(learner, WRONG, student_id="s-3").status_code == 429
 
 
+def test_answers_without_course_access_are_refused_before_limits_and_body(
+    learner: TestClient, make_client: Any
+) -> None:
+    limits = cast(FastAPI, learner.app).state.answer_limits
+    limits["address"] = RateLimiter(limit=1)
+    stranger = make_client()
+
+    oversized = stranger.post("/api/c/causal/answers", content=b"x" * 10_000)
+    malformed = stranger.post("/api/c/causal/answers", content=b"not json")
+
+    assert [oversized.status_code, malformed.status_code] == [401, 401]
+    # The stranger's requests used none of the address's budget.
+    assert _answer(learner, WRONG).status_code == 200
+
+
 def test_progress_is_restored_for_the_same_student_id(
     learner: TestClient, make_client: Any, admin: TestClient
 ) -> None:
@@ -262,7 +301,7 @@ def test_progress_is_restored_for_the_same_student_id(
     url = admin.post("/api/admin/courses/causal/links/learner").json()["url"]
     device = make_client()
     device.get(urlsplit(url).path)
-    progress = device.get("/api/c/causal/progress", params={"student_id": "s-1001"}).json()
+    progress = device.get("/api/c/causal/progress", headers=_student("s-1001")).json()
 
     (question,) = progress["questions"]
     assert question["question_id"] == QUESTION_ID
@@ -274,12 +313,15 @@ def test_progress_is_restored_for_the_same_student_id(
     assert "on average" not in json.dumps(progress)
 
     _answer(device, CORRECT)
-    restored = device.get("/api/c/causal/progress", params={"student_id": "s-1001"}).json()
+    restored = device.get("/api/c/causal/progress", headers=_student("s-1001")).json()
     (question,) = restored["questions"]
     assert question["correct"] is True
     assert [item["option_id"] for item in question["tried"]] == [WRONG, CORRECT]
     assert question["tried"][1]["explanation"].startswith("Random assignment")
     assert device.get("/api/c/causal/progress").status_code == 422
+    for bad in ("s%E2%80%AE1", "s%0A1", "%FF", "x" * 65):
+        response = device.get("/api/c/causal/progress", headers={"X-Classroom-Student": bad})
+        assert response.status_code == 422, bad
 
 
 def test_instructors_answer_like_learners_and_are_marked_as_instructors(

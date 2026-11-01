@@ -75,8 +75,9 @@ MIGRATIONS: tuple[str, ...] = (
         role TEXT NOT NULL CHECK (role IN ('learner', 'instructor')),
         answered_at TEXT NOT NULL
     );
-    CREATE INDEX answers_by_student ON answers (course_id, student_id, question_id);
-    CREATE INDEX answers_by_question ON answers (course_id, question_id);
+    CREATE INDEX answers_by_student
+        ON answers (course_id, student_id, lecture_id, question_id);
+    CREATE INDEX answers_by_question ON answers (course_id, lecture_id, question_id);
     """,
 )
 
@@ -364,10 +365,12 @@ class Store:
     ) -> Answer | None:
         """Record an Answer as the next attempt of its student on its Question.
 
-        ``settled`` sees the Option IDs the student picked on this Question before, in order; when
-        it says the Question is already answered correctly, nothing is recorded and ``None`` is
-        returned. Counting and inserting happen in one write transaction, so concurrent Answers
-        never share an attempt number.
+        A Question is keyed by its Lecture and Question IDs. ``settled`` sees the Option IDs the
+        student picked on it before, in order; when it says the Question is already answered
+        correctly, or the student picked this Option before, nothing is recorded and ``None`` is
+        returned, so an attempt number is the count of distinct Options tried. Reading and
+        inserting happen in one write transaction, so concurrent Answers never share an attempt
+        number.
         """
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -375,12 +378,17 @@ class Store:
                 earlier = [
                     row["option_id"]
                     for row in connection.execute(
-                        "SELECT option_id FROM answers "
-                        "WHERE course_id = ? AND student_id = ? AND question_id = ? ORDER BY id",
-                        (answer.course_id, answer.student_id, answer.question_id),
+                        "SELECT option_id FROM answers WHERE course_id = ? AND student_id = ? "
+                        "AND lecture_id = ? AND question_id = ? ORDER BY id",
+                        (
+                            answer.course_id,
+                            answer.student_id,
+                            answer.lecture_id,
+                            answer.question_id,
+                        ),
                     )
                 ]
-                if settled(earlier):
+                if answer.option_id in earlier or settled(earlier):
                     connection.execute("COMMIT")
                     return None
                 moment = now().isoformat(timespec="milliseconds")

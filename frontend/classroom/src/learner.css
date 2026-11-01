@@ -451,12 +451,12 @@ a.bar-title:hover {
 		background-color 120ms ease;
 }
 
-.quiz-choice:hover:not(:disabled) {
+.quiz-choice:hover:not([aria-disabled="true"]) {
 	border-color: var(--accent);
 	background: var(--accent-soft);
 }
 
-.quiz-choice:disabled {
+.quiz-choice[aria-disabled="true"] {
 	cursor: default;
 }
 
@@ -495,7 +495,7 @@ a.bar-title:hover {
 	font-weight: 600;
 }
 
-.quiz-option.is-open .quiz-choice:disabled .quiz-choice-text {
+.quiz-option.is-open .quiz-choice[aria-disabled="true"] .quiz-choice-text {
 	color: var(--ink-muted);
 }
 

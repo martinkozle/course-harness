@@ -10,9 +10,11 @@ const KEY = "classroom.identity";
 export const NAME_MAX = 100;
 export const STUDENT_ID_MAX = 64;
 
-// Printable text, as the server accepts.
-// biome-ignore lint/suspicious/noControlCharactersInRegex: refusing control characters is the point
-const CONTROL = /[\u0000-\u001f\u007f]/;
+// Plain text, as the server accepts: no C0 or C1 controls, line or paragraph separators, or
+// bidirectional overrides and isolates.
+const UNPRINTABLE =
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: refusing control characters is the point
+	/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
 
 export function identityProblem(identity: Identity): string | null {
 	if (!identity.name.trim()) return "Enter your name.";
@@ -21,7 +23,7 @@ export function identityProblem(identity: Identity): string | null {
 		return `Keep your name under ${NAME_MAX} characters.`;
 	if (identity.studentId.trim().length > STUDENT_ID_MAX)
 		return `Keep your student ID under ${STUDENT_ID_MAX} characters.`;
-	if (CONTROL.test(identity.name) || CONTROL.test(identity.studentId))
+	if (UNPRINTABLE.test(identity.name) || UNPRINTABLE.test(identity.studentId))
 		return "Use letters, digits and punctuation only.";
 	return null;
 }

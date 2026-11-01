@@ -18,11 +18,12 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import unquote
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError
 from starlette.staticfiles import StaticFiles
 
 from course_harness.core.quiz import option_by_id
@@ -80,8 +81,10 @@ ASSET_PATH = re.compile(
 FAILED_LOGIN_DELAY_SECONDS = 1.0
 NO_ACCESS = "Open the link you were given to see this course."
 NO_RELEASE = "This course has no Release yet."
-# Printable text only: names and student IDs end up in Instructor tables and CSV files.
-PRINTABLE = r"^[^\x00-\x1f\x7f]+$"
+# Names and student IDs end up in Instructor tables and CSV files, so they must be plain text:
+# no C0 or C1 controls, line or paragraph separators, or bidirectional overrides and isolates.
+UNPRINTABLE = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
+STUDENT_HEADER = "X-Classroom-Student"
 MAX_ANSWER_BYTES = 4_096
 # Answers per minute: one network address may be a whole classroom behind one router.
 ANSWERS_PER_ADDRESS = 240
@@ -181,14 +184,23 @@ class LectureResponse(BaseModel):
     question_count: int
 
 
+def _plain_text(value: str) -> str:
+    if UNPRINTABLE.search(value):
+        raise ValueError("must be plain text without control or direction characters")
+    return value
+
+
+PlainText = Annotated[str, AfterValidator(_plain_text)]
+
+
 class AnswerRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     lecture_id: str = Field(min_length=1, max_length=64)
     question_id: str = Field(min_length=1, max_length=64)
     option_id: str = Field(min_length=1, max_length=64)
-    learner_name: str = Field(min_length=1, max_length=100, pattern=PRINTABLE)
-    student_id: str = Field(min_length=1, max_length=64, pattern=PRINTABLE)
+    learner_name: PlainText = Field(min_length=1, max_length=100)
+    student_id: PlainText = Field(min_length=1, max_length=64)
 
 
 class AnswerResponse(OptionFeedback):
@@ -545,15 +557,29 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
             question_count=len(lecture.quiz.questions) if lecture.quiz else 0,
         )
 
+    def student_header(
+        student: Annotated[str | None, Header(alias=STUDENT_HEADER, max_length=400)] = None,
+    ) -> str | None:
+        """The student ID a page sends in a header, percent-encoded, so that it stays out of URLs
+        and access logs."""
+        if student is None:
+            return None
+        try:
+            value = unquote(student, errors="strict").strip() if student.isascii() else ""
+        except UnicodeDecodeError:
+            value = ""
+        if not value or len(value) > 64 or UNPRINTABLE.search(value):
+            raise HTTPException(status_code=422, detail="That student ID is not valid.")
+        return value
+
+    StudentHeader = Annotated[str | None, Depends(student_header)]
+
     @app.get("/api/c/{slug}/quizzes")
-    def quizzes(
-        access: CourseAccess,
-        student_id: Annotated[str, Query(max_length=64)] = "",
-    ) -> list[LearnerQuiz]:
+    def quizzes(access: CourseAccess, student: StudentHeader) -> list[LearnerQuiz]:
         """Every Quiz without its answer key, its Options shuffled for this student."""
         course, _role = access
         snapshot, _directory = served(course)
-        return learner_quizzes(snapshot, student_id=student_id.strip())
+        return learner_quizzes(snapshot, student_id=student or "")
 
     async def answer_body(request: Request) -> AnswerRequest:
         """The Answer in the request body, refused early when one network address sends too many
@@ -578,12 +604,13 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
 
     @app.post("/api/c/{slug}/answers")
     def answer(
-        body: Annotated[AnswerRequest, Depends(answer_body)], access: CourseAccess
+        access: CourseAccess, body: Annotated[AnswerRequest, Depends(answer_body)]
     ) -> AnswerResponse:
         """Record a picked Option and tell the student about it.
 
-        The Answer stores the Release tag, the IDs and the attempt number, never whether it was
-        correct (ADR 0018). Once a student has answered a Question correctly, further picks are
+        Course access is checked before the rate limits and the body. The Answer stores the
+        Release tag, the IDs and the attempt number, never whether it was correct (ADR 0018).
+        Picking an Option again, or any Option once the Question is answered correctly, is
         answered but not recorded.
         """
         course, role = access
@@ -619,14 +646,14 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
         )
 
     @app.get("/api/c/{slug}/progress")
-    def student_progress(
-        access: CourseAccess,
-        student_id: Annotated[str, Query(min_length=1, max_length=64)],
-    ) -> ProgressResponse:
+    def student_progress(access: CourseAccess, student: StudentHeader) -> ProgressResponse:
         """A student's state on each Question, from the Answers given with their student ID."""
         course, _role = access
+        if student is None:
+            raise HTTPException(
+                status_code=422, detail=f"Send your student ID in {STUDENT_HEADER}."
+            )
         snapshot, _directory = served(course)
-        student = student_id.strip()
         return ProgressResponse(
             student_id=student,
             questions=progress(snapshot, store.answers(course.id, student_id=student)),

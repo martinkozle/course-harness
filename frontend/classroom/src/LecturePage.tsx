@@ -134,6 +134,7 @@ export function LecturePage({
 							progress={state.progress}
 							identity={state.identity}
 							onAnswered={state.onAnswered}
+							onStale={state.reloadQuizzes}
 						/>
 					) : (
 						<p className="meta">Loading the questions…</p>

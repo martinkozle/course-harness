@@ -1,19 +1,12 @@
-import AxeBuilder from "@axe-core/playwright";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+
+import { expectNoAccessibilityViolations } from "./axe";
 
 // The Classroom started by tests/e2e/run_classroom_server.py, serving one fixture Course.
 const CLASSROOM = "http://127.0.0.1:18766";
 const LEARNER_LINK = `${CLASSROOM}/l/e2e-learner-share-link-token-0123456789abcdef`;
-
-async function expectAccessible(page: Page, surface: string) {
-	const results = await new AxeBuilder({ page })
-		.withTags(["wcag2a", "wcag2aa", "wcag21aa"])
-		.analyze();
-	expect(
-		results.violations,
-		`${surface} has no WCAG A or AA accessibility violations`,
-	).toEqual([]);
-}
+// A fresh student each run, so earlier answers never leak into this one.
+const STUDENT_ID = `e2e-${Date.now().toString(36)}`;
 
 test("a Learner identifies, reads a Lecture and retries a Quiz until correct", async ({
 	page,
@@ -28,7 +21,7 @@ test("a Learner identifies, reads a Lecture and retries a Quiz until correct", a
 	await page.getByRole("button", { name: "Start" }).click();
 	await expect(page.getByText("Enter your name.")).toBeVisible();
 	await page.getByLabel("Your name").fill("Ada Lovelace");
-	await page.getByLabel("Student ID").fill("e2e-1001");
+	await page.getByLabel("Student ID").fill(STUDENT_ID);
 	await page.getByRole("button", { name: "Start" }).click();
 
 	await expect(
@@ -40,7 +33,7 @@ test("a Learner identifies, reads a Lecture and retries a Quiz until correct", a
 	await expect(
 		page.getByText("0 of 6 questions answered correctly"),
 	).toBeVisible();
-	await expectAccessible(page, "The course page");
+	await expectNoAccessibilityViolations(page, "The course page");
 
 	await page
 		.getByRole("link", { name: /From association to intervention/ })
@@ -72,26 +65,32 @@ test("a Learner identifies, reads a Lecture and retries a Quiz until correct", a
 	await expect(
 		first.getByText("small groups can still differ by chance"),
 	).toBeVisible();
-	await expect(
-		first.getByRole("button", { name: /Sampling error/ }),
-	).toBeDisabled();
+	// The picked Option keeps keyboard focus and cannot be picked again.
+	const picked = first.getByRole("button", { name: /Sampling error/ });
+	await expect(picked).toBeFocused();
+	await expect(picked).toHaveAttribute("aria-disabled", "true");
 	await first.getByRole("button", { name: /Confounding/ }).click();
 	await expect(
 		first.getByText("balances confounders between groups"),
 	).toBeVisible();
 	await expect(
 		first.getByRole("button", { name: /Measurement error/ }),
-	).toBeDisabled();
+	).toHaveAttribute("aria-disabled", "true");
 	await expect(check.getByText("1 of 2 answered correctly")).toBeVisible();
-	await expectAccessible(page, "A Lecture with an answered Quiz");
+	await expectNoAccessibilityViolations(
+		page,
+		"A Lecture with an answered Quiz",
+	);
 
 	// Another device with the same student ID gets its progress back from the Classroom.
-	const phone = await browser.newPage({
+	const device = await browser.newContext({
 		viewport: { width: 375, height: 812 },
+		reducedMotion: "reduce",
 	});
+	const phone = await device.newPage();
 	await phone.goto(LEARNER_LINK);
 	await phone.getByLabel("Your name").fill("Ada Lovelace");
-	await phone.getByLabel("Student ID").fill("e2e-1001");
+	await phone.getByLabel("Student ID").fill(STUDENT_ID);
 	await phone.getByRole("button", { name: "Start" }).click();
 	await phone.getByRole("tab", { name: /Exercises/ }).click();
 	await expect(phone).toHaveURL(`${CLASSROOM}/c/causal/exercises`);
@@ -109,5 +108,5 @@ test("a Learner identifies, reads a Lecture and retries a Quiz until correct", a
 	expect(width, "the phone layout never scrolls sideways").toBeLessThanOrEqual(
 		375,
 	);
-	await phone.close();
+	await device.close();
 });

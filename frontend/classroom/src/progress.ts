@@ -5,8 +5,13 @@ import type {
 	QuestionProgress,
 } from "./api";
 
-/** A student's state on each Question they answered, by Question ID. */
+/** A student's state on each Question they answered, by `questionKey`. */
 export type ProgressMap = Map<string, QuestionProgress>;
+
+/** A Question is identified by its Lecture and its own ID, as the Classroom records it. */
+export function questionKey(lectureId: string, questionId: string): string {
+	return `${lectureId}/${questionId}`;
+}
 
 export type QuestionMark = "open" | "tried" | "correct";
 
@@ -18,7 +23,12 @@ export type QuizTally = {
 };
 
 export function progressMap(progress: Progress): ProgressMap {
-	return new Map(progress.questions.map((item) => [item.question_id, item]));
+	return new Map(
+		progress.questions.map((item) => [
+			questionKey(item.lecture_id, item.question_id),
+			item,
+		]),
+	);
 }
 
 /** Add one answered Option to a Question's progress. */
@@ -28,10 +38,11 @@ export function withAnswer(
 	questionId: string,
 	feedback: OptionFeedback,
 ): ProgressMap {
-	const current = map.get(questionId);
+	const key = questionKey(lectureId, questionId);
+	const current = map.get(key);
 	const tried = current?.tried ?? [];
 	const next = new Map(map);
-	next.set(questionId, {
+	next.set(key, {
 		lecture_id: lectureId,
 		question_id: questionId,
 		correct: Boolean(current?.correct) || feedback.correct,
@@ -48,7 +59,9 @@ export function markOf(item: QuestionProgress | undefined): QuestionMark {
 }
 
 export function tally(quiz: LearnerQuiz, map: ProgressMap): QuizTally {
-	const marks = quiz.questions.map((question) => markOf(map.get(question.id)));
+	const marks = quiz.questions.map((question) =>
+		markOf(map.get(questionKey(quiz.lecture_id, question.id))),
+	);
 	return {
 		total: marks.length,
 		answered: marks.filter((mark) => mark !== "open").length,
