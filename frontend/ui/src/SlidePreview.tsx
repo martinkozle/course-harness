@@ -29,8 +29,15 @@ function slotContent(
 	return value ?? null;
 }
 
-function slotStyle(slot: PreviewSlot): CSSProperties {
+/**
+ * Where and how a slot's text sits. The template's text colour applies only over its rendered
+ * background: without one the slide is plain white, where light template text would vanish.
+ */
+function slotStyle(slot: PreviewSlot, onBackground: boolean): CSSProperties {
 	return {
+		...(onBackground && slot.color
+			? ({ "--slot-color": slot.color } as CSSProperties)
+			: {}),
 		left: `${slot.left * 100}%`,
 		top: `${slot.top * 100}%`,
 		width: `${slot.width * 100}%`,
@@ -163,14 +170,14 @@ export function SlidePreview({
 						<img
 							key={name}
 							className="slide-slot slide-slot-image"
-							style={slotStyle(slot)}
+							style={slotStyle(slot, Boolean(backgroundUrl))}
 							src={imageUrl}
 							alt=""
 						/>
 					);
 				const content = slotContent(slide, name, imageUrl);
 				return content ? (
-					<span key={name} className="slide-slot" style={slotStyle(slot)}>
+					<span key={name} className="slide-slot" style={slotStyle(slot, Boolean(backgroundUrl))}>
 						{content}
 					</span>
 				) : null;

@@ -24,7 +24,8 @@
 .slide-slot {
 	position: absolute;
 	overflow: hidden;
-	color: #1f2933;
+	/* The template's text colour, set per slot over a rendered background. */
+	color: var(--slot-color, #1f2933);
 	line-height: 1.2;
 	white-space: pre-line;
 }

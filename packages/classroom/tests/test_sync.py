@@ -1,5 +1,6 @@
 """Attaching a course and syncing its newest valid Release from a fixture repository."""
 
+import json
 import os
 import subprocess
 import threading
@@ -13,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from course_harness_classroom import mirror as mirror_module
 from course_harness_classroom.config import ClassroomSettings
+from course_harness_classroom.served import SNAPSHOT_FORMAT
 from course_harness_classroom.store import Store
 from course_harness_classroom.sync import PeriodicSync, SyncService
 
@@ -398,3 +400,32 @@ def test_a_repository_with_no_release_says_how_to_publish_one(
     assert course["release"] is None
     assert course["sync_status"] == "error"
     assert course["sync_message"].startswith("This repository has no published Release yet.")
+
+
+def test_a_snapshot_from_before_text_colours_is_served_until_a_sync_prepares_it_again(
+    admin: TestClient, course_repository: CourseRepository, settings: ClassroomSettings
+) -> None:
+    release = course_repository.publish("fall-2026", "Fall 2026")
+    _attach(admin, course_repository)
+    served_dir = settings.courses_dir / "1" / "served" / f"fall-2026-{release.commit_oid[:12]}"
+    snapshot_file = served_dir / "release.json"
+    current = json.loads(snapshot_file.read_text())
+    assert current["format"] == SNAPSHOT_FORMAT
+    old = {key: value for key, value in current.items() if key != "format"}
+    for lecture in old["lectures"]:
+        for slide in lecture["preview"]["slides"]:
+            for slot in slide["slots"].values():
+                del slot["color"]
+    snapshot_file.write_text(json.dumps(old))
+
+    store = Store(settings.database_path)
+    served = SyncService(store, settings).snapshot(store.courses()[0])
+    assert served is not None and served.format == 1
+    assert served.lectures[0].preview is not None
+    assert served.lectures[0].preview.slides[0].slots["title"].color is None
+
+    _sync(admin)
+
+    renewed = json.loads(snapshot_file.read_text())
+    assert renewed["format"] == SNAPSHOT_FORMAT
+    assert renewed["lectures"][0]["preview"]["slides"][0]["slots"]["title"]["color"] == "#000000"

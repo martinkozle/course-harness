@@ -83,6 +83,13 @@ class ServedSnapshot(BaseModel):
     lectures: list[ServedLecture]
     files_available: bool
     backgrounds_rendered: bool
+    # Raised when the served form gains something a sync should recompute for a Release it already
+    # serves; snapshots written before the field existed read as format 1.
+    format: int = 1
+
+
+# 2: slide previews carry the template's text colours.
+SNAPSHOT_FORMAT = 2
 
 
 @dataclass(frozen=True)
@@ -169,6 +176,7 @@ def prepare_release(
             lectures=lectures,
             files_available=files is not None,
             backgrounds_rendered=backgrounds_rendered,
+            format=SNAPSHOT_FORMAT,
         )
         (staging / SNAPSHOT_FILE).write_text(snapshot.model_dump_json(), encoding="utf-8")
         target = served_dir / name

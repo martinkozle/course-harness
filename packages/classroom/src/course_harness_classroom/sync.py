@@ -30,6 +30,7 @@ from course_harness_classroom.mirror import MirrorError, fetch
 from course_harness_classroom.release_quizzes import ReleaseQuizCache, snapshot_quizzes
 from course_harness_classroom.repo_urls import InvalidRepoUrl
 from course_harness_classroom.served import (
+    SNAPSHOT_FORMAT,
     ServedSnapshot,
     load_snapshot,
     prepare_release,
@@ -106,6 +107,15 @@ class SyncService:
             cached = load_snapshot(directory)
             self._snapshots[directory] = cached
         return cached
+
+    def _snapshot_is_current(self, course: Course) -> bool:
+        """Whether the served snapshot exists in the current format; an older one is prepared
+        again, so the same Release gains what the format added."""
+        try:
+            snapshot = self.snapshot(course)
+        except OSError, ValueError:
+            return False
+        return snapshot is not None and snapshot.format >= SNAPSHOT_FORMAT
 
     def _lock(self, course_id: int) -> threading.Lock:
         with self._locks_guard:
@@ -214,7 +224,7 @@ class SyncService:
         if (
             course.release_slug == release.slug
             and course.release_commit == release.commit_oid
-            and self.snapshot_dir(course) is not None
+            and self._snapshot_is_current(course)
         ):
             self._record(course, "warning" if warnings else "ok", "\n".join(warnings) or None)
             return

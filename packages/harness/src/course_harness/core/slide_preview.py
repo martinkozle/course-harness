@@ -16,6 +16,7 @@ from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
+from PIL import Image, ImageStat
 from pptx import Presentation as PPTXPresentation
 from pydantic import BaseModel, ConfigDict
 
@@ -60,6 +61,9 @@ class PreviewSlot(BaseModel):
     font_size: float
     bold: bool
     alignment: str | None
+    # The template's ``#RRGGBB`` text colour, or one readable on the rendered background. Absent
+    # in previews made before colours were resolved; text then takes the default dark colour.
+    color: str | None = None
 
 
 class SlidePreview(BaseModel):
@@ -155,7 +159,44 @@ def normalized_layout_slots(
             font_size=placeholder["font_size"],
             bold=placeholder["bold"],
             alignment=placeholder["alignment"],
+            color=placeholder.get("color"),
         )
+    return result
+
+
+# Below this relative luminance, white text has more contrast than black (WCAG contrast ratio).
+_DARK_BACKGROUND_LUMINANCE = 0.179
+
+
+def _linear(channel: float) -> float:
+    channel /= 255
+    return channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
+
+
+def readable_text_colors(slots: dict[str, PreviewSlot], background: Path) -> dict[str, PreviewSlot]:
+    """Give each slot the template leaves without a colour black or white, whichever reads
+    better on the average of the rendered background below it."""
+    if all(slot.color is not None for slot in slots.values()):
+        return slots
+    try:
+        with Image.open(background) as opened:
+            image = opened.convert("RGB")
+    except OSError:
+        return slots
+    width, height = image.size
+    result: dict[str, PreviewSlot] = {}
+    for name, slot in slots.items():
+        if slot.color is not None:
+            result[name] = slot
+            continue
+        left = min(max(int(slot.left * width), 0), width - 1)
+        top = min(max(int(slot.top * height), 0), height - 1)
+        right = min(max(int((slot.left + slot.width) * width), left + 1), width)
+        bottom = min(max(int((slot.top + slot.height) * height), top + 1), height)
+        red, green, blue = ImageStat.Stat(image.crop((left, top, right, bottom))).mean[:3]
+        luminance = 0.2126 * _linear(red) + 0.7152 * _linear(green) + 0.0722 * _linear(blue)
+        color = "#FFFFFF" if luminance < _DARK_BACKGROUND_LUMINANCE else "#000000"
+        result[name] = slot.model_copy(update={"color": color})
     return result
 
 
@@ -232,17 +273,23 @@ def build_preview(
     )
     render_key = presentation_render_key(presentation, profile, context.image_resolver)
     background_dir = cache_dir / profile.id / "backgrounds" / f"v{profile.version}"
+    layout_slots: dict[str, dict[str, PreviewSlot]] = {}
     slides = []
     for slide in presentation.slides:
         slide_key = slide_render_key(slide, profile, context.image_resolver)
         thumbnail = cache_dir / profile.id / "previews" / slide_key / "thumbnail.png"
         background = background_dir / f"{slide.layout}.png"
+        if slide.layout not in layout_slots:
+            slots = normalized_layout_slots(profile, inspection, slide.layout)
+            layout_slots[slide.layout] = (
+                readable_text_colors(slots, background) if background.is_file() else slots
+            )
         slides.append(
             SlidePreview(
                 slide_id=slide.id,
                 layout=slide.layout,
                 render_key=slide_key,
-                slots=normalized_layout_slots(profile, inspection, slide.layout),
+                slots=layout_slots[slide.layout],
                 background_url=(
                     context.asset_url(
                         f"{profile.id}/backgrounds/v{profile.version}/{slide.layout}.png"

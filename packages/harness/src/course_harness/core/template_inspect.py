@@ -10,6 +10,7 @@ from pptx import Presentation as PPTXPresentation
 from pptx.enum.shapes import PP_PLACEHOLDER
 from pptx.oxml.ns import qn
 
+from course_harness.core.template_colors import placeholder_text_color
 from course_harness.core.template_profiles import SEMANTIC_SLOTS
 
 if TYPE_CHECKING:
@@ -184,6 +185,7 @@ def _placeholder_typography(container, placeholder, theme: dict) -> dict:
         "font_size": size,
         "bold": bold,
         "alignment": alignment,
+        "color": placeholder_text_color(container, placeholder),
     }
 
 
@@ -227,6 +229,7 @@ def _inspect_placeholder(ph, inherited: dict | None = None) -> dict:
         "font_size": font_size,
         "bold": bold,
         "alignment": alignment,
+        "color": inherited.get("color"),
     }
 
 

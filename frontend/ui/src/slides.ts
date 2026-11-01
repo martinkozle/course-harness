@@ -52,6 +52,8 @@ export type PreviewSlot = {
 	font_size: number;
 	bold: boolean;
 	alignment: string | null;
+	/** The template's text colour as `#RRGGBB`; absent in previews made before it was resolved. */
+	color?: string | null;
 };
 
 export function slideSummary(slide: Slide): string {
