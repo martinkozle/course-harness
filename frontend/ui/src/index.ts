@@ -25,3 +25,4 @@ export {
 	type SlideLayout,
 	slideSummary,
 } from "./slides";
+export { safeHttpUrl } from "./urls";

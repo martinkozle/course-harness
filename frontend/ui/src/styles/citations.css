@@ -18,7 +18,7 @@ a.citation-chip {
 	text-decoration: none;
 }
 
-.citation-chip:hover {
+:where(a, button).citation-chip:hover {
 	background: var(--evidence);
 }
 

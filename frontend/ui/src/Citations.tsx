@@ -1,14 +1,20 @@
 import { lineRangeLabel, type SlideCitation } from "./slides";
+import { safeHttpUrl } from "./urls";
 
-/** How one Citation opens: a callback, a link, or neither when it cannot be opened. */
+/**
+ * How one Citation opens: a callback, or a link to an http(s) address. A Citation with neither
+ * is plain text, or a disabled button when `disabled` is set.
+ */
 export type CitationOpening = {
 	onOpen?: () => void;
-	href?: string;
+	href?: string | null;
+	disabled?: boolean;
 	title?: string;
 };
 
 function linkTo(citation: SlideCitation): CitationOpening {
-	return { href: citation.url, title: citation.url };
+	const href = safeHttpUrl(citation.url);
+	return { href, title: href ?? undefined };
 }
 
 /** A numbered chip naming a cited Source and, when known, the cited lines. */
@@ -17,6 +23,7 @@ export function CitationChip({
 	number,
 	onOpen,
 	href,
+	disabled = false,
 	title,
 }: CitationOpening & { citation: SlideCitation; number: number }) {
 	const content = (
@@ -32,28 +39,41 @@ export function CitationChip({
 			) : null}
 		</>
 	);
-	if (!onOpen && href)
+	const link = safeHttpUrl(href);
+	if (onOpen && !disabled)
+		return (
+			<button
+				type="button"
+				className="citation-chip"
+				title={title}
+				onClick={onOpen}
+			>
+				{content}
+			</button>
+		);
+	if (link && !disabled)
 		return (
 			<a
 				className="citation-chip"
-				href={href}
+				href={link}
 				target="_blank"
 				rel="noopener noreferrer"
 				title={title}
 			>
 				{content}
+				<span className="visually-hidden"> (opens in a new tab)</span>
 			</a>
 		);
+	if (disabled)
+		return (
+			<button type="button" className="citation-chip" disabled title={title}>
+				{content}
+			</button>
+		);
 	return (
-		<button
-			type="button"
-			className="citation-chip"
-			disabled={!onOpen}
-			title={title}
-			onClick={onOpen}
-		>
+		<span className="citation-chip" title={title}>
 			{content}
-		</button>
+		</span>
 	);
 }
 

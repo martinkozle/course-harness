@@ -43,6 +43,80 @@
 	color: var(--ink);
 }
 
+/* Over an authoritative rendering, the text is only there to select, copy and read aloud. */
+.slide-preview.is-rendered .slide-slot {
+	color: transparent;
+}
+
+/* Without layout geometry, the Slide's content in reading order. */
+.slide-content {
+	position: absolute;
+	inset: 8% 7%;
+	display: grid;
+	align-content: start;
+	gap: 0.6em;
+	overflow: hidden;
+	font-size: 2.6cqw;
+	line-height: 1.3;
+	color: var(--ink);
+}
+
+.slide-content :is(h2, h3, h4) {
+	font-family: var(--font-display);
+	font-size: 5.5cqw;
+	font-weight: 600;
+	line-height: 1.2;
+}
+
+.slide-content .slide-statement {
+	font-family: var(--font-display);
+	font-size: 4.5cqw;
+}
+
+.slide-content .slide-subtitle,
+.slide-content figcaption {
+	color: var(--ink-muted);
+}
+
+.slide-content ul {
+	padding-left: 1.2em;
+	list-style: disc;
+}
+
+.slide-content .slide-columns {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 1.5em;
+}
+
+.slide-content pre {
+	overflow: hidden;
+	padding: 0.6em 0.8em;
+	border-radius: var(--radius-s);
+	background: var(--surface-sunken);
+	font-size: 0.9em;
+	white-space: pre-wrap;
+}
+
+.slide-content blockquote {
+	font-family: var(--font-display);
+	font-size: 3.6cqw;
+	font-style: italic;
+}
+
+.slide-content figure {
+	display: grid;
+	gap: 0.3em;
+}
+
+.slide-preview .slide-content img {
+	position: static;
+	width: auto;
+	max-width: 100%;
+	height: auto;
+	max-height: 40cqw;
+}
+
 .slide-updating {
 	position: absolute;
 	right: 6px;

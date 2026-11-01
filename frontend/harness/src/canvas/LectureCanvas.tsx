@@ -7,6 +7,7 @@ import {
 	isAbort,
 	Notice,
 	SlidePreview,
+	safeHttpUrl,
 	slideSummary,
 } from "@course-harness/ui";
 import {
@@ -161,6 +162,7 @@ function LectureSlidePreview({
 			}
 			aspectRatio={aspectRatio}
 			updating={freshness !== "ready"}
+			fallback="summary"
 		/>
 	);
 }
@@ -983,12 +985,12 @@ function SlideDetails({
 						lineEnd: citation.line_end ?? null,
 					}),
 			};
-		const { url } = citation;
+		const url = safeHttpUrl(citation.url);
 		return {
 			title: "This Source is no longer in the course",
-			onOpen: url
-				? () => window.open(url, "_blank", "noopener,noreferrer")
-				: undefined,
+			...(url
+				? { onOpen: () => window.open(url, "_blank", "noopener,noreferrer") }
+				: { disabled: true }),
 		};
 	}
 	return (
