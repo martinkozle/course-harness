@@ -1178,7 +1178,7 @@ def create_app(
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"A release with the ID {request.slug} was already shared from elsewhere. "
+                    f"A release with the ID {request.slug} is already on the remote. "
                     "Choose another name."
                 ),
             )
@@ -1350,7 +1350,7 @@ def create_app(
         except (WorkspaceRemoteError, WorkspaceHistoryError) as error:
             raise remote_http_error(error) from error
         if url is None:
-            raise HTTPException(status_code=409, detail="Set up sharing first.")
+            raise HTTPException(status_code=409, detail="Connect a remote first.")
         return url
 
     async def checked_remote(active: Path) -> RemoteCheck:
@@ -1367,7 +1367,7 @@ def create_app(
             check = await asyncio.to_thread(read_remote_check, active)
         except (WorkspaceRemoteError, WorkspaceHistoryError, ReleaseError) as error:
             raise sharing_http_error(error) from error
-        # A Release shared from elsewhere has its files on the remote already.
+        # A Release pushed from elsewhere has its files on the remote already.
         shared = check.refs if check is not None else {}
         return replace(
             backfill,
@@ -1380,13 +1380,13 @@ def create_app(
             notices.append(
                 "The PowerPoint files of "
                 + ", ".join(pushed.releases_without_files)
-                + " aren't on this computer, so those releases were shared without them."
+                + " aren't on this computer, so those releases were pushed without them."
             )
         if pushed.releases_with_invalid_files:
             notices.append(
                 "The stored PowerPoint files of "
                 + ", ".join(pushed.releases_with_invalid_files)
-                + " don't match their releases, so they were not shared."
+                + " don't match their releases, so they were not pushed."
             )
         return notices
 
@@ -1516,7 +1516,7 @@ def create_app(
 
     @app.post("/api/workspace/sync", response_model=SyncResult)
     async def sync_workspace() -> SyncResult:
-        """Receive the shared copy's new Revisions when this computer can simply move forward
+        """Receive the remote's new Revisions when this computer can simply move forward
         to them, save edits as a Revision, then send everything the remote lacks."""
         active = require_bound_workspace()
         async with user_network_operation(active):
@@ -1576,7 +1576,7 @@ def create_app(
 
     @app.post("/api/workspace/sync/use-shared-copy", response_model=SyncResult)
     async def use_shared_copy() -> SyncResult:
-        """Make this computer's Course the shared copy; the replaced version is kept locally."""
+        """Make this computer's Course the remote's version; the replaced one is kept locally."""
         active = require_bound_workspace()
         async with user_network_operation(active):
             url = await remote_url(active)
@@ -1584,7 +1584,7 @@ def create_app(
             if check.error is not None or check.fetched_main is None:
                 return SyncResult(
                     ok=False,
-                    message=f"Course Harness couldn't read the shared copy at {remote_label(url)}.",
+                    message=f"Course Harness couldn't read {remote_label(url)}.",
                     detail=check.error,
                     status=await read_sharing_status(active),
                 )
@@ -1604,7 +1604,7 @@ def create_app(
             return SyncResult(
                 ok=True,
                 message=(
-                    "This computer now has the shared copy."
+                    "This computer now has the remote's version."
                     + (
                         " Your previous version is kept as a backup in the Course folder."
                         if kept
@@ -1618,7 +1618,7 @@ def create_app(
 
     @app.post("/api/workspace/sync/replace-shared-copy", response_model=SyncResult)
     async def replace_shared_copy() -> SyncResult:
-        """Make the shared copy this computer's, only while it is still what was checked.
+        """Make the remote's version this computer's, only while it is still what was checked.
 
         Release tags and files refs are never forced or deleted.
         """

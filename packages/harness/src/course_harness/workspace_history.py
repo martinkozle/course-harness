@@ -2227,7 +2227,7 @@ class FastForwardRefused(ValueError):
 
 
 class HistoryDiverged(FastForwardRefused):
-    """This computer and the shared copy each have Revisions the other lacks."""
+    """This computer and the remote each have Revisions the other lacks."""
 
 
 KEPT_REF_PREFIX = "refs/course-harness/kept/"
@@ -2286,7 +2286,9 @@ def _move_main(
     }
     try:
         if not _validate_captured_blobs(workspace, result_blobs, set(target_blobs)).valid:
-            raise FastForwardRefused("The shared copy of the Course has problems to fix first.")
+            raise FastForwardRefused(
+                "The remote's version of the Course has problems to fix first."
+            )
         if changed_paths:
             apply_canonical_mutation(
                 workspace,
@@ -2331,9 +2333,7 @@ def fast_forward_main(workspace: Path, target: str) -> int:
         # Only this computer has new Revisions; there is nothing to receive.
         return 0
     if head is not None and not _is_ancestor(workspace, head, target):
-        raise HistoryDiverged(
-            "This computer and the shared copy both have changes the other lacks."
-        )
+        raise HistoryDiverged("This computer and the remote both have changes the other lacks.")
     local_paths = {change.path for change in state.changes}
     if local_paths:
         if not state.validation.valid:
@@ -2347,7 +2347,7 @@ def fast_forward_main(workspace: Path, target: str) -> int:
         }
         if incoming & local_paths:
             raise FastForwardRefused(
-                "You and the shared copy changed the same parts of the Course."
+                "This computer and the remote changed the same parts of the Course."
             )
     added = _first_parent_count(workspace, target, head)
     _move_main(workspace, target, head, keep_paths=local_paths)

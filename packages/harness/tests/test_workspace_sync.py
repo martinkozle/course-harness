@@ -702,7 +702,7 @@ async def test_releases_shared_from_elsewhere_count_and_their_ids_are_taken(
     assert unshared["ahead"] == 1
     assert forgotten["release_count"] == 1
     assert reused.status_code == 409
-    assert "already shared" in reused.json()["detail"]
+    assert "already on the remote" in reused.json()["detail"]
     # The check fetches the Release tag back; its Revisions are no longer changes.
     assert _git(workspace, "tag", "--list").split() == ["course-release/spring"]
     assert rechecked["release_count"] == 1

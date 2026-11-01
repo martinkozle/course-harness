@@ -216,7 +216,7 @@ class SyncService:
                 "No valid Release was found."
                 if warnings
                 else "This repository has no published Release yet. In Course Harness, "
-                "publish one with “Share to GitHub” ticked, then sync again."
+                "publish one with “Push to …” ticked, then sync again."
             )
             logger.warning("Sync of course %s found no Release to serve", course.slug)
             self._record(course, "error", "\n".join([message, *warnings]))

@@ -566,13 +566,13 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	const sharing = page.locator(".canvas-bar .sharing-controls");
 	await expect(sharing.getByText("Not released yet")).toBeVisible();
 	const unsetSync = sharing.getByRole("button", {
-		name: "Sync: set up sharing first",
+		name: "Sync: connect a remote first",
 	});
 	await expect(unsetSync).toBeVisible();
-	// Sync without a remote opens the sharing setup.
+	// Sync without a remote opens the remote setup.
 	await unsetSync.click();
 	const setup = page.getByRole("dialog", {
-		name: /^Share to (GitHub|a Git host)$/,
+		name: /^Connect a (GitHub repository|Git remote)$/,
 	});
 	await expect(setup.getByText("Checking GitHub CLI…")).toHaveCount(0);
 	const existingInSetup = setup.getByLabel("Use a repository you already have");
@@ -610,13 +610,13 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	).toBeVisible();
 	await publish.getByLabel("Name").fill("Causal Foundations Preview");
 
-	// Share to a local bare repository, which the smoke server accepts for development.
+	// Push to a local bare repository, which the smoke server accepts for development.
 	const bareRemote = join(
 		mkdtempSync(join(tmpdir(), "course-remote-")),
 		"course.git",
 	);
 	execFileSync("git", ["init", "--quiet", "--bare", bareRemote]);
-	const share = publish.getByRole("checkbox", { name: "Share to GitHub" });
+	const share = publish.getByRole("checkbox", { name: "Push to a Git remote" });
 	await expect(share).not.toBeChecked();
 	await share.check();
 	await expect(publish.getByText("Checking GitHub CLI…")).toHaveCount(0);
@@ -625,7 +625,7 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	await publish.getByLabel("Repository address").fill(bareRemote);
 	await publish.getByRole("button", { name: "Save" }).click();
 	await expect(
-		publish.getByRole("checkbox", { name: `Share to ${bareRemote}` }),
+		publish.getByRole("checkbox", { name: `Push to ${bareRemote}` }),
 	).toBeChecked();
 	await publish.getByRole("button", { name: "Publish", exact: true }).click();
 	await expect(

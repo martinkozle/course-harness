@@ -291,8 +291,8 @@ and Git.
 
 1. **Publish** a Course Release in Course Harness with **Publish** in the header. A Release is a
    Git tag `course-release/<slug>` with a manifest, plus a ref holding its PowerPoint files.
-2. **Share** it to a public GitHub repository: tick **Share to …** in the Publish dialog, or use
-   **Sync** later. Sharing sends `main`, every Release tag and the Release files refs (see "Course
+2. **Push** it to a public GitHub repository: tick **Push to …** in the Publish dialog, or use
+   **Sync** later. Pushing sends `main`, every Release tag and the Release files refs (see "Course
    Workspace remotes" in `CONTRIBUTING.md`).
 3. **Attach** the repository in the Classroom: open `https://classroom.example.org/admin`, sign
    in with the Administrator token, and enter the repository's HTTPS address, such as

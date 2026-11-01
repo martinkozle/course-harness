@@ -147,8 +147,8 @@ Release.
 
 ## Course Workspace remotes
 
-A Course Workspace's remote is the ordinary Git remote `origin`, set in Settings > Sharing (or
-created with your own `gh`). **Sync** and **Share** in the Publish dialog run the system `git` with
+A Course Workspace's remote is the ordinary Git remote `origin`, set in Settings > Git remote (or
+created with your own `gh`). **Sync** and **Push to …** in the Publish dialog run the system `git` with
 your own configuration and credentials, with hooks disabled. Sending is close to:
 
 ```bash

@@ -5,9 +5,9 @@ import {
 	FileText,
 	Folder,
 	FolderOpen,
+	GitBranch,
 	LayoutTemplate,
 	Plug,
-	Share2,
 	Stethoscope,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
@@ -55,7 +55,11 @@ const sections: { id: SettingsSection; label: string; icon: ReactNode }[] = [
 		icon: <LayoutTemplate aria-hidden="true" />,
 	},
 	{ id: "workspace", label: "Workspace", icon: <Folder aria-hidden="true" /> },
-	{ id: "sharing", label: "Sharing", icon: <Share2 aria-hidden="true" /> },
+	{
+		id: "sharing",
+		label: "Git remote",
+		icon: <GitBranch aria-hidden="true" />,
+	},
 	{
 		id: "diagnostics",
 		label: "Diagnostics",

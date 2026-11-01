@@ -278,7 +278,7 @@ export function PublishDialog({
 			: !slugify(name)
 				? "Use letters or numbers in the name."
 				: status?.remote_release_slugs.includes(slugify(name))
-					? "A release with this name was already shared. Choose another name."
+					? "A release with this name is already on the remote. Choose another name."
 					: lectureIds.length === 0
 						? "Choose at least one Lecture."
 						: checking || validation === null
@@ -288,7 +288,7 @@ export function PublishDialog({
 								: missingReasons > 0
 									? `Record why you're publishing with ${plural(missingReasons, "warning")}.`
 									: share && !remoteLabel
-										? "Choose where to share, or untick Share."
+										? "Connect a remote, or untick Push."
 										: null;
 
 	function setStep(key: keyof Steps, value: StepState) {
@@ -347,7 +347,7 @@ export function PublishDialog({
 			setStep("publish", "done");
 			// The header counts the new Release right away.
 			onPublished();
-			// 3. Share it. A failed push keeps the Release; Sync can send it later.
+			// 3. Push it. A failed push keeps the Release; Sync can send it later.
 			if (share) {
 				step = "share";
 				setStep("share", "running");
@@ -369,7 +369,7 @@ export function PublishDialog({
 					result = {
 						ok: false,
 						remote: remoteLabel ?? "",
-						message: "Course Harness could not start sharing.",
+						message: "Course Harness could not start the push.",
 						releases_without_files: [],
 						releases_with_invalid_files: [],
 					};
@@ -387,8 +387,8 @@ export function PublishDialog({
 	}
 
 	const shareLabel = remoteLabel
-		? `Share to ${remoteLabel}`
-		: "Share to GitHub";
+		? `Push to ${remoteLabel}`
+		: "Push to a Git remote";
 
 	const footer = published ? (
 		<button type="button" className="btn btn-primary" onClick={onClose}>
@@ -447,7 +447,7 @@ export function PublishDialog({
 							<Notice tone="warning" role="alert">
 								<p>
 									The release is published on this computer, but it couldn't be
-									shared to {remoteLabel}. Use Sync to try again.
+									pushed to {remoteLabel}. Use Sync to try again.
 								</p>
 								<details className="sync-detail">
 									<summary>Details</summary>
@@ -488,7 +488,7 @@ export function PublishDialog({
 						) : null}
 						{behind ? (
 							<Notice tone="warning">
-								{SYNC_FIRST}: the shared copy has{" "}
+								{SYNC_FIRST}. The remote has{" "}
 								{plural(status?.behind ?? 0, "change")} this computer doesn't
 								have yet.
 							</Notice>

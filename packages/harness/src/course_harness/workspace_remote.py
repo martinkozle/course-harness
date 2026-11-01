@@ -1,4 +1,4 @@
-"""Share a Course and its Releases through the Course Workspace's Git remote.
+"""Push and sync a Course and its Releases through the Course Workspace's Git remote.
 
 The remote is an ordinary Git remote named ``origin`` in the Workspace's ``.git/config``: it is
 neither canonical Course state nor a secret, and a URL with an embedded password is refused.
@@ -240,7 +240,7 @@ def push_workspace(
         else []
     )
     if replace_main_from is not None and not _OID.fullmatch(replace_main_from):
-        raise WorkspaceRemoteError("The shared copy must be checked first.")
+        raise WorkspaceRemoteError("The remote must be checked first.")
     ok, message = _run_push(workspace, [*lease, *refspecs], remote=remote, timeout=timeout)
     if ok:
         _remember_skipped_files(workspace, backfill.invalid)

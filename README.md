@@ -69,20 +69,20 @@ network you trust.
   and works without a key.
 - **Publish**: name a checked Release in one dialog. Your edits are saved as a Course Revision
   on their own first, and the header shows how many changes the next Release would include.
-- **Sync**: send the Course, its Releases, and their PowerPoint files to a GitHub repository (or
-  any Git remote) and receive changes made elsewhere, using your own Git sign-in. With the GitHub
-  CLI signed in, Course Harness can create the repository for you. Nothing is sent until you choose
-  **Sync** or **Share** when you publish. From a terminal in the Course folder, sending is close
-  to:
+- **Sync**: push the Course, its history, Releases, and their PowerPoint files to a Git remote
+  (such as a GitHub repository) and receive changes made elsewhere, using your own Git sign-in.
+  With the GitHub CLI signed in, Course Harness can create the repository for you. Nothing is
+  pushed until you choose **Sync**, or tick **Push to …** when you publish. From a terminal in the
+  Course folder, pushing is close to:
 
   ```bash
   git push origin main 'refs/tags/course-release/*' 'refs/course-harness/release-files/*'
   ```
 
-  Each Release's files travel in their own ref, never in the Course branch. Sending
+  Each Release's files travel in their own ref, never in the Course branch. Pushing
   from the app also records those refs for Releases published by earlier versions. Sync
   receives changes only when your Course can simply move forward to them; when this computer
-  and the shared copy both changed, it changes nothing and lets you choose which version to
+  and the remote both changed, it changes nothing and lets you choose which version to
   keep.
 
   Upgrade any Course Harness Classroom that serves your Course before you publish with a newer

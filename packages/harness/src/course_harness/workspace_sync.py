@@ -80,9 +80,9 @@ class SharingStatus(BaseModel):
     check_error: str | None = None
     # Both sides have Revisions the other lacks: Sync offers to use one of them.
     diverged: bool = False
-    # Release IDs already shared from elsewhere, which a new Release cannot reuse.
+    # Release IDs already on the remote from elsewhere, which a new Release cannot reuse.
     remote_release_slugs: list[str] = Field(default_factory=list)
-    # Releases whose files could not be shared because they do not match the Release.
+    # Releases whose files could not be pushed because they do not match the Release.
     skipped_files: list[str] = Field(default_factory=list)
 
 
@@ -96,7 +96,7 @@ class SyncResult(BaseModel):
     revision: CourseRevision | None = None
     # Course Revisions received from the remote.
     received: int = 0
-    # This computer and the shared copy diverged; ``use-shared-copy`` or
+    # This computer and the remote diverged; ``use-shared-copy`` or
     # ``replace-shared-copy`` resolves it.
     diverged: bool = False
     # Things that worked but need the Course Author's attention.
@@ -252,7 +252,7 @@ def sharing_status(workspace: Path) -> SharingStatus:
     summaries: list[str] = []
     committed = 0
     if head is not None:
-        # Revisions that some Release (published here or shared from elsewhere) covers are
+        # Revisions that some Release (published here or pushed from elsewhere) covers are
         # not changes since a Release.
         exclude = sorted({f"^{release.commit_oid}" for release in scan.releases})
         committed = _count(workspace, "--first-parent", head, *exclude)

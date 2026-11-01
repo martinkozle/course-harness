@@ -24,7 +24,7 @@ type Mode = "create" | "existing";
 const REPOSITORY_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$/;
 
 /**
- * Choose where your Course is shared: a new GitHub repository made with your
+ * Choose your Course's Git remote: a new GitHub repository made with your
  * own GitHub CLI, or the Git URL of a repository you already have.
  */
 export function RemoteSetup({
@@ -142,7 +142,7 @@ export function RemoteSetup({
 		<form className="remote-setup" onSubmit={(event) => void save(event)}>
 			{github?.available ? (
 				<fieldset className="remote-setup-modes">
-					<legend className="visually-hidden">Where to share</legend>
+					<legend className="visually-hidden">Which remote to connect</legend>
 					<label className="check-row">
 						<input
 							type="radio"
@@ -287,12 +287,12 @@ export function RemoteSetupDialog({
 	const [github, setGithub] = useState(false);
 	return (
 		<Dialog
-			title={github ? "Share to GitHub" : "Share to a Git host"}
+			title={github ? "Connect a GitHub repository" : "Connect a Git remote"}
 			onClose={onClose}
 		>
 			<p className="meta remote-setup-intro">
-				Sync and Publish send your Course, its history and every release to this
-				repository, where a Classroom can read them.
+				Sync and Publish push your Course, its history and releases to this
+				remote, where a Classroom can read them.
 			</p>
 			<RemoteSetup
 				onSaved={onSaved}
@@ -303,7 +303,7 @@ export function RemoteSetupDialog({
 	);
 }
 
-/** Settings: see, change or remove where your Course is shared. */
+/** Settings: see, change or remove your Course's Git remote. */
 export function SharingSettings({ onChange }: { onChange?: () => void }) {
 	const [settings, setSettings] = useState<RemoteSettings | null>(null);
 	const [editing, setEditing] = useState(false);
@@ -314,7 +314,7 @@ export function SharingSettings({ onChange }: { onChange?: () => void }) {
 		request<RemoteSettings>("/api/workspace/remote", "GET")
 			.then(setSettings)
 			.catch((caught) =>
-				setError(errorMessage(caught, "Sharing settings could not be read.")),
+				setError(errorMessage(caught, "The remote could not be read.")),
 			);
 	}, []);
 
@@ -329,7 +329,7 @@ export function SharingSettings({ onChange }: { onChange?: () => void }) {
 			);
 			onChange?.();
 		} catch (caught) {
-			setError(errorMessage(caught, "Sharing could not be turned off."));
+			setError(errorMessage(caught, "The remote could not be removed."));
 		} finally {
 			setRemoving(false);
 		}
@@ -337,7 +337,7 @@ export function SharingSettings({ onChange }: { onChange?: () => void }) {
 
 	return (
 		<div className="settings-block">
-			<h3>Shared repository</h3>
+			<h3>Git remote</h3>
 			{error ? <Notice tone="error">{error}</Notice> : null}
 			{settings === null && !error ? (
 				<p className="meta" role="status">
@@ -349,7 +349,8 @@ export function SharingSettings({ onChange }: { onChange?: () => void }) {
 					<>
 						<p className="mono settings-path">{settings.url}</p>
 						<p className="meta">
-							Sync and Publish send your Course and its releases here.
+							Sync and Publish push your Course, its history and releases to
+							this remote.
 						</p>
 						<div className="remote-setup-actions">
 							<button
@@ -365,22 +366,23 @@ export function SharingSettings({ onChange }: { onChange?: () => void }) {
 								disabled={removing}
 								onClick={() => void remove()}
 							>
-								{removing ? "Removing…" : "Stop sharing"}
+								{removing ? "Removing…" : "Remove remote"}
 							</button>
 						</div>
 					</>
 				) : (
 					<>
 						<p className="meta">
-							Your Course is not shared yet. Share it to a GitHub repository so
-							a Classroom can serve your releases.
+							Your Course has no remote yet. Connect a GitHub repository or
+							another Git remote so you can sync and a Classroom can serve your
+							releases.
 						</p>
 						<button
 							type="button"
 							className="btn btn-small"
 							onClick={() => setEditing(true)}
 						>
-							Set up sharing
+							Connect a remote
 						</button>
 					</>
 				)

@@ -19,8 +19,8 @@ function plural(count: number, one: string, many = `${one}s`) {
 	return `${count} ${count === 1 ? one : many}`;
 }
 
-/** Shown in the header and in Publish while the shared copy has Revisions this computer lacks. */
-export const SYNC_FIRST = "Sync first to get the latest shared copy";
+/** Shown in the header and in Publish while the remote has Revisions this computer lacks. */
+export const SYNC_FIRST = "The remote has newer changes; sync first";
 
 /** "3 changes since last release", "Released · up to date" or "Not released yet". */
 export function releaseStatusText(status: SharingStatus): string {
@@ -49,8 +49,8 @@ export function syncView(
 ): SyncView {
 	if (!status?.remote_url) {
 		return {
-			label: "Sync: set up sharing first",
-			title: "Share your Course to a Git host to sync it",
+			label: "Sync: connect a remote first",
+			title: "Connect a Git remote to sync your Course",
 			inSync: false,
 		};
 	}
@@ -103,7 +103,7 @@ export function SharingControls({
 	const [choice, setChoice] = useState<Choice | null>(null);
 	const counts = status?.ahead !== null && status?.ahead !== undefined;
 	const behind = (status?.behind ?? 0) > 0;
-	const where = status?.remote_label ?? "the shared copy";
+	const where = status?.remote_label ?? "the remote";
 
 	useEffect(() => {
 		if (failure) popoverRef.current?.focus();
@@ -244,7 +244,7 @@ export function SharingControls({
 										className="btn btn-small"
 										onClick={() => setChoice("use-shared-copy")}
 									>
-										Use the shared copy
+										Use the remote's version
 									</button>
 									<span className="meta">
 										Your Course here becomes the version on {where}. This
@@ -257,11 +257,11 @@ export function SharingControls({
 										className="btn btn-small"
 										onClick={() => setChoice("replace-shared-copy")}
 									>
-										Replace the shared copy with this computer's
+										Replace the remote's version with this computer's
 									</button>
 									<span className="meta">
 										{where} gets your version. Changes made elsewhere since your
-										last Sync are no longer shared; releases stay.
+										last Sync are dropped from the remote; releases stay.
 									</span>
 								</li>
 							</ul>
@@ -288,8 +288,8 @@ export function SharingControls({
 			</div>
 			{choice === "use-shared-copy" ? (
 				<ConfirmDialog
-					title="Use the shared copy?"
-					confirmLabel="Use the shared copy"
+					title="Use the remote's version?"
+					confirmLabel="Use the remote's version"
 					danger={false}
 					onConfirm={() => void confirm("use-shared-copy")}
 					onCancel={() => setChoice(null)}
@@ -305,19 +305,18 @@ export function SharingControls({
 			) : null}
 			{choice === "replace-shared-copy" ? (
 				<ConfirmDialog
-					title="Replace the shared copy?"
-					confirmLabel="Replace the shared copy"
+					title="Replace the remote's version?"
+					confirmLabel="Replace the remote's version"
 					onConfirm={() => void confirm("replace-shared-copy")}
 					onCancel={() => setChoice(null)}
 				>
 					<p>
 						{where} will get this computer's version of the Course. Changes made
-						elsewhere since your last Sync will no longer be part of the shared
-						copy.
+						elsewhere since your last Sync are dropped from the remote.
 					</p>
 					<p>
-						Releases are never removed or changed. If someone shares again
-						before you confirm, nothing is replaced.
+						Releases are never removed or changed. If someone pushes to the
+						remote before you confirm, nothing is replaced.
 					</p>
 				</ConfirmDialog>
 			) : null}
