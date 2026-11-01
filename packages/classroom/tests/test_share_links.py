@@ -36,7 +36,7 @@ def _path(url: str) -> str:
     return url.removeprefix("http://localhost")
 
 
-def test_a_share_link_is_shown_once_and_only_its_hash_is_stored(
+def test_a_share_link_is_shown_again_after_it_is_created(
     admin: TestClient, attached: Any, settings: ClassroomSettings
 ) -> None:
     url = _link(admin, "learner")
@@ -46,9 +46,9 @@ def test_a_share_link_is_shown_once_and_only_its_hash_is_stored(
     assert len(token) >= 40
     course = admin.get("/api/admin/courses").json()[0]
     assert [link["role"] for link in course["links"]] == ["learner"]
-    assert token not in str(course)
-    database = settings.database_path.read_bytes()
-    assert token.encode() not in database
+    assert course["links"][0]["url"] == url
+    assert course["links"][0]["needs_rotation"] is False
+    # The link is looked up by its hash.
     assert Store(settings.database_path).share_link_by_hash(token_hash(token)) is not None
 
 

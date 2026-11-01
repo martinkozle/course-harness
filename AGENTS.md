@@ -35,7 +35,12 @@ publishes on a `v*` tag; never upload from a local machine.
   working state, and never checks out or executes repository content.
 - The Classroom never hosts Source binaries.
 - The Administrator token never appears in a URL. Learner and Instructor Share Link tokens are
-  exchanged for HttpOnly cookies and a redirect to a clean URL.
+  exchanged for HttpOnly cookies and a redirect to a clean URL. Share Link tokens are stored so
+  links can be shown again (ADR 0016); session IDs are stored only as hashes, and no token is ever
+  logged.
+- The server decides Classroom permissions: an Administrator session is an Instructor of every
+  course; only the Administrator attaches or detaches courses and rotates the Instructor link.
+  “Viewing as Learner” is a browser preference that never changes the server's role.
 - Keep Learner- and Instructor-facing copy neutral. Use “you” where possible and name the role
   (`Learner`, `Instructor`, `Administrator`) only when it must be named.
 

@@ -190,8 +190,100 @@ test("an Instructor sees where Learners get stuck after a Learner answers", asyn
 	await instructorContext.close();
 });
 
+test("an Instructor shows and copies the course's links without rotating them", async ({
+	browser,
+}) => {
+	const context = await browser.newContext({ reducedMotion: "reduce" });
+	await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+		origin: CLASSROOM,
+	});
+	const page = await context.newPage();
+	await page.goto(INSTRUCTOR_LINK);
+	await page.goto(`${CLASSROOM}/c/causal/insights`);
+
+	const links = page.getByRole("region", { name: "Links to this course" });
+	const learnerField = links.getByLabel("Learner link", { exact: true });
+	await expect(learnerField).toHaveValue(LEARNER_LINK);
+	await expect(
+		links.getByLabel("Instructor link", { exact: true }),
+	).toHaveValue(INSTRUCTOR_LINK);
+	await expect(
+		links.getByText("Only the Administrator can rotate the Instructor link."),
+	).toBeVisible();
+	await expect(
+		links.getByRole("button", { name: "Rotate Instructor link" }),
+	).toHaveCount(0);
+
+	await links.getByRole("button", { name: "Copy Instructor link" }).click();
+	expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+		INSTRUCTOR_LINK,
+	);
+	await links.getByRole("button", { name: "Copy Learner link" }).click();
+	expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+		LEARNER_LINK,
+	);
+
+	// Rotating asks first; cancelling keeps the link everyone already has.
+	await links.getByRole("button", { name: "Rotate Learner link" }).click();
+	const confirm = page.getByRole("dialog", {
+		name: "Rotate the Learner link?",
+	});
+	await expect(confirm).toContainText("stops working");
+	await confirm.getByRole("button", { name: "Cancel" }).click();
+	await expect(confirm).toBeHidden();
+	await expect(learnerField).toHaveValue(LEARNER_LINK);
+	await expectNoAccessibilityViolations(page, "Links to this course");
+	await context.close();
+});
+
+test("an Instructor switches between the Instructor and Learner views", async ({
+	browser,
+}) => {
+	const context = await browser.newContext({ reducedMotion: "reduce" });
+	const page = await context.newPage();
+	await page.goto(INSTRUCTOR_LINK);
+	await page.getByLabel("Your name").fill("Instructor Ida");
+	await page.getByLabel("Student ID").fill(`${STUDENT_ID}-i`);
+	await page.getByRole("button", { name: "Start" }).click();
+
+	const viewing = page.getByRole("group", { name: "Viewing as" });
+	const asInstructor = viewing.getByRole("button", { name: "Instructor" });
+	const asLearner = viewing.getByRole("button", { name: "Learner" });
+	await expect(asInstructor).toHaveAttribute("aria-pressed", "true");
+	await page.getByRole("tab", { name: "Insights" }).click();
+	await expect(page).toHaveURL(`${CLASSROOM}/c/causal/insights`);
+
+	// The Learner view is the Learner's page: no Insights, and back on the course page.
+	await asLearner.click();
+	await expect(asLearner).toHaveAttribute("aria-pressed", "true");
+	await expect(page).toHaveURL(`${CLASSROOM}/c/causal`);
+	await expect(page.getByRole("tab", { name: "Lectures" })).toBeVisible();
+	await expect(page.getByRole("tab", { name: "Insights" })).toHaveCount(0);
+	await expectNoAccessibilityViolations(
+		page,
+		"An Instructor viewing as a Learner",
+	);
+
+	// The choice lasts for this tab, and the server still treats you as an Instructor.
+	await page.reload();
+	await expect(asLearner).toHaveAttribute("aria-pressed", "true");
+	const status = await page.evaluate(
+		async () => (await fetch("/api/c/causal/insights")).status,
+	);
+	expect(status).toBe(200);
+
+	await asInstructor.click();
+	await expect(page.getByRole("tab", { name: "Insights" })).toBeVisible();
+	await context.close();
+});
+
 test("Learners cannot open Insights", async ({ page }) => {
 	await page.goto(LEARNER_LINK);
+	await expect(
+		page.getByRole("heading", { name: "Before you start" }),
+	).toBeVisible();
+	// Learners never see the Instructor | Learner switch.
+	await expect(page.getByRole("group", { name: "Viewing as" })).toHaveCount(0);
 	await page.goto(`${CLASSROOM}/c/causal/insights`);
 	await expect(
 		page.getByText("Insights are for the course’s Instructors."),
@@ -200,4 +292,8 @@ test("Learners cannot open Insights", async ({ page }) => {
 		async () => (await fetch("/api/c/causal/insights")).status,
 	);
 	expect(status).toBe(403);
+	const links = await page.evaluate(
+		async () => (await fetch("/api/c/causal/links")).status,
+	);
+	expect(links).toBe(403);
 });

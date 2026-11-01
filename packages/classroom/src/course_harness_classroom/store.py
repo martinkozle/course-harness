@@ -15,6 +15,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
+from course_harness_classroom.security import token_hash
+
 Role = Literal["learner", "instructor"]
 SessionKind = Literal["admin", "course"]
 SyncStatus = Literal["pending", "ok", "warning", "error"]
@@ -79,6 +81,11 @@ MIGRATIONS: tuple[str, ...] = (
         ON answers (course_id, student_id, lecture_id, question_id);
     CREATE INDEX answers_by_question ON answers (course_id, lecture_id, question_id);
     """,
+    # Share Link tokens are kept so a link can be shown again (ADR 0016); lookups still go by
+    # hash. Links created before this have no token and must be rotated to be shown again.
+    """
+    ALTER TABLE share_links ADD COLUMN token TEXT;
+    """,
 )
 
 
@@ -113,6 +120,8 @@ class ShareLink:
     role: Role
     created_at: str
     rotated_at: str | None
+    # None for a link created before tokens were kept: it must be rotated to be shown again.
+    token: str | None
 
 
 @dataclass(frozen=True)
@@ -257,27 +266,30 @@ class Store:
     def share_links(self, course_id: int) -> dict[Role, ShareLink]:
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT course_id, role, created_at, rotated_at FROM share_links "
+                "SELECT course_id, role, created_at, rotated_at, token FROM share_links "
                 "WHERE course_id = ?",
                 (course_id,),
             ).fetchall()
         return {row["role"]: ShareLink(**dict(row)) for row in rows}
 
-    def set_share_link(self, course_id: int, role: Role, token_hash: str) -> None:
-        """Create a course's Share Link for a role, or replace it and end its sessions."""
+    def set_share_link(self, course_id: int, role: Role, token: str) -> None:
+        """Create a course's Share Link for a role, or replace it and end its sessions.
+
+        The token is kept so the link can be shown again; it is looked up by its hash."""
         moment = timestamp()
+        digest = token_hash(token)
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             updated = connection.execute(
-                "UPDATE share_links SET token_hash = ?, rotated_at = ? "
+                "UPDATE share_links SET token_hash = ?, token = ?, rotated_at = ? "
                 "WHERE course_id = ? AND role = ?",
-                (token_hash, moment, course_id, role),
+                (digest, token, moment, course_id, role),
             ).rowcount
             if not updated:
                 connection.execute(
-                    "INSERT INTO share_links (course_id, role, token_hash, created_at) "
-                    "VALUES (?, ?, ?, ?)",
-                    (course_id, role, token_hash, moment),
+                    "INSERT INTO share_links (course_id, role, token_hash, token, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (course_id, role, digest, token, moment),
                 )
             connection.execute(
                 "DELETE FROM sessions WHERE kind = 'course' AND course_id = ? AND role = ?",
@@ -288,7 +300,7 @@ class Store:
     def share_link_by_hash(self, token_hash: str) -> ShareLink | None:
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT course_id, role, created_at, rotated_at FROM share_links "
+                "SELECT course_id, role, created_at, rotated_at, token FROM share_links "
                 "WHERE token_hash = ?",
                 (token_hash,),
             ).fetchone()

@@ -49,7 +49,6 @@ from course_harness.workspace_history import (
 from course_harness.workspace_remote import push_workspace
 from course_harness_classroom.app import create_app
 from course_harness_classroom.config import ClassroomSettings
-from course_harness_classroom.security import token_hash
 
 PORT = 18766  # playwright.config.ts and classroom-learner.spec.ts use this port
 ADMIN_PORT = 18767  # playwright.config.ts and classroom-admin.spec.ts use this port
@@ -344,8 +343,8 @@ def main() -> None:
         synced = app.state.sync.sync(course.id)
         if synced.release_slug is None:
             raise SystemExit(f"The fixture Course did not sync: {synced.sync_message}")
-        store.set_share_link(course.id, "learner", token_hash(LEARNER_TOKEN))
-        store.set_share_link(course.id, "instructor", token_hash(INSTRUCTOR_TOKEN))
+        store.set_share_link(course.id, "learner", LEARNER_TOKEN)
+        store.set_share_link(course.id, "instructor", INSTRUCTOR_TOKEN)
         uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")
 
 

@@ -4,6 +4,7 @@ import {
 	type ReactNode,
 	useCallback,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
@@ -14,6 +15,7 @@ import {
 	type CourseSummary,
 	type LearnerQuiz,
 	type OptionFeedback,
+	type Role,
 } from "./api";
 import { CoursePage } from "./CoursePage";
 import { IdentityForm } from "./IdentityForm";
@@ -26,6 +28,7 @@ import {
 	coursePath,
 	followLink,
 	insightsPath,
+	navigate,
 } from "./router";
 
 export type LearnerState = {
@@ -131,6 +134,67 @@ function useLearning(
 	return { quizzes, progress, error, onAnswered, reloadQuizzes };
 }
 
+const VIEW_KEY = (slug: string) => `classroom:view-as:${slug}`;
+
+/**
+ * Which role's pages an Instructor is looking at. It is a preference of this browser tab only:
+ * the server still treats every request as an Instructor's, so answers given while viewing as a
+ * Learner are recorded as an Instructor's and left out of Insights by default.
+ */
+function useViewAs(slug: string) {
+	const [viewAs, setViewAs] = useState<Role>(() => {
+		try {
+			return sessionStorage.getItem(VIEW_KEY(slug)) === "learner"
+				? "learner"
+				: "instructor";
+		} catch {
+			return "instructor";
+		}
+	});
+	const choose = useCallback(
+		(role: Role) => {
+			setViewAs(role);
+			try {
+				sessionStorage.setItem(VIEW_KEY(slug), role);
+			} catch {
+				// The choice lasts for this page only.
+			}
+		},
+		[slug],
+	);
+	return [viewAs, choose] as const;
+}
+
+/** The Instructor | Learner switch; only shown to people the server lets in as Instructors. */
+function ViewSwitch({
+	viewAs,
+	onChange,
+}: {
+	viewAs: Role;
+	onChange: (role: Role) => void;
+}) {
+	return (
+		<fieldset className="view-switch">
+			<legend className="visually-hidden">Viewing as</legend>
+			<span className="view-switch-label" aria-hidden="true">
+				Viewing as
+			</span>
+			<span className="view-switch-options">
+				{(["instructor", "learner"] as const).map((role) => (
+					<button
+						key={role}
+						type="button"
+						aria-pressed={viewAs === role}
+						onClick={() => onChange(role)}
+					>
+						{role === "instructor" ? "Instructor" : "Learner"}
+					</button>
+				))}
+			</span>
+		</fieldset>
+	);
+}
+
 /** A course's pages, with its title and the student's identity in the bar above them. */
 export function CourseShell({
 	slug,
@@ -139,10 +203,33 @@ export function CourseShell({
 	slug: string;
 	view: CourseView;
 }) {
-	const { course, error, refresh: refreshCourse } = useCourse(slug);
+	const { course: served, error, refresh: refreshCourse } = useCourse(slug);
 	const [identity, setIdentity] = useIdentity();
 	const [editing, setEditing] = useState(false);
+	const [viewAs, setViewAs] = useViewAs(slug);
+	const instructor = served?.role === "instructor";
+	// Viewing as a Learner shows exactly the Learner pages; the server's role is unchanged.
+	const course = useMemo(
+		() =>
+			served && instructor && viewAs === "learner"
+				? { ...served, role: "learner" as const }
+				: served,
+		[served, instructor, viewAs],
+	);
 	const learning = useLearning(slug, course, identity?.studentId ?? null);
+
+	// Opening Insights means looking as an Instructor.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: only a change of page switches back, never the switch itself
+	useEffect(() => {
+		if (instructor && view.view === "insights" && viewAs === "learner")
+			setViewAs("instructor");
+	}, [instructor, view.view]);
+
+	function switchView(role: Role) {
+		setViewAs(role);
+		if (role === "learner" && view.view === "insights")
+			navigate(coursePath(slug));
+	}
 
 	useEffect(() => {
 		// A Lecture page sets its own title.
@@ -186,13 +273,16 @@ export function CourseShell({
 				</p>
 				{course.role === "instructor" ? (
 					<Notice tone="info">
-						You opened an Instructor link.{" "}
+						{course.administrator
+							? "You are signed in as the Administrator, so you see this course as an Instructor."
+							: "You opened an Instructor link."}{" "}
 						<a href={insightsPath(slug)} onClick={followLink}>
 							Open Insights
 						</a>{" "}
 						to see where Learners get stuck, or enter a name and student ID to
-						try the course as a Learner. Your own answers are left out of
-						Insights unless you include them.
+						try the course. Switch “Viewing as” to Learner to see exactly what
+						Learners see. Your own answers are left out of Insights unless you
+						include them.
 					</Notice>
 				) : null}
 				<IdentityForm
@@ -237,18 +327,23 @@ export function CourseShell({
 				) : (
 					<span className="bar-title">Classroom</span>
 				)}
-				{identity && course ? (
-					<button
-						type="button"
-						className="identity-chip"
-						onClick={() => setEditing(true)}
-						title="Change your name or student ID"
-					>
-						<UserRound aria-hidden="true" />
-						<span className="identity-name">{identity.name}</span>
-						<span className="identity-id">{identity.studentId}</span>
-					</button>
-				) : null}
+				<div className="bar-actions">
+					{course && instructor ? (
+						<ViewSwitch viewAs={viewAs} onChange={switchView} />
+					) : null}
+					{identity && course ? (
+						<button
+							type="button"
+							className="identity-chip"
+							onClick={() => setEditing(true)}
+							title="Change your name or student ID"
+						>
+							<UserRound aria-hidden="true" />
+							<span className="identity-name">{identity.name}</span>
+							<span className="identity-id">{identity.studentId}</span>
+						</button>
+					) : null}
+				</div>
 			</header>
 			<main className="classroom-main">{content}</main>
 			{editing && identity ? (

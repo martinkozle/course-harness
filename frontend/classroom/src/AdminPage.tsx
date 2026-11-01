@@ -1,5 +1,5 @@
 import { ConfirmDialog, errorMessage, Notice } from "@course-harness/ui";
-import { Copy, Link2, LogOut, RefreshCw, Trash2 } from "lucide-react";
+import { GraduationCap, LogOut, RefreshCw, Trash2 } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useId, useState } from "react";
 
 import {
@@ -7,14 +7,12 @@ import {
 	type AdminSession,
 	ApiError,
 	api,
-	type CreatedShareLink,
 	type Role,
 } from "./api";
+import { coursePath, followLink } from "./router";
+import { ShareLinks } from "./ShareLinks";
 
-const ROLE_LABEL: Record<Role, string> = {
-	learner: "Learner",
-	instructor: "Instructor",
-};
+const ALL_ROLES: Role[] = ["learner", "instructor"];
 
 function formatTime(value: string | null): string {
 	if (!value) return "never";
@@ -251,9 +249,9 @@ function AttachForm({
 						required
 					/>
 					<small>
-						A public HTTPS Git repository, without credentials. The address works with or
-						without .git at the end. The course appears once a Release has been published to
-						it.
+						A public HTTPS Git repository, without credentials. The address
+						works with or without .git at the end. The course appears once a
+						Release has been published to it.
 					</small>
 				</div>
 				<div className="field">
@@ -310,8 +308,6 @@ function CourseCard({
 }) {
 	const [syncing, setSyncing] = useState(false);
 	const [confirmDetach, setConfirmDetach] = useState(false);
-	const [rotating, setRotating] = useState<Role | null>(null);
-	const [created, setCreated] = useState<CreatedShareLink | null>(null);
 	const [busy, setBusy] = useState(false);
 
 	async function syncNow() {
@@ -326,22 +322,22 @@ function CourseCard({
 	}
 
 	async function createLink(role: Role) {
-		setBusy(true);
 		try {
-			const link = await api.createLink(course.slug, role);
-			setCreated(link);
+			const created = await api.createLink(course.slug, role);
 			onChanged({
 				...course,
 				links: [
 					...course.links.filter((item) => item.role !== role),
-					link.link,
+					created.link,
 				],
 			});
 		} catch (caught) {
-			onError(caught, "The link could not be created.");
-		} finally {
-			setBusy(false);
-			setRotating(null);
+			// A signed-out session leaves the page; anything else is shown with the link.
+			if (caught instanceof ApiError && caught.status === 401) {
+				onError(caught, "The link could not be created.");
+				return;
+			}
+			throw caught;
 		}
 	}
 
@@ -383,10 +379,18 @@ function CourseCard({
 			{course.sync_message ? (
 				<pre className="sync-message">{course.sync_message}</pre>
 			) : null}
-			{created ? (
-				<CreatedLink link={created} onDone={() => setCreated(null)} />
-			) : null}
+			<section className="course-links" aria-label="Links">
+				<ShareLinks
+					links={course.links}
+					canRotate={ALL_ROLES}
+					onRotate={createLink}
+				/>
+			</section>
 			<div className="course-actions">
+				<a className="btn" href={coursePath(course.slug)} onClick={followLink}>
+					<GraduationCap aria-hidden="true" />
+					Open as Instructor
+				</a>
 				<button
 					type="button"
 					className="btn"
@@ -396,25 +400,6 @@ function CourseCard({
 					<RefreshCw aria-hidden="true" className={syncing ? "spin" : ""} />
 					{syncing ? "Syncing…" : "Sync now"}
 				</button>
-				{(["learner", "instructor"] as const).map((role) => {
-					const exists = course.links.some((link) => link.role === role);
-					return (
-						<button
-							key={role}
-							type="button"
-							className="btn"
-							disabled={busy}
-							onClick={() =>
-								exists ? setRotating(role) : void createLink(role)
-							}
-						>
-							<Link2 aria-hidden="true" />
-							{exists
-								? `Rotate ${ROLE_LABEL[role]} link`
-								: `Create ${ROLE_LABEL[role]} link`}
-						</button>
-					);
-				})}
 				<button
 					type="button"
 					className="btn btn-quiet"
@@ -425,20 +410,6 @@ function CourseCard({
 					Detach
 				</button>
 			</div>
-			{rotating ? (
-				<ConfirmDialog
-					title={`Rotate the ${ROLE_LABEL[rotating]} link?`}
-					confirmLabel="Rotate link"
-					busy={busy}
-					onConfirm={() => void createLink(rotating)}
-					onCancel={() => setRotating(null)}
-				>
-					<p>
-						The current {ROLE_LABEL[rotating]} link stops working, and everyone
-						who opened it must open the new one.
-					</p>
-				</ConfirmDialog>
-			) : null}
 			{confirmDetach ? (
 				<ConfirmDialog
 					title={`Detach ${course.title ?? course.slug}?`}
@@ -454,57 +425,5 @@ function CourseCard({
 				</ConfirmDialog>
 			) : null}
 		</li>
-	);
-}
-
-function CreatedLink({
-	link,
-	onDone,
-}: {
-	link: CreatedShareLink;
-	onDone: () => void;
-}) {
-	const [copied, setCopied] = useState(false);
-	const inputId = useId();
-
-	async function copy() {
-		try {
-			await navigator.clipboard.writeText(link.url);
-			setCopied(true);
-		} catch {
-			setCopied(false);
-		}
-	}
-
-	return (
-		<Notice
-			tone="success"
-			role="status"
-			actions={
-				<button type="button" className="btn btn-small" onClick={onDone}>
-					Done
-				</button>
-			}
-		>
-			<div className="field created-link">
-				<label htmlFor={inputId}>New {ROLE_LABEL[link.role]} link</label>
-				<div className="created-link-row">
-					<input
-						id={inputId}
-						readOnly
-						value={link.url}
-						onFocus={(event) => event.target.select()}
-					/>
-					<button type="button" className="btn btn-small" onClick={copy}>
-						<Copy aria-hidden="true" />
-						{copied ? "Copied" : "Copy"}
-					</button>
-				</div>
-				<small>
-					Copy it now: it is shown only once. Share it only with the people it
-					is meant for.
-				</small>
-			</div>
-		</Notice>
 	);
 }

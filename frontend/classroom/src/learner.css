@@ -72,6 +72,79 @@ a.bar-title:hover {
 	}
 }
 
+.bar-actions {
+	display: flex;
+	flex: 0 1 auto;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 12px;
+	min-width: 0;
+	max-width: 75%;
+}
+
+.bar-actions .identity-chip {
+	flex: 0 1 auto;
+	min-width: 0;
+	max-width: 100%;
+}
+
+/* An Instructor's "Viewing as: Instructor | Learner"; the server's role never changes. */
+.view-switch {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	font-size: 0.875rem;
+}
+
+.view-switch-label {
+	color: var(--ink-muted);
+}
+
+.view-switch-options {
+	display: inline-flex;
+	gap: 2px;
+	padding: 2px;
+	border-radius: 999px;
+	background: var(--surface-sunken);
+}
+
+.view-switch-options button {
+	min-height: 30px;
+	padding: 0 12px;
+	border: 0;
+	border-radius: 999px;
+	background: transparent;
+	font: inherit;
+	cursor: pointer;
+	color: var(--ink-muted);
+	font-weight: 600;
+}
+
+.view-switch-options button:hover {
+	color: var(--ink);
+}
+
+.view-switch-options button[aria-pressed="true"] {
+	background: var(--surface);
+	box-shadow: var(--shadow-card);
+	color: var(--accent-ink);
+}
+
+@media (max-width: 640px) {
+	.view-switch-label {
+		display: none;
+	}
+
+	.view-switch-options button {
+		padding: 0 9px;
+	}
+}
+
 /* ---------- Identity ---------- */
 
 .welcome {

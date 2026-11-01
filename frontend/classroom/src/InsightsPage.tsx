@@ -12,13 +12,16 @@ import {
 import {
 	answersCsvUrl,
 	api,
+	type CourseLinks,
 	type CourseSummary,
 	type CourseSync,
 	type Insights,
 	type InsightsRelease,
 	type QuestionInsight,
+	type Role,
 } from "./api";
 import { CourseTabs } from "./CoursePage";
+import { ShareLinks } from "./ShareLinks";
 
 const SYNC_POLL_MS = 1_500;
 
@@ -431,6 +434,70 @@ function ReleasesTable({ insights }: { insights: Insights }) {
 	);
 }
 
+/** The course's links for Instructors to share: shown again at any time, rotated on request. */
+function CourseLinksSection({ slug }: { slug: string }) {
+	const [links, setLinks] = useState<CourseLinks | null>(null);
+	const [error, setError] = useState<string | null>(null);
+
+	useEffect(() => {
+		let active = true;
+		api
+			.courseLinks(slug)
+			.then((loaded) => {
+				if (active) setLinks(loaded);
+			})
+			.catch((caught) => {
+				if (active)
+					setError(errorMessage(caught, "The links could not be loaded."));
+			});
+		return () => {
+			active = false;
+		};
+	}, [slug]);
+
+	async function rotate(role: Role) {
+		const link = await api.rotateCourseLink(slug, role);
+		setLinks((current) =>
+			current
+				? {
+						...current,
+						links: [
+							...current.links.filter((item) => item.role !== role),
+							link,
+						],
+					}
+				: current,
+		);
+	}
+
+	return (
+		<section
+			className="insights-section classroom-card course-links"
+			aria-labelledby="links-title"
+		>
+			<h3 id="links-title">Links to this course</h3>
+			<p className="meta">
+				Share the Learner link with your Learners. Rotating a link stops the old
+				one from working.
+				{links && !links.can_rotate.includes("instructor")
+					? " Only the Administrator can rotate the Instructor link."
+					: ""}
+			</p>
+			{error ? (
+				<Notice tone="error">{error}</Notice>
+			) : !links ? (
+				<p className="meta">Loading…</p>
+			) : (
+				<ShareLinks
+					links={links.links}
+					canRotate={links.can_rotate}
+					onRotate={rotate}
+				/>
+			)}
+		</section>
+	);
+}
+
 /** An Instructor's view of where Learners get stuck, graded against one Release. */
 export function InsightsPage({
 	course,
@@ -553,6 +620,7 @@ export function InsightsPage({
 				<SyncStatusLine sync={sync.sync} />
 				{sync.error ? <Notice tone="error">{sync.error}</Notice> : null}
 			</div>
+			<CourseLinksSection slug={course.slug} />
 			{!course.release ? (
 				<p className="meta">
 					This course has no Release yet, so there is nothing to show.

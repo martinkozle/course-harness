@@ -46,27 +46,67 @@ test("the Administrator attaches a course, creates its links, and a Learner open
 	).toBeVisible();
 
 	await card.getByRole("button", { name: "Create Learner link" }).click();
-	const learnerField = card.getByLabel("New Learner link");
+	const learnerField = card.getByLabel("Learner link", { exact: true });
 	await expect(learnerField).toHaveValue(
 		new RegExp(`^${CLASSROOM}/l/[A-Za-z0-9_-]+$`),
 	);
 	const learnerLink = await learnerField.inputValue();
 	await expectNoAccessibilityViolations(page, "A course with a new link");
-	await card.getByRole("button", { name: "Done" }).click();
-	await expect(learnerField).toBeHidden();
 	await expect(
 		card.getByRole("button", { name: "Rotate Learner link" }),
 	).toBeVisible();
 
 	await card.getByRole("button", { name: "Create Instructor link" }).click();
-	const instructorField = card.getByLabel("New Instructor link");
+	const instructorField = card.getByLabel("Instructor link", { exact: true });
 	await expect(instructorField).toHaveValue(
 		new RegExp(`^${CLASSROOM}/i/[A-Za-z0-9_-]+$`),
 	);
-	await card.getByRole("button", { name: "Done" }).click();
+	const instructorLink = await instructorField.inputValue();
+
+	// Links are shown again later, and copied without rotating them.
+	await page.reload();
+	await expect(learnerField).toHaveValue(learnerLink);
+	await expect(instructorField).toHaveValue(instructorLink);
+	await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
+		origin: CLASSROOM,
+	});
+	await card.getByRole("button", { name: "Copy Learner link" }).click();
 	await expect(
-		card.getByRole("button", { name: "Rotate Instructor link" }),
+		card.getByRole("button", { name: "Copied Learner link" }),
 	).toBeVisible();
+	expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+		learnerLink,
+	);
+	await card.getByRole("button", { name: "Rotate Learner link" }).click();
+	const confirm = page.getByRole("dialog", {
+		name: "Rotate the Learner link?",
+	});
+	await expect(confirm).toBeVisible();
+	await confirm.getByRole("button", { name: "Cancel" }).click();
+	await expect(learnerField).toHaveValue(learnerLink);
+
+	// The Administrator opens the course as an Instructor without any link.
+	await card.getByRole("link", { name: "Open as Instructor" }).click();
+	await expect(page).toHaveURL(`${CLASSROOM}/c/causal`);
+	await expect(
+		page.getByText(
+			"You are signed in as the Administrator, so you see this course as an Instructor.",
+		),
+	).toBeVisible();
+	const viewing = page.getByRole("group", { name: "Viewing as" });
+	await expect(
+		viewing.getByRole("button", { name: "Instructor" }),
+	).toHaveAttribute("aria-pressed", "true");
+	await page.getByRole("link", { name: "Open Insights" }).click();
+	const links = page.getByRole("region", { name: "Links to this course" });
+	await expect(links.getByLabel("Learner link", { exact: true })).toHaveValue(
+		learnerLink,
+	);
+	// Only the Administrator may rotate the Instructor link.
+	await expect(
+		links.getByRole("button", { name: "Rotate Instructor link" }),
+	).toBeVisible();
+	await expectNoAccessibilityViolations(page, "Insights for the Administrator");
 
 	// A Learner opens the link in their own browser: the token becomes a cookie and a clean URL.
 	const learner = await browser.newContext();

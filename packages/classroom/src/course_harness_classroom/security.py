@@ -1,8 +1,12 @@
 """Tokens, sessions, cookies and the HTTP security guards of the Classroom.
 
-- Share Link tokens and session IDs are 256-bit random values; only their SHA-256 is stored, so
-  a leaked database grants nothing. The Administrator token is compared in constant time and is
-  only ever sent in a JSON body, never in a URL.
+- Share Link tokens and session IDs are 256-bit random values. Session IDs are stored only as
+  their SHA-256, so a leaked database opens no session. Share Link tokens are stored as well, so
+  Instructors can show and copy a link again (ADR 0016); they are looked up by their hash. The
+  Administrator token is compared in constant time and is only ever sent in a JSON body, never
+  in a URL.
+- An Administrator session is an Instructor of every course. Instructors may rotate the Learner
+  link; only the Administrator rotates the Instructor link, attaches or detaches courses.
 - Every session cookie is HttpOnly and SameSite=Strict, and Secure unless the public URL is
   plain HTTP on loopback. An Administrator session also records a fingerprint of the token it
   was opened with, so changing ``CLASSROOM_ADMIN_TOKEN`` ends every Administrator session.

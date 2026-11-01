@@ -16,6 +16,15 @@ export type ShareLink = {
 	role: Role;
 	created_at: string;
 	rotated_at: string | null;
+	/** The full link, or null for a link made before links were kept: rotate it to show it. */
+	url: string | null;
+	needs_rotation: boolean;
+};
+
+/** A course's Share Links as its Instructors see them, and whose links they may rotate. */
+export type CourseLinks = {
+	links: ShareLink[];
+	can_rotate: Role[];
 };
 
 export type AdminCourse = {
@@ -62,7 +71,10 @@ export type CourseSource = {
 export type CourseSummary = {
 	slug: string;
 	title: string;
+	/** What the server lets you do here; viewing as a Learner never changes it. */
 	role: Role;
+	/** Whether you are the Administrator, who is an Instructor of every course. */
+	administrator: boolean;
 	release: ServedRelease | null;
 	lectures: LectureSummary[];
 	sources: CourseSource[];
@@ -345,4 +357,11 @@ export const api = {
 		request<CourseSync>("GET", `/api/c/${encodeURIComponent(slug)}/sync`),
 	syncNow: (slug: string) =>
 		request<CourseSync>("POST", `/api/c/${encodeURIComponent(slug)}/sync`),
+	courseLinks: (slug: string) =>
+		request<CourseLinks>("GET", `/api/c/${encodeURIComponent(slug)}/links`),
+	rotateCourseLink: (slug: string, role: Role) =>
+		request<ShareLink>(
+			"POST",
+			`/api/c/${encodeURIComponent(slug)}/links/${role}`,
+		),
 };

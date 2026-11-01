@@ -121,7 +121,7 @@ The person who runs a Classroom, attaches Course repositories, and creates or ro
 _Avoid_: Admin user, Course Author
 
 **Instructor**:
-A Classroom role, held through a per-Course Share Link, that views a Course with its Quiz statistics and Learner progress; the same person may also be its Course Author.
+A Classroom role, held through a per-Course Instructor Share Link or an Administrator session, that views a Course with its Quiz statistics and Learner progress, can view it as a Learner, and can show, copy and rotate its Learner Share Link; the same person may also be its Course Author.
 _Avoid_: Professor, teacher, Course Author
 
 **Learner**:

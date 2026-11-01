@@ -117,15 +117,88 @@ body {
 	gap: 8px;
 }
 
-.created-link-row {
-	display: flex;
-	gap: 8px;
+/* Share Links: each role's link on one row, shown again at any time. */
+
+.course-links {
+	padding-top: 14px;
+	border-top: 1px solid var(--rule);
 }
 
-.created-link-row input {
-	flex: 1;
-	font-family: var(--font-mono);
+.classroom-card.course-links {
+	padding-top: 20px;
+	border-top: 1px solid var(--rule);
+}
+
+.share-links {
+	display: grid;
+	gap: 14px;
+}
+
+.share-link {
+	display: grid;
+	gap: 6px;
+	min-width: 0;
+}
+
+.share-link-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 2px 12px;
+}
+
+.share-link-head label {
 	font-size: 0.875rem;
+	font-weight: 600;
+}
+
+.share-link-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.share-link-row .input {
+	flex: 1;
+	min-width: 0;
+	min-height: 30px;
+	padding: 4px 10px;
+	background: var(--surface-sunken);
+	font-family: var(--font-mono);
+	font-size: 0.8125rem;
+	text-overflow: ellipsis;
+}
+
+.share-link-row .btn {
+	flex: none;
+}
+
+.share-link-missing {
+	flex: 1;
+	min-width: 0;
+	padding: 5px 10px;
+	border: 1px dashed var(--rule-strong);
+	border-radius: var(--radius-s);
+	color: var(--ink-muted);
+	font-size: 0.875rem;
+}
+
+.share-link-error {
+	color: var(--danger);
+	font-size: 0.8125rem;
+}
+
+@media (max-width: 520px) {
+	.share-link-row {
+		flex-wrap: wrap;
+	}
+
+	.share-link-row .input,
+	.share-link-missing {
+		flex-basis: 100%;
+	}
 }
 
 a.btn {

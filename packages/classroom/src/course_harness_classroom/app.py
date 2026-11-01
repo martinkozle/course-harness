@@ -5,10 +5,12 @@ Routes:
 - ``/api/admin/*``: the Administrator's session, attached courses, sync and Share Links.
 - ``/l/<token>`` and ``/i/<token>``: exchange a Learner or Instructor Share Link token for a
   course cookie and redirect to ``/c/<course slug>``.
-- ``/api/c/<course slug>`` and below: the served Release of one course, for its cookie holders:
-  its Lectures, its Quizzes without answer keys, Answers and a student's progress.
-- ``/api/c/<course slug>/insights``, ``/answers.csv`` and ``/sync``: Instructor Insights, the
-  Answers export and "Sync now", for Instructor cookie holders only.
+- ``/api/c/<course slug>`` and below: the served Release of one course, for its cookie holders
+  and the Administrator: its Lectures, its Quizzes without answer keys, Answers and a student's
+  progress.
+- ``/api/c/<course slug>/insights``, ``/answers.csv``, ``/sync`` and ``/links``: Instructor
+  Insights, the Answers export, "Sync now" and the course's Share Links, for Instructors only.
+  An Administrator session is an Instructor of every course.
 - Everything else that is a ``GET``: the built Classroom interface, a single-page app.
 """
 
@@ -18,6 +20,7 @@ import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import unquote
@@ -136,6 +139,9 @@ class ShareLinkResponse(BaseModel):
     role: Role
     created_at: str
     rotated_at: str | None
+    # The full link, or None for a link created before tokens were kept.
+    url: str | None
+    needs_rotation: bool
 
 
 class ServedReleaseResponse(BaseModel):
@@ -156,7 +162,7 @@ class AdminCourseResponse(BaseModel):
 
 
 class CreatedShareLinkResponse(BaseModel):
-    """A new Share Link; its URL is shown only in this response."""
+    """A new or rotated Share Link."""
 
     role: Role
     url: str
@@ -238,13 +244,31 @@ class CourseSyncResponse(BaseModel):
     release: ServedReleaseResponse | None
 
 
+class CourseLinksResponse(BaseModel):
+    """A course's Share Links for its Instructors, and which roles' links they may rotate."""
+
+    links: list[ShareLinkResponse]
+    can_rotate: list[Role]
+
+
 class CourseResponse(BaseModel):
     slug: str
     title: str
+    # What the server lets this visitor do; viewing as a Learner is a browser preference only.
     role: Role
+    administrator: bool
     release: ServedReleaseResponse | None
     lectures: list[LectureSummary]
     sources: list[CourseSource]
+
+
+@dataclass(frozen=True)
+class CourseVisitor:
+    """A visitor's access to one course, as the server decides it."""
+
+    course: Course
+    role: Role
+    administrator: bool
 
 
 def _release_response(course: Course) -> ServedReleaseResponse | None:
@@ -257,8 +281,14 @@ def _release_response(course: Course) -> ServedReleaseResponse | None:
     )
 
 
-def _link_response(link: ShareLink) -> ShareLinkResponse:
-    return ShareLinkResponse(role=link.role, created_at=link.created_at, rotated_at=link.rotated_at)
+def _link_response(link: ShareLink, base_url: str) -> ShareLinkResponse:
+    return ShareLinkResponse(
+        role=link.role,
+        created_at=link.created_at,
+        rotated_at=link.rotated_at,
+        url=f"{base_url}/{LINK_PREFIX[link.role]}/{link.token}" if link.token else None,
+        needs_rotation=link.token is None,
+    )
 
 
 def _visible_slides(lecture: ServedLecture) -> list[Any]:
@@ -315,16 +345,20 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
 
     # Administrator
 
-    def require_admin(request: Request) -> None:
+    def is_admin(request: Request) -> bool:
+        """Whether the request carries a live Administrator session for the current token."""
         session_id = request.cookies.get(ADMIN_COOKIE)
         session = store.session(token_hash(session_id)) if session_id else None
         expected = admin_fingerprint(settings)
-        if (
-            expected is None
-            or session is None
-            or session.kind != "admin"
-            or not hmac.compare_digest(session.admin_fingerprint or "", expected)
-        ):
+        return (
+            expected is not None
+            and session is not None
+            and session.kind == "admin"
+            and hmac.compare_digest(session.admin_fingerprint or "", expected)
+        )
+
+    def require_admin(request: Request) -> None:
+        if not is_admin(request):
             raise HTTPException(status_code=401, detail="Sign in as the Administrator.")
 
     Admin = Annotated[None, Depends(require_admin)]
@@ -335,8 +369,19 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
             raise HTTPException(status_code=404, detail="That course is not attached.")
         return course
 
-    def course_response(course: Course) -> AdminCourseResponse:
+    def link_responses(course: Course, request: Request) -> list[ShareLinkResponse]:
         links = store.share_links(course.id)
+        base_url = public_base_url(settings, request)
+        return [_link_response(links[role], base_url) for role in ROLES if role in links]
+
+    def rotate_link(course: Course, role: Role, request: Request) -> ShareLinkResponse:
+        """Create a course's Share Link for a role, or rotate it: the previous link and every
+        session opened with it stop working."""
+        store.set_share_link(course.id, role, new_token())
+        link = store.share_links(course.id)[role]
+        return _link_response(link, public_base_url(settings, request))
+
+    def course_response(course: Course, request: Request) -> AdminCourseResponse:
         return AdminCourseResponse(
             slug=course.slug,
             repo_url=course.repo_url,
@@ -345,7 +390,7 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
             last_sync_at=course.last_sync_at,
             sync_status=course.sync_status,
             sync_message=course.sync_message,
-            links=[_link_response(links[role]) for role in ROLES if role in links],
+            links=link_responses(course, request),
         )
 
     @app.get("/api/admin/session")
@@ -397,11 +442,13 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
         return response
 
     @app.get("/api/admin/courses")
-    def list_courses(_admin: Admin) -> list[AdminCourseResponse]:
-        return [course_response(course) for course in store.courses()]
+    def list_courses(request: Request, _admin: Admin) -> list[AdminCourseResponse]:
+        return [course_response(course, request) for course in store.courses()]
 
     @app.post("/api/admin/courses", status_code=201)
-    def attach_course(body: AttachCourseRequest, _admin: Admin) -> AdminCourseResponse:
+    def attach_course(
+        body: AttachCourseRequest, request: Request, _admin: Admin
+    ) -> AdminCourseResponse:
         try:
             repo_url = validate_repo_url(body.repo_url, allow_local=settings.allow_local_repos)
         except InvalidRepoUrl as error:
@@ -411,7 +458,7 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
             course = store.add_course(slug=slug, repo_url=repo_url)
         except DuplicateCourse as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
-        return course_response(sync_service.sync(course.id))
+        return course_response(sync_service.sync(course.id), request)
 
     @app.delete("/api/admin/courses/{slug}", status_code=204)
     def detach_course(slug: str, _admin: Admin) -> Response:
@@ -421,10 +468,10 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
         return Response(status_code=204)
 
     @app.post("/api/admin/courses/{slug}/sync")
-    def sync_course(slug: str, _admin: Admin) -> AdminCourseResponse:
+    def sync_course(slug: str, request: Request, _admin: Admin) -> AdminCourseResponse:
         course = admin_course(slug)
         try:
-            return course_response(sync_service.sync(course.id))
+            return course_response(sync_service.sync(course.id), request)
         except CourseNotFound as error:
             raise HTTPException(status_code=404, detail="That course is not attached.") from error
 
@@ -433,12 +480,9 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
         slug: str, role: Role, request: Request, _admin: Admin
     ) -> CreatedShareLinkResponse:
         """Create a course's Share Link for a role, or rotate it: the previous one stops working."""
-        course = admin_course(slug)
-        token = new_token()
-        store.set_share_link(course.id, role, token_hash(token))
-        link = store.share_links(course.id)[role]
-        url = f"{public_base_url(settings, request)}/{LINK_PREFIX[role]}/{token}"
-        return CreatedShareLinkResponse(role=role, url=url, link=_link_response(link))
+        link = rotate_link(admin_course(slug), role, request)
+        assert link.url is not None
+        return CreatedShareLinkResponse(role=role, url=link.url, link=link)
 
     # Share Links
 
@@ -485,8 +529,13 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
 
     # Courses, for Share Link holders
 
-    def course_access(slug: str, request: Request) -> tuple[Course, Role]:
+    def course_access(slug: str, request: Request) -> CourseVisitor:
+        """Who may see a course: a Share Link session, or an Administrator session, which is an
+        Instructor of every course. A browser viewing the course as a Learner never changes
+        this."""
         course = store.course_by_slug(slug)
+        if course is not None and is_admin(request):
+            return CourseVisitor(course=course, role="instructor", administrator=True)
         session_id = request.cookies.get(course_cookie(slug)) if course else None
         session = store.session(token_hash(session_id)) if session_id else None
         if (
@@ -497,9 +546,9 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
             or session.role is None
         ):
             raise HTTPException(status_code=401, detail=NO_ACCESS)
-        return course, session.role
+        return CourseVisitor(course=course, role=session.role, administrator=False)
 
-    CourseAccess = Annotated[tuple[Course, Role], Depends(course_access)]
+    CourseAccess = Annotated[CourseVisitor, Depends(course_access)]
 
     def download_url(course: Course, directory: Path, lecture: ServedLecture) -> str | None:
         if lecture.artifact is None:
@@ -515,7 +564,7 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
 
     @app.get("/api/c/{slug}")
     def course_summary(access: CourseAccess) -> CourseResponse:
-        course, role = access
+        course, role = access.course, access.role
         snapshot = sync_service.snapshot(course)
         directory = sync_service.snapshot_dir(course)
         lectures = []
@@ -536,6 +585,7 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
             slug=course.slug,
             title=snapshot.title if snapshot else course.title or course.slug,
             role=role,
+            administrator=access.administrator,
             release=_release_response(course) if snapshot else None,
             lectures=lectures,
             sources=course_sources(snapshot) if snapshot is not None else [],
@@ -544,7 +594,7 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
     @app.get("/api/c/{slug}/lectures/{lecture_id}")
     def lecture_detail(lecture_id: str, access: CourseAccess) -> LectureResponse:
         """A Lecture's Slides with their preview geometry; its Quiz comes from ``/quizzes``."""
-        course, _role = access
+        course = access.course
         snapshot, directory = served(course)
         lectures = snapshot.lectures
         index = next(
@@ -608,7 +658,7 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
     @app.get("/api/c/{slug}/quizzes")
     def quizzes(access: CourseAccess, student: StudentHeader) -> list[LearnerQuiz]:
         """Every Quiz without its answer key, its Options shuffled for this student."""
-        course, _role = access
+        course = access.course
         snapshot, _directory = served(course)
         return learner_quizzes(snapshot, student_id=student or "")
 
@@ -644,7 +694,7 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
         Picking an Option again, or any Option once the Question is answered correctly, is
         answered but not recorded.
         """
-        course, role = access
+        course, role = access.course, access.role
         snapshot, _directory = served(course)
         found = find_question(snapshot, body.lecture_id, body.question_id)
         if found is None:
@@ -677,7 +727,7 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
     def student_progress(access: CourseAccess, student: StudentHeader) -> ProgressResponse:
         """A student's state on each Question, from the Answers given with their student ID
         under the same role: an Instructor's tries never show up as a Learner's progress."""
-        course, role = access
+        course, role = access.course, access.role
         if student is None:
             raise HTTPException(
                 status_code=422, detail=f"Send your student ID in {STUDENT_HEADER}."
@@ -690,11 +740,15 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
 
     # Instructor Insights
 
-    def instructor_course(access: CourseAccess) -> Course:
-        course, role = access
-        if role != "instructor":
+    def instructor_access(access: CourseAccess) -> CourseVisitor:
+        if access.role != "instructor":
             raise HTTPException(status_code=403, detail=ONLY_INSTRUCTORS)
-        return course
+        return access
+
+    InstructorAccess = Annotated[CourseVisitor, Depends(instructor_access)]
+
+    def instructor_course(access: InstructorAccess) -> Course:
+        return access.course
 
     InstructorCourse = Annotated[Course, Depends(instructor_course)]
     ReleaseTag = Annotated[str | None, Query(max_length=79, pattern=RELEASE_TAG_PATTERN)]
@@ -781,11 +835,33 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
             )
         return sync_state(course)
 
+    def rotatable_roles(access: CourseVisitor) -> list[Role]:
+        """Instructors rotate the Learner link; only the Administrator rotates the Instructor
+        link, so one Instructor can never lock the others out."""
+        return list(ROLES) if access.administrator else ["learner"]
+
+    @app.get("/api/c/{slug}/links")
+    def course_links(access: InstructorAccess, request: Request) -> CourseLinksResponse:
+        return CourseLinksResponse(
+            links=link_responses(access.course, request), can_rotate=rotatable_roles(access)
+        )
+
+    @app.post("/api/c/{slug}/links/{role}")
+    def rotate_course_link(
+        role: Role, access: InstructorAccess, request: Request
+    ) -> ShareLinkResponse:
+        """Create or rotate a course's Share Link: the previous link and its sessions end."""
+        if role not in rotatable_roles(access):
+            raise HTTPException(
+                status_code=403, detail="Only the Administrator can rotate the Instructor link."
+            )
+        return rotate_link(access.course, role, request)
+
     @app.get("/api/c/{slug}/assets/{name}/{path:path}")
     def course_asset(name: str, path: str, access: CourseAccess) -> FileResponse:
         """A rendered background or the Release PPTX of the Release the course serves now, or of
         the one it served before, so a page opened before a switch keeps working."""
-        course, _role = access
+        course = access.course
         found = sync_service.snapshot_named(course, name) if ASSET_PATH.fullmatch(path) else None
         if found is None:
             raise HTTPException(status_code=404, detail="Not found")
