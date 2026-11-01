@@ -257,6 +257,17 @@ from course_harness.workspace_history import (
     restore_revision,
     revert_current_path,
 )
+from course_harness.workspace_remote import (
+    InvalidRemoteUrl,
+    PushResult,
+    RemoteSettings,
+    RemoteUpdateRequest,
+    WorkspaceRemoteError,
+    prepare_push,
+    push_workspace,
+    read_remote,
+    set_remote,
+)
 from course_harness.workspaces import (
     WorkspaceSelectionError,
     native_folder_picker,
@@ -759,6 +770,7 @@ def create_app(
     autonomous_agent = create_autonomous_course_agent()
     reconciliation_agent = create_reconciliation_agent()
     mutation_locks: dict[Path, asyncio.Lock] = {}
+    push_locks: dict[Path, asyncio.Lock] = {}
     cancel_events: dict[Path, asyncio.Event] = {}
     recovered_workspaces: set[Path] = set()
 
@@ -1206,6 +1218,52 @@ def create_app(
         except ReleaseError as error:
             raise release_http_error(error) from error
         return release_artifact_response(content, artifact_id)
+
+    def remote_http_error(error: Exception) -> HTTPException:
+        if isinstance(error, InvalidRemoteUrl):
+            return HTTPException(status_code=422, detail=str(error))
+        if isinstance(error, WorkspaceHistoryNotInitializedError):
+            return HTTPException(status_code=404, detail=str(error))
+        return HTTPException(status_code=409, detail=str(error))
+
+    @app.get("/api/workspace/remote", response_model=RemoteSettings)
+    async def get_workspace_remote() -> RemoteSettings:
+        active = require_bound_workspace()
+        try:
+            return await asyncio.to_thread(read_remote, active)
+        except (WorkspaceRemoteError, WorkspaceHistoryError) as error:
+            raise remote_http_error(error) from error
+
+    @app.put("/api/workspace/remote", response_model=RemoteSettings)
+    async def put_workspace_remote(request: RemoteUpdateRequest) -> RemoteSettings:
+        active = require_bound_workspace()
+        async with exclusive_mutation(active):
+            try:
+                return await asyncio.to_thread(set_remote, active, request.url)
+            except (WorkspaceRemoteError, WorkspaceHistoryError) as error:
+                raise remote_http_error(error) from error
+
+    @app.post("/api/workspace/remote/push", response_model=PushResult)
+    async def push_workspace_remote() -> PushResult:
+        """Push only when the Course Author asks; never automatically."""
+        active = require_bound_workspace()
+        lock = push_locks.setdefault(active.resolve(), asyncio.Lock())
+        if lock.locked():
+            raise HTTPException(status_code=409, detail="A push is already running.")
+        async with lock:
+            # Recording Release files is a short Git change; the network push holds no
+            # Course lock.
+            async with exclusive_mutation(active):
+                try:
+                    plan = await asyncio.to_thread(
+                        prepare_push, active, release_data_root=release_data
+                    )
+                except (WorkspaceRemoteError, WorkspaceHistoryError, ReleaseError) as error:
+                    raise remote_http_error(error) from error
+            try:
+                return await asyncio.to_thread(push_workspace, active, plan)
+            except WorkspaceRemoteError as error:
+                raise remote_http_error(error) from error
 
     @app.post("/api/workspace/revisions", response_model=CourseRevision, status_code=201)
     async def create_workspace_revision(request: RevisionCreateRequest) -> CourseRevision:

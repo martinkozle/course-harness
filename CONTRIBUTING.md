@@ -107,6 +107,22 @@ Then create a GitHub Release with a new tag `v0.2.0` on that commit (or push the
 publishes to PyPI through trusted publishing and attaches the wheel and source distribution to the
 Release.
 
+## Course Workspace remotes
+
+A Course Workspace's remote is the ordinary Git remote `origin`; **Push** in the Release canvas
+runs the system `git` with your own configuration and credentials, with hooks disabled. Its
+terminal equivalent, from the Course folder, is:
+
+```bash
+git push origin main 'refs/tags/course-release/*' 'refs/course-harness/release-files/*'
+```
+
+`refs/course-harness/release-files/<slug>` names a commit that holds exactly a Release's
+`inputs/template.pptx` and `artifacts/<id>.pptx` (ADR 0019). Publishing writes it; Push from the
+app first writes it for older Releases from local Release data. `git clone --mirror` fetches these
+refs; a plain `git clone` does not. `course_harness.core.release_files` reads and verifies the
+files against the Release manifest.
+
 ## Debugging Course Agent runs
 
 Each Course Agent run is also traced for debugging, beside its conversation in the chat store:

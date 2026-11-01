@@ -69,6 +69,16 @@ network you trust.
   and works without a key.
 - **History**: save and restore Course Revisions, publish Releases, and export Lectures to
   PowerPoint.
+- **Push**: send the Course, its Releases, and their PowerPoint files to a Git remote you choose,
+  using your own Git sign-in. Nothing is pushed until you choose **Push**. From a terminal in the
+  Course folder, the same push is:
+
+  ```bash
+  git push origin main 'refs/tags/course-release/*' 'refs/course-harness/release-files/*'
+  ```
+
+  Each Release's files travel in their own ref, never in the Course branch. Pushing
+  from the app also records those refs for Releases published by earlier versions.
 
 <table>
   <tr>

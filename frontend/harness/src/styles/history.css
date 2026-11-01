@@ -490,6 +490,38 @@
 	margin-top: 16px;
 }
 
+.release-remote-icon {
+	flex: none;
+	width: 20px;
+	height: 20px;
+	color: var(--accent-ink);
+}
+
+.release-remote-form {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+	margin: 12px 0;
+}
+
+.release-remote-form .field {
+	flex: 1;
+	min-width: 0;
+}
+
+.release-remote-form > .btn {
+	margin-top: 24px;
+}
+
+.release-remote-output {
+	max-height: 200px;
+	margin-top: 8px;
+	overflow: auto;
+	font-size: 0.8125rem;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
 .release-published > * + * {
 	margin-top: 12px;
 }
@@ -502,6 +534,15 @@
 @media (max-width: 720px) {
 	.release-name-fields {
 		grid-template-columns: 1fr;
+	}
+
+	.release-remote-form {
+		flex-direction: column;
+		align-items: stretch;
+	}
+
+	.release-remote-form > .btn {
+		margin-top: 0;
 	}
 
 	.release-files {

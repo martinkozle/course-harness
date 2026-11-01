@@ -24,6 +24,7 @@ import type {
 import type { AgentContext } from "../useCourseAgent";
 import type { HistoryTab } from "./HistoryCanvas";
 import { findingScope, ReleaseDetail } from "./ReleaseDetail";
+import { RemotePushPanel } from "./RemotePushPanel";
 
 type Props = {
 	course: CoursePlan;
@@ -586,6 +587,8 @@ export function ReleaseCanvas({
 					) : null}
 				</div>
 			</section>
+
+			<RemotePushPanel />
 		</div>
 	);
 }

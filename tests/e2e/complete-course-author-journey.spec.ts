@@ -517,4 +517,14 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	await expect(releaseDetail).toContainText("1 lectures included");
 	await expect(releaseDetail).toContainText("1 still planned");
 	await expect(releaseDetail).toContainText("chapter_causal.md");
+
+	// Pushing is explicit and needs a remote; a local path is refused.
+	const push = page.getByRole("button", { name: "Push", exact: true });
+	await expect(push).toBeDisabled();
+	await page.getByLabel("Remote URL").fill("/tmp/course.git");
+	await page.getByRole("button", { name: "Save remote" }).click();
+	await expect(page.getByText("Use an HTTPS URL or an SSH address")).toBeVisible();
+	await page.getByLabel("Remote URL").fill("git@example.invalid:you/course.git");
+	await page.getByRole("button", { name: "Save remote" }).click();
+	await expect(push).toBeEnabled();
 });
