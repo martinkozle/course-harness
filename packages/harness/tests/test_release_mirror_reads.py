@@ -183,19 +183,157 @@ def test_an_oversized_blob_is_rejected_by_its_size_before_it_is_read(
     assert "core.bigFileThreshold=1m" in releases.git_command(mirror, "status")
 
 
-def test_reading_one_release_has_a_byte_and_time_budget(
+def test_a_read_budget_accumulates_across_reads_and_nested_budgets_charge_the_outer_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     mirror, [release] = _published_mirror(tmp_path, ["fall-2026"])
+    size = len(releases.read_commit_blob(mirror, release.commit_oid, "course.yaml"))
 
-    monkeypatch.setattr(releases, "MAX_RELEASE_READ_BYTES", 1_000)
-    with pytest.raises(ReleaseError, match="read budget"):
-        releases.read_release(mirror, release.slug)
+    # Each read fits the budget on its own; the second one no longer fits what is left.
+    with releases.read_budget(seconds=30, max_bytes=size + size // 2):
+        releases.read_commit_blob(mirror, release.commit_oid, "course.yaml")
+        with pytest.raises(ReleaseError, match="read budget"):
+            releases.read_commit_blob(mirror, release.commit_oid, "course.yaml")
 
-    monkeypatch.setattr(releases, "MAX_RELEASE_READ_BYTES", 64_000_000)
+    with releases.read_budget(seconds=30, max_bytes=10 * size) as outer:
+        with releases.read_budget(seconds=30, max_bytes=10 * size) as inner:
+            releases.read_commit_blob(mirror, release.commit_oid, "course.yaml")
+        assert outer.remaining_bytes == inner.remaining_bytes < 10 * size - size
+
     monkeypatch.setattr(releases, "RELEASE_READ_SECONDS", 0)
-    with pytest.raises(ReleaseError, match="timed out"):
+    with pytest.raises(ReleaseError, match="timed out|time budget"):
         releases.read_release(mirror, release.slug)
+
+
+def test_release_tags_that_share_a_commit_parse_its_tagged_files_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mirror, published = _published_mirror(tmp_path, ["fall-2026", "spring-2027", "summer-2027"])
+    assert len({release.commit_oid for release in published}) == 1
+    parsed: list[str] = []
+    parse_tagged_plan = releases.parse_tagged_plan
+
+    def recording_parse(repository: Path, commit_oid: str) -> CoursePlan:
+        parsed.append(commit_oid)
+        return parse_tagged_plan(repository, commit_oid)
+
+    monkeypatch.setattr(releases, "parse_tagged_plan", recording_parse)
+
+    assert len(releases.scan_releases(mirror).releases) == 3
+    assert parsed == [published[0].commit_oid]
+
+
+def test_newest_release_tries_a_bounded_number_of_candidate_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mirror, [release] = _published_mirror(tmp_path, ["fall-2026"])
+    _tag(
+        mirror,
+        "fall-2026",
+        release.commit_oid,
+        _manifest(release),
+        date="2026-09-01T00:00:00+00:00",
+    )
+    for month in range(1, 5):
+        _tag(
+            mirror,
+            f"bad-{month}",
+            release.commit_oid,
+            b"{}\n",
+            date=f"2027-0{month}-01T00:00:00+00:00",
+        )
+    monkeypatch.setattr(releases, "MAX_RELEASE_CANDIDATES", 3)
+
+    scan = releases.newest_release(mirror)
+
+    assert scan.releases == []
+    assert [tag.name for tag in scan.rejected] == [
+        "course-release/bad-4",
+        "course-release/bad-3",
+        "course-release/bad-2",
+    ]
+    monkeypatch.setattr(releases, "MAX_RELEASE_CANDIDATES", 5)
+    assert releases.newest_release(mirror).newest == release
+
+    monkeypatch.setattr(releases, "RELEASE_SCAN_SECONDS", 0)
+    with pytest.raises(ReleaseError, match="timed out|time budget"):
+        releases.newest_release(mirror)
+
+
+def test_deeply_nested_yaml_in_a_tagged_revision_is_a_release_error(tmp_path: Path) -> None:
+    mirror, [release] = _published_mirror(tmp_path, ["fall-2026"])
+    commit_oid = _commit_replacing(
+        mirror, release.commit_oid, "course.yaml", b"a: " + b"[" * 200_000 + b"\n"
+    )
+    _tag(
+        mirror,
+        "deep",
+        commit_oid,
+        _manifest(
+            release, slug="deep", commit_oid=commit_oid, revision_id=f"revision-{commit_oid}"
+        ),
+        date="2030-01-01T00:00:00+00:00",
+    )
+
+    with pytest.raises(ReleaseError, match="Tagged Course Plan is invalid") as raised:
+        releases.read_release(mirror, "deep")
+    assert isinstance(raised.value.__cause__, yaml.YAMLError)
+    assert releases.newest_release(mirror).newest == release
+    with pytest.raises(yaml.YAMLError, match="nested too deeply"):
+        load_canonical_yaml("a: " + "[" * 65 + "]" * 65 + "\n")
+    assert load_canonical_yaml("a: " + "[" * 60 + "]" * 60 + "\n") is not None
+
+
+def test_hostile_repository_configuration_and_attributes_run_nothing(tmp_path: Path) -> None:
+    mirror, [release] = _published_mirror(tmp_path, ["fall-2026"])
+    marker = tmp_path / "ran"
+    command = f"touch {marker}"
+    with (mirror / "config").open("a", encoding="utf-8") as config:
+        config.write(
+            "[core]\n"
+            f"\tfsmonitor = {command}\n"
+            f"\thooksPath = {tmp_path}\n"
+            f"\tpager = {command}\n"
+            "\tbigFileThreshold = 1g\n"
+            '[filter "evil"]\n'
+            f"\tsmudge = {command}\n"
+            f"\tclean = {command}\n"
+            '[diff "evil"]\n'
+            f"\ttextconv = {command}\n"
+        )
+    (mirror / "info").mkdir(exist_ok=True)
+    (mirror / "info" / "attributes").write_text("* filter=evil diff=evil\n", encoding="utf-8")
+    commit_oid = _commit_replacing(
+        mirror, release.commit_oid, ".gitattributes", b"* filter=evil diff=evil\n"
+    )
+    _tag(
+        mirror,
+        "attributes",
+        commit_oid,
+        _manifest(
+            release, slug="attributes", commit_oid=commit_oid, revision_id=f"revision-{commit_oid}"
+        ),
+        date="2030-01-01T00:00:00+00:00",
+    )
+
+    scan = releases.scan_releases(mirror)
+    assert {item.slug for item in scan.releases} == {"fall-2026", "attributes"}
+    assert scan.rejected == []
+    assert not marker.exists()
+
+
+def test_a_repository_that_borrows_objects_through_alternates_is_refused(tmp_path: Path) -> None:
+    mirror, _published = _published_mirror(tmp_path, ["fall-2026"])
+    borrower = tmp_path / "borrower.git"
+    _git(tmp_path, "init", "--quiet", "--bare", str(borrower))
+    (borrower / "objects" / "info" / "alternates").write_text(
+        f"{mirror / 'objects'}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ReleaseError, match="borrows objects"):
+        releases.newest_release(borrower)
+    with pytest.raises(ReleaseError, match="borrows objects"):
+        releases.read_release(borrower, "fall-2026")
 
 
 def test_canonical_yaml_rejects_an_alias_bomb_in_a_tagged_revision(tmp_path: Path) -> None:

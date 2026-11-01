@@ -7,25 +7,28 @@ Workspace and on a bare mirror, never checks anything out, and never runs hooks.
 
 A mirror is untrusted. Git runs against the named repository only, without user or system
 configuration; every object's size is checked before it is read; canonical YAML may not use
-anchors or aliases; and reading one Release has a cumulative byte and time budget.
+anchors or aliases; reading one Release has a cumulative byte and time budget; and looking for
+the newest Release tries a bounded number of tags within a budget of its own.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import selectors
 import subprocess
+import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -46,10 +49,13 @@ MAX_GIT_OUTPUT_BYTES = 1_000_000
 MAX_MANIFEST_BYTES = 512_000
 MAX_ARTIFACT_BYTES = 64_000_000
 MAX_RELEASES = 10_000
-MAX_CANONICAL_BLOB_BYTES = 8_000_000
+MAX_CANONICAL_BLOB_BYTES = 1_000_000
 MAX_TAG_OBJECT_BYTES = MAX_MANIFEST_BYTES + 16_000
-MAX_RELEASE_READ_BYTES = 64_000_000
+MAX_RELEASE_READ_BYTES = 8_000_000
 RELEASE_READ_SECONDS = 30
+MAX_RELEASE_CANDIDATES = 20
+MAX_RELEASE_SCAN_BYTES = 32_000_000
+RELEASE_SCAN_SECONDS = 60
 SLUG_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\Z")
 OID_PATTERN = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 
@@ -137,10 +143,32 @@ class ReleaseScan:
 
 @dataclass
 class ReadBudget:
-    """What reading one Release may still spend."""
+    """What a read may still spend; spending also charges every budget it is nested in.
+
+    The outermost budget also keeps the tagged files already parsed, so Release tags that share
+    a commit cost one parse.
+    """
 
     deadline: float
     remaining_bytes: int
+    outer: ReadBudget | None = None
+    tagged_files: dict[tuple[str, str, str], object] = field(default_factory=dict)
+
+    def chain(self) -> list[ReadBudget]:
+        budgets = [self]
+        while budgets[-1].outer is not None:
+            budgets.append(budgets[-1].outer)
+        return budgets
+
+    def earliest_deadline(self) -> float:
+        return min(budget.deadline for budget in self.chain())
+
+    def allowance(self) -> int:
+        return min(budget.remaining_bytes for budget in self.chain())
+
+    def charge(self, size: int) -> None:
+        for budget in self.chain():
+            budget.remaining_bytes -= size
 
 
 ACTIVE_READ_BUDGET: ContextVar[ReadBudget | None] = ContextVar("release_read_budget", default=None)
@@ -161,38 +189,46 @@ def scan_releases(repository: Path) -> ReleaseScan:
     """
     valid: list[CourseRelease] = []
     rejected: list[RejectedTag] = []
-    for name in release_tag_names(repository):
-        try:
-            release = read_release_tag(repository, name)
-        except ReleaseError as error:
-            rejected.append(RejectedTag(name=display_tag_name(name), reason=str(error)))
-            continue
-        if release is not None:
-            valid.append(release)
+    # Unlimited, but shares parsed tagged files between the Releases of one commit.
+    with read_budget(seconds=math.inf, max_bytes=sys.maxsize):
+        for name in release_tag_names(repository):
+            try:
+                release = read_release_tag(repository, name)
+            except ReleaseError as error:
+                rejected.append(RejectedTag(name=display_tag_name(name), reason=str(error)))
+                continue
+            if release is not None:
+                valid.append(release)
     return ReleaseScan(releases=sorted(valid, key=published_time, reverse=True), rejected=rejected)
 
 
 def newest_release(repository: Path) -> ReleaseScan:
     """Find the newest valid Release, trying Release tags newest first by tag creation date.
 
-    Reading stops at the first valid Release, so ``releases`` holds at most one; ``rejected``
-    lists the newer tags that were skipped.
+    At most ``MAX_RELEASE_CANDIDATES`` tags are tried, and reading stops at the first valid
+    Release, so ``releases`` holds at most one; ``rejected`` lists the newer tags that were
+    skipped. Raises ``ReleaseError`` when the whole search runs out of its time budget.
     """
     rejected: list[RejectedTag] = []
-    for name in release_tag_names(repository, newest_first=True):
-        try:
-            release = read_release_tag(repository, name)
-        except ReleaseError as error:
-            rejected.append(RejectedTag(name=display_tag_name(name), reason=str(error)))
-            continue
-        if release is not None:
-            return ReleaseScan(releases=[release], rejected=rejected)
+    with read_budget(seconds=RELEASE_SCAN_SECONDS, max_bytes=MAX_RELEASE_SCAN_BYTES):
+        for name in release_tag_names(repository, newest_first=True):
+            check_read_deadline()
+            try:
+                release = read_release_tag(repository, name)
+            except ReleaseError as error:
+                rejected.append(RejectedTag(name=display_tag_name(name), reason=str(error)))
+                continue
+            if release is not None:
+                return ReleaseScan(releases=[release], rejected=rejected)
     return ReleaseScan(releases=[], rejected=rejected)
 
 
 def release_tag_names(repository: Path, *, newest_first: bool = False) -> list[bytes]:
-    """List raw Release tag names below ``refs/tags/``; Git does not require them to be UTF-8."""
-    order = ["--sort=-creatordate"] if newest_first else []
+    """List raw Release tag names below ``refs/tags/``; Git does not require them to be UTF-8.
+
+    Newest first lists only the ``MAX_RELEASE_CANDIDATES`` most recently created tags.
+    """
+    order = [f"--count={MAX_RELEASE_CANDIDATES}", "--sort=-creatordate"] if newest_first else []
     output = run_git(
         repository,
         "for-each-ref",
@@ -235,17 +271,38 @@ def published_time(release: CourseRelease) -> datetime:
 
 
 @contextmanager
-def release_read_budget() -> Iterator[None]:
-    """Bound the cumulative Git output and time spent reading one Release."""
+def read_budget(*, seconds: float, max_bytes: int) -> Iterator[ReadBudget]:
+    """Bound the cumulative Git output and time of the reads inside, within any outer budget."""
     budget = ReadBudget(
-        deadline=time.monotonic() + RELEASE_READ_SECONDS,
-        remaining_bytes=MAX_RELEASE_READ_BYTES,
+        deadline=time.monotonic() + seconds,
+        remaining_bytes=max_bytes,
+        outer=ACTIVE_READ_BUDGET.get(),
     )
     token = ACTIVE_READ_BUDGET.set(budget)
     try:
-        yield
+        yield budget
     finally:
         ACTIVE_READ_BUDGET.reset(token)
+
+
+def check_read_deadline() -> None:
+    budget = ACTIVE_READ_BUDGET.get()
+    if budget is not None and time.monotonic() >= budget.earliest_deadline():
+        raise ReleaseError("Release read exceeded its time budget")
+
+
+def cached_tagged_file[T](
+    repository: Path, commit_oid: str, path: str, parse: Callable[[], T]
+) -> T:
+    """Parse a tagged canonical file once per outermost read budget."""
+    budget = ACTIVE_READ_BUDGET.get()
+    if budget is None:
+        return parse()
+    cache = budget.chain()[-1].tagged_files
+    key = (str(repository), commit_oid, path)
+    if key not in cache:
+        cache[key] = parse()
+    return cast(T, cache[key])
 
 
 def read_release(repository: Path, slug: str) -> CourseRelease | None:
@@ -253,7 +310,7 @@ def read_release(repository: Path, slug: str) -> CourseRelease | None:
 
     ``repository`` is a Course Workspace or a bare repository such as a mirror.
     """
-    with release_read_budget():
+    with read_budget(seconds=RELEASE_READ_SECONDS, max_bytes=MAX_RELEASE_READ_BYTES):
         return read_verified_release(repository, slug)
 
 
@@ -366,6 +423,7 @@ def verify_release_manifest(repository: Path, release: CourseRelease) -> None:
         )
     except InvalidWaiver as error:
         raise ReleaseError("Release manifest contains an invalid Waiver") from error
+    check_read_deadline()
     if expected_validation != release.validation or not expected_validation.can_publish:
         raise ReleaseError("Release validation does not match its tagged Revision")
 
@@ -394,16 +452,29 @@ def sha256_hex(content: bytes) -> str:
 
 
 def tagged_plan(repository: Path, commit_oid: str) -> CoursePlan:
+    return cached_tagged_file(
+        repository, commit_oid, "course.yaml", lambda: parse_tagged_plan(repository, commit_oid)
+    )
+
+
+def parse_tagged_plan(repository: Path, commit_oid: str) -> CoursePlan:
     try:
         payload = load_canonical_yaml(
             read_commit_blob(repository, commit_oid, "course.yaml").decode("utf-8")
         )
+        check_read_deadline()
         return CoursePlan.model_validate(payload)
     except (UnicodeError, yaml.YAMLError, ValidationError, ValueError) as error:
         raise ReleaseError("Tagged Course Plan is invalid") from error
 
 
 def tagged_sources(repository: Path, commit_oid: str) -> SourcesIndex:
+    return cached_tagged_file(
+        repository, commit_oid, "sources.yaml", lambda: parse_tagged_sources(repository, commit_oid)
+    )
+
+
+def parse_tagged_sources(repository: Path, commit_oid: str) -> SourcesIndex:
     names = run_git(repository, "ls-tree", "--name-only", commit_oid, "--", "sources.yaml")
     if names == b"":
         return SourcesIndex()
@@ -413,6 +484,7 @@ def tagged_sources(repository: Path, commit_oid: str) -> SourcesIndex:
         payload = load_canonical_yaml(
             read_commit_blob(repository, commit_oid, "sources.yaml").decode("utf-8")
         )
+        check_read_deadline()
         return SourcesIndex.model_validate(payload)
     except (UnicodeError, yaml.YAMLError, ValidationError, ValueError) as error:
         raise ReleaseError("Tagged Sources index is invalid") from error
@@ -422,9 +494,21 @@ def tagged_presentation(repository: Path, commit_oid: str, presentation_id: str)
     if re.fullmatch(r"presentation-[0-9a-f]{12}", presentation_id) is None:
         raise ReleaseError("Release Presentation identity is invalid")
     path = f"presentations/{presentation_id}.yaml"
+    return cached_tagged_file(
+        repository,
+        commit_oid,
+        path,
+        lambda: parse_tagged_presentation(repository, commit_oid, presentation_id, path),
+    )
+
+
+def parse_tagged_presentation(
+    repository: Path, commit_oid: str, presentation_id: str, path: str
+) -> Presentation:
     try:
         content = read_commit_blob(repository, commit_oid, path)
         payload = load_canonical_yaml(content.decode("utf-8"))
+        check_read_deadline()
         presentation = Presentation.model_validate(payload)
     except (UnicodeError, yaml.YAMLError, ValidationError, ValueError) as error:
         raise ReleaseError("Tagged Presentation is invalid") from error
@@ -457,15 +541,22 @@ def sized_object_id(repository: Path, name: str, *, max_bytes: int) -> str:
     if size > max_bytes:
         raise ReleaseError("Repository object is too large")
     budget = ACTIVE_READ_BUDGET.get()
-    if budget is not None and size > budget.remaining_bytes:
+    if budget is not None and size > budget.allowance():
         raise ReleaseError("Release exceeds its read budget")
     return oid
 
 
 def repository_git_dir(repository: Path) -> Path:
-    """Use a Course Workspace's ``.git`` or a bare repository itself, never a parent repository."""
+    """Use a Course Workspace's ``.git`` or a bare repository itself, never a parent repository.
+
+    A repository that borrows objects through ``objects/info/alternates`` is refused: its
+    content would come from a path the repository names.
+    """
     dot_git = repository / ".git"
-    return dot_git if dot_git.exists() else repository
+    git_dir = dot_git if dot_git.exists() else repository
+    if (git_dir / "objects" / "info" / "alternates").exists():
+        raise ReleaseError("Repository borrows objects from another repository")
+    return git_dir
 
 
 def git_command(repository: Path, *arguments: str) -> list[str]:
@@ -479,8 +570,6 @@ def git_command(repository: Path, *arguments: str) -> list[str]:
         "-c",
         f"safe.directory={root}",
         "-c",
-        f"safe.directory={git_dir}",
-        "-c",
         "core.bigFileThreshold=1m",
         "-c",
         "core.fsmonitor=false",
@@ -492,12 +581,11 @@ def git_command(repository: Path, *arguments: str) -> list[str]:
     ]
 
 
-def git_environment(repository: Path) -> dict[str, str]:
-    """Ignore user and system Git configuration and never search parent directories."""
+def git_environment() -> dict[str, str]:
+    """Ignore user and system Git configuration."""
     environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     environment.update(
         {
-            "GIT_CEILING_DIRECTORIES": str(repository.resolve().parent),
             "GIT_CONFIG_GLOBAL": "/dev/null",
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_NO_REPLACE_OBJECTS": "1",
@@ -515,10 +603,13 @@ def run_git(
     max_output_bytes: int = MAX_GIT_OUTPUT_BYTES,
 ) -> bytes:
     deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
+    too_large = "Repository Git output is too large"
     budget = ACTIVE_READ_BUDGET.get()
     if budget is not None:
-        deadline = min(deadline, budget.deadline)
-        max_output_bytes = min(max_output_bytes, budget.remaining_bytes)
+        deadline = min(deadline, budget.earliest_deadline())
+        if budget.allowance() < max_output_bytes:
+            max_output_bytes = budget.allowance()
+            too_large = "Release exceeds its read budget"
     process: subprocess.Popen[bytes] | None = None
     selector = selectors.DefaultSelector()
     try:
@@ -528,7 +619,7 @@ def run_git(
             stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            env=git_environment(repository),
+            env=git_environment(),
         )
         if input_data is not None and process.stdin is not None:
             process.stdin.write(input_data)
@@ -552,12 +643,12 @@ def run_git(
                     continue
                 output.extend(chunk)
                 if len(output) > max_output_bytes:
-                    raise ReleaseError("Repository Git output is too large")
+                    raise ReleaseError(too_large)
         returncode = process.wait(timeout=max(0.001, deadline - time.monotonic()))
         if returncode != 0:
             raise ReleaseError("Repository Git operation failed")
         if budget is not None:
-            budget.remaining_bytes -= len(output)
+            budget.charge(len(output))
         return bytes(output)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ReleaseError("Repository Git operation failed") from error
@@ -579,7 +670,7 @@ def tag_exists(repository: Path, tag: str) -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=GIT_TIMEOUT_SECONDS,
-            env=git_environment(repository),
+            env=git_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ReleaseError("Repository Git operation failed") from error
