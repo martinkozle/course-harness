@@ -393,6 +393,10 @@ version = "0.1.0"
 source = { editable = "packages/classroom" }
 dependencies = [
     { name = "fastapi" },
+    { name = "pillow" },
+    { name = "pydantic" },
+    { name = "python-pptx" },
+    { name = "pyyaml" },
     { name = "typer" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -400,6 +404,10 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi" },
+    { name = "pillow", specifier = ">=12.3.0" },
+    { name = "pydantic", specifier = ">=2.12" },
+    { name = "python-pptx", specifier = ">=1.0.2" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "typer" },
     { name = "uvicorn", extras = ["standard"] },
 ]

@@ -1,0 +1,133 @@
+/* Classroom pages scroll as documents, unlike the Harness workbench. */
+html,
+body,
+#root {
+	height: auto;
+	min-height: 100%;
+}
+
+body {
+	overflow: auto;
+}
+
+.classroom-bar {
+	display: flex;
+	align-items: baseline;
+	gap: 12px;
+	padding: 14px 24px;
+	border-bottom: 1px solid var(--rule);
+	background: var(--surface);
+}
+
+.classroom-bar h1 {
+	font-family: var(--font-display);
+	font-size: 1.25rem;
+	font-weight: 500;
+}
+
+.classroom-main {
+	display: grid;
+	gap: 20px;
+	width: min(880px, 100% - 32px);
+	margin: 32px auto 64px;
+}
+
+.classroom-card {
+	display: grid;
+	gap: 14px;
+	padding: 20px;
+	border: 1px solid var(--rule);
+	border-radius: var(--radius-m);
+	background: var(--surface);
+	box-shadow: var(--shadow-card);
+}
+
+.classroom-card h2,
+.classroom-card h3 {
+	font-size: 1.0625rem;
+	font-weight: 600;
+}
+
+.sign-in {
+	max-width: 440px;
+}
+
+.admin,
+.course,
+.course-list,
+.lecture-list {
+	display: grid;
+	gap: 16px;
+}
+
+.admin-header,
+.course-card-header,
+.lecture-row {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.attach-fields {
+	display: grid;
+	grid-template-columns: 2fr 1fr;
+	gap: 12px;
+}
+
+@media (max-width: 640px) {
+	.attach-fields {
+		grid-template-columns: 1fr;
+	}
+}
+
+.course-card-header .meta {
+	overflow-wrap: anywhere;
+}
+
+.course-facts {
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: 4px 16px;
+	font-size: 0.9375rem;
+}
+
+.course-facts dt {
+	color: var(--ink-muted);
+}
+
+.sync-message {
+	max-height: 12rem;
+	overflow: auto;
+	padding: 10px 12px;
+	border-radius: var(--radius-s);
+	background: var(--surface-sunken);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.course-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.created-link-row {
+	display: flex;
+	gap: 8px;
+}
+
+.created-link-row input {
+	flex: 1;
+	font-family: var(--font-mono);
+	font-size: 0.875rem;
+}
+
+.course-header {
+	display: grid;
+	gap: 6px;
+}
+
+a.btn {
+	text-decoration: none;
+}

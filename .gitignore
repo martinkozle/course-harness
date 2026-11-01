@@ -23,6 +23,9 @@ __pycache__/
 node_modules/
 dist/
 
+# Course Harness Classroom data from `uv run course-classroom serve`
+classroom-data/
+
 # Local configuration and secrets
 .env
 .env.*

@@ -10,6 +10,14 @@ dependencies = [
   "fastapi",
   "typer",
   "uvicorn[standard]",
+  # The light dependencies of `course_harness.core`. The Classroom imports core but never installs
+  # Course Harness: the dev workspace takes core from the editable Harness install (the root dev
+  # group), and the Docker image copies only `course_harness/__init__.py` and
+  # `course_harness/core/` (ADR 0017).
+  "pillow>=12.3.0",
+  "pydantic>=2.12",
+  "python-pptx>=1.0.2",
+  "pyyaml>=6.0.3",
 ]
 
 [project.scripts]

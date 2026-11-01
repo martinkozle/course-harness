@@ -22,12 +22,19 @@ from course_harness.core.template_inspect import infer_slot_mappings, inspect_te
 from course_harness.core.template_profiles import TemplateProfile
 
 
+def harness_preview_asset_url(relative_path: str) -> str:
+    """Where Course Harness serves a rendered preview image below its preview cache."""
+    return f"/api/preview-assets/{relative_path}"
+
+
 @dataclass(frozen=True)
 class PreviewContext:
     profile: TemplateProfile
     template_path: Path | None
     cache_dir: Path
     image_resolver: SourceImageResolver | None = None
+    # Maps a path below ``cache_dir`` such as ``<profile>/backgrounds/v1/title.png`` to a URL.
+    asset_url: Callable[[str], str] = harness_preview_asset_url
 
 
 class RendererCapability(BaseModel):
@@ -207,12 +214,14 @@ def build_preview(
                 render_key=slide_key,
                 slots=normalized_layout_slots(profile, inspection, slide.layout),
                 background_url=(
-                    f"/api/preview-assets/{profile.id}/backgrounds/v{profile.version}/{slide.layout}.png"
+                    context.asset_url(
+                        f"{profile.id}/backgrounds/v{profile.version}/{slide.layout}.png"
+                    )
                     if background.is_file()
                     else None
                 ),
                 thumbnail_url=(
-                    f"/api/preview-assets/{profile.id}/previews/{slide_key}/thumbnail.png"
+                    context.asset_url(f"{profile.id}/previews/{slide_key}/thumbnail.png")
                     if thumbnail.is_file()
                     else None
                 ),

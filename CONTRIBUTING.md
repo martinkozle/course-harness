@@ -61,7 +61,35 @@ uv run course-harness
 
 `bun run build` builds every interface. Course Harness Classroom runs with
 `uv run course-classroom serve` (`--host`, `--port`); `bun run dev:classroom` serves its interface
-with hot reload.
+with hot reload and proxies `/api`, `/l/` and `/i/` to port 8000.
+
+### Course Harness Classroom
+
+Unlike the Harness bundle, the Classroom bundle (`frontend/classroom/dist`) is not committed:
+`bun run build` builds it for development and the Classroom Docker image builds its own. The
+Python app serves it from `CLASSROOM_STATIC_DIR`, by default that folder of the checkout. The
+Classroom reads its settings from the environment:
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `CLASSROOM_DATA_DIR` | Mirrors, served Releases, rendered backgrounds and the SQLite store | `./classroom-data` |
+| `CLASSROOM_ADMIN_TOKEN` | The Administrator token for `/admin`, at least 24 characters | unset: `/admin` is off |
+| `CLASSROOM_PUBLIC_URL` | External base URL, used in Share Links and for the `Secure` cookie flag | the request URL |
+| `CLASSROOM_FETCH_INTERVAL` | Seconds between background syncs; `0` turns them off | `900` |
+| `CLASSROOM_FETCH_TIMEOUT` | Seconds one `git fetch` may take | `300` |
+| `CLASSROOM_MAX_MIRROR_BYTES` | Largest a course's mirror may grow on disk | `1000000000` |
+| `CLASSROOM_STATIC_DIR` | The built Classroom interface | `frontend/classroom/dist` |
+| `CLASSROOM_ALLOW_LOCAL_REPOS` | `1` also accepts local paths, `file://`, `http://` and private hosts; development only | off |
+
+```bash
+bun run build
+CLASSROOM_ADMIN_TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') CLASSROOM_ALLOW_LOCAL_REPOS=1 \
+  uv run course-classroom serve
+```
+
+Open `/admin`, paste the token, and attach a repository a Course Author pushed to. Behind a
+TLS-terminating proxy, set `CLASSROOM_PUBLIC_URL` to the `https://` address so cookies are marked
+`Secure` and Share Links use the public host.
 
 For frontend hot reload, run the API and Vite side by side; Vite serves `http://127.0.0.1:5173`
 and proxies `/api`:
