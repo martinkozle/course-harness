@@ -8,6 +8,7 @@ import httpx2
 import pytest
 from pptx import Presentation as PPTXPresentation
 
+from course_harness import release_service
 from course_harness.app import create_app
 from course_harness.core import releases
 from course_harness.core.course_plan import CoursePlan, Lecture, write_course_plan
@@ -36,7 +37,7 @@ from course_harness.workspace_history import (
 )
 from course_harness.workspace_remote import (
     InvalidRemoteUrl,
-    PushPlan,
+    PushResult,
     push_workspace,
     read_remote,
     redact,
@@ -160,9 +161,32 @@ def _bare_remote(tmp_path: Path) -> Path:
 def _push(workspace: Path, remote: Path, tmp_path: Path) -> None:
     # Local paths are not accepted through the settings, as through HTTP; Git itself takes them.
     _git(workspace, "remote", "add", "origin", str(remote))
-    plan = PushPlan(remote=str(remote), releases_without_files=[])
-    result = push_workspace(workspace, plan)
+    result = _push_now(workspace, tmp_path)
     assert result.ok, result.message
+
+
+def _push_now(workspace: Path, tmp_path: Path) -> PushResult:
+    backfill = backfill_release_files(workspace=workspace, release_data_root=tmp_path / "releases")
+    return push_workspace(workspace, remote="the remote", backfill=backfill)
+
+
+def test_publishing_never_fails_because_its_files_cannot_be_recorded_in_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "course"
+    _clean_course(workspace)
+
+    def fail(*_arguments: object, **_keywords: object) -> str:
+        raise ReleaseError("Release files could not be recorded in Git")
+
+    monkeypatch.setattr(release_service, "_write_release_files_commit", fail)
+    release = _publish(tmp_path, workspace)
+    monkeypatch.undo()
+
+    assert releases.read_release(workspace, release.slug) == release
+    assert release_files_commit(workspace, release.slug) is None
+    backfill = backfill_release_files(workspace=workspace, release_data_root=tmp_path / "releases")
+    assert backfill.written == [release.slug]
 
 
 def test_publish_records_exactly_the_release_files_in_a_ref_without_touching_the_worktree(
@@ -213,9 +237,9 @@ def test_push_then_a_mirror_reads_and_verifies_manifest_quizzes_and_files(tmp_pa
     assert not any(path.endswith(".pptx") for path in branch_files)
 
     # Pushing again changes nothing.
-    result = push_workspace(workspace, PushPlan(remote=str(remote), releases_without_files=[]))
+    result = _push_now(workspace, tmp_path)
     assert result.ok
-    assert result.message == "Everything was already up to date."
+    assert result.message == "the remote is already up to date."
 
 
 def _replace_files_ref(mirror: Path, slug: str, files: dict[str, bytes]) -> None:
@@ -301,6 +325,42 @@ def test_backfill_reports_a_release_without_files_anywhere(tmp_path: Path) -> No
     assert backfill.missing == [release.slug]
 
 
+def test_backfill_replaces_a_wrong_ref_from_local_release_data(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    _clean_course(workspace)
+    release = _publish(tmp_path, workspace)
+    good = release_files_commit(workspace, release.slug)
+    _replace_files_ref(workspace, release.slug, {f"artifacts/{PRESENTATION_ID}.pptx": b"x"})
+
+    backfill = backfill_release_files(workspace=workspace, release_data_root=tmp_path / "releases")
+
+    assert backfill.written == [release.slug]
+    assert backfill.ready == [release.slug]
+    assert release_files_commit(workspace, release.slug) == good
+
+
+def test_a_bad_files_ref_without_local_data_is_skipped_and_the_rest_is_pushed(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "course"
+    _clean_course(workspace)
+    good = _publish(tmp_path, workspace, "good")
+    bad = _publish(tmp_path, workspace, "bad")
+    _replace_files_ref(workspace, bad.slug, {f"artifacts/{PRESENTATION_ID}.pptx": b"x"})
+    shutil.rmtree(tmp_path / "releases" / bad.course_id / bad.slug)
+    remote = _bare_remote(tmp_path)
+    _git(workspace, "remote", "add", "origin", str(remote))
+
+    result = _push_now(workspace, tmp_path)
+
+    assert result.ok, result.message
+    assert result.releases_with_invalid_files == [bad.slug]
+    refs = _git(remote, "for-each-ref", "--format=%(refname)").decode().split()
+    assert release_files_ref(good.slug) in refs
+    assert release_files_ref(bad.slug) not in refs
+    assert f"refs/tags/{bad.tag}" in refs
+
+
 def test_a_clone_serves_release_artifacts_from_git_without_release_data(tmp_path: Path) -> None:
     workspace = tmp_path / "course"
     _clean_course(workspace)
@@ -378,6 +438,32 @@ def test_remote_settings_are_an_ordinary_git_remote(tmp_path: Path) -> None:
     )
     assert set_remote(workspace, None).url is None
     assert _git(workspace, "remote").strip() == b""
+
+
+def test_a_remote_is_shown_as_stored_except_a_password_set_outside_the_app(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "course"
+    _clean_course(workspace)
+    set_remote(workspace, "https://author@github.com/example/course.git")
+    assert read_remote(workspace).url == "https://author@github.com/example/course.git"
+
+    _git(workspace, "remote", "set-url", "origin", "https://author:secret@github.com/x/y.git")
+    shown = read_remote(workspace).url
+    assert shown == "https://author:***@github.com/x/y.git"
+    # The shown value can never be saved back over the stored one.
+    with pytest.raises(InvalidRemoteUrl):
+        set_remote(workspace, shown)
+    assert _git(workspace, "remote", "get-url", "origin").strip() == (
+        b"https://author:secret@github.com/x/y.git"
+    )
+
+
+def test_a_local_path_is_refused_with_how_to_add_it_in_a_terminal() -> None:
+    with pytest.raises(InvalidRemoteUrl, match="git remote add origin <path>"):
+        validate_remote_url("/home/author/course.git")
+    with pytest.raises(InvalidRemoteUrl, match="git remote add origin <path>"):
+        validate_remote_url("file:///home/author/course.git")
 
 
 def test_credentials_in_git_output_are_redacted() -> None:

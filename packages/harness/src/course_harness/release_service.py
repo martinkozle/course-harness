@@ -23,9 +23,9 @@ from course_harness.core.export import ExportError, export_presentation
 from course_harness.core.presentation import InvalidPresentation, Presentation, read_presentation
 from course_harness.core.release_files import (
     TEMPLATE_PATH,
+    check_release_files_shape,
     expected_release_files,
     read_release_artifact_file,
-    read_release_files,
     release_files_commit,
     release_files_ref,
 )
@@ -249,9 +249,6 @@ def publish_release(
             finally:
                 os.close(artifacts_fd)
         os.fsync(storage.release_fd)
-        files_commit = _write_release_files_commit(
-            workspace, release, template_bytes, {item.id: content for item, content in exports}
-        )
         _create_annotated_tag(workspace, tag, revision, manifest)
     except Exception:
         _cleanup_unpublished_release(
@@ -262,52 +259,62 @@ def publish_release(
         raise
     else:
         storage.close(sync=False)
+    # Best effort: the Release is already named, and Push backfills its files ref.
     try:
+        files_commit = _write_release_files_commit(
+            workspace, release, template_bytes, {item.id: content for item, content in exports}
+        )
         _point_release_files_ref(workspace, release.slug, files_commit)
-    except ReleaseError:
-        # The Release is already named; pushing backfills its files ref from Release data.
+    except ReleaseError, OSError:
         logger.warning("Could not record the files of Release %s in Git", release.slug)
     return release
 
 
 @dataclass(frozen=True)
 class ReleaseFilesBackfill:
-    """Which Releases gained a files ref, and which have neither one nor local Release data."""
+    """The state of every Release's files ref after a backfill.
 
+    ``ready`` have a files ref that can be pushed; ``written`` is the subset recorded now.
+    ``missing`` have no files ref and no local Release data. ``invalid`` have a files ref that
+    does not match the manifest and no local Release data to correct it.
+    """
+
+    ready: list[str]
     written: list[str]
     missing: list[str]
+    invalid: list[str]
 
 
 def backfill_release_files(*, workspace: Path, release_data_root: Path) -> ReleaseFilesBackfill:
-    """Ensure every Release with local Release data has a verified files ref.
+    """Ensure every Release with local Release data has a correct files ref.
 
-    A ref that already verifies against its manifest is kept, and the files commit is derived
-    only from the manifest and the files, so a pushed ref never needs a forced update. Releases
-    whose files are neither in Git nor in local Release data are reported as missing.
+    The files commit depends only on the manifest and the files, so with local Release data an
+    existing ref is checked by comparing commit IDs, and a pushed ref never needs a forced
+    update. Without local data, an existing ref gets a cheap check of its tree and blob sizes;
+    no stored PowerPoint is inflated.
     """
-    written: list[str] = []
-    missing: list[str] = []
+    backfill = ReleaseFilesBackfill(ready=[], written=[], missing=[], invalid=[])
     for release in list_releases(workspace):
         current = release_files_commit(workspace, release.slug)
-        if current is not None:
-            try:
-                read_release_files(workspace, release)
-                continue
-            except ReleaseError:
-                pass
         try:
             template, artifacts = _local_release_files(release_data_root, release)
         except ReleaseError:
-            if current is not None:
-                raise ReleaseError(
-                    f"The files of Release {release.slug} in Git do not match its manifest"
-                ) from None
-            missing.append(release.slug)
+            if current is None:
+                backfill.missing.append(release.slug)
+                continue
+            try:
+                check_release_files_shape(workspace, release)
+            except ReleaseError:
+                backfill.invalid.append(release.slug)
+                continue
+            backfill.ready.append(release.slug)
             continue
         commit = _write_release_files_commit(workspace, release, template, artifacts)
-        _point_release_files_ref(workspace, release.slug, commit, expected=current)
-        written.append(release.slug)
-    return ReleaseFilesBackfill(written=written, missing=missing)
+        if commit != current:
+            _point_release_files_ref(workspace, release.slug, commit, expected=current)
+            backfill.written.append(release.slug)
+        backfill.ready.append(release.slug)
+    return backfill
 
 
 def _local_release_files(
@@ -425,21 +432,20 @@ def read_release_artifact(
     artifact = next((item for item in release.artifacts if item.id == artifact_id), None)
     if artifact is None:
         raise ReleaseError("Release Artifact was not found")
-    try:
-        content = _read_release_file(
-            release_data_root,
-            release.course_id,
-            release.slug,
-            "artifacts",
-            f"{artifact.id}.pptx",
-            max_bytes=MAX_ARTIFACT_BYTES,
-        )
-    except ReleaseError as error:
+    local = release_data_root / release.course_id / release.slug / "artifacts"
+    if not os.path.lexists(local / f"{artifact.id}.pptx") and (
+        release_files_commit(workspace, release.slug) is not None
+    ):
         # A Workspace cloned from a remote has the Release's files in Git, not in Release data.
-        missing = isinstance(error.__cause__, FileNotFoundError)
-        if not missing or release_files_commit(workspace, release.slug) is None:
-            raise
         return read_release_artifact_file(workspace, release, artifact.id)
+    content = _read_release_file(
+        release_data_root,
+        release.course_id,
+        release.slug,
+        "artifacts",
+        f"{artifact.id}.pptx",
+        max_bytes=MAX_ARTIFACT_BYTES,
+    )
     if len(content) != artifact.size or sha256_hex(content) != artifact.sha256:
         raise ReleaseError("Stored Release Artifact does not match its manifest")
     return content

@@ -157,9 +157,25 @@ def _release_file_blobs(repository: Path, release: CourseRelease) -> dict[str, s
     return blobs
 
 
-def _read_verified_blob(
-    repository: Path, oid: str, *, size: int | None, sha256: str | None, what: str
-) -> bytes:
+def check_release_files_shape(repository: Path, release: CourseRelease) -> None:
+    """Cheaply check a Release's files ref: its tree and every blob's size, without reading bytes.
+
+    Checksums are not verified; ``read_release_files`` does that when the bytes are needed.
+    """
+    with read_budget(seconds=RELEASE_FILES_READ_SECONDS, max_bytes=MAX_RELEASE_FILES_BYTES):
+        blobs = _release_file_blobs(repository, release)
+        sizes = expected_release_files(release)
+        for path, oid in blobs.items():
+            _checked_blob_size(
+                repository,
+                oid,
+                size=sizes[path],
+                what="Release template" if path == TEMPLATE_PATH else "Release Artifact",
+            )
+
+
+def _checked_blob_size(repository: Path, oid: str, *, size: int | None, what: str) -> int:
+    """A blob's size from its header; the template, unpinned in size, only gets the size cap."""
     check_read_deadline()
     output = run_git(repository, "cat-file", "--batch-check", input_data=f"{oid}\n".encode())
     fields = output.split()
@@ -172,6 +188,13 @@ def _read_verified_blob(
     limit = MAX_ARTIFACT_BYTES if size is None else size
     if actual_size > limit or (size is not None and actual_size != size):
         raise ReleaseError(f"{what} does not match its manifest")
+    return actual_size
+
+
+def _read_verified_blob(
+    repository: Path, oid: str, *, size: int | None, sha256: str | None, what: str
+) -> bytes:
+    actual_size = _checked_blob_size(repository, oid, size=size, what=what)
     budget = ACTIVE_READ_BUDGET.get()
     if budget is not None and actual_size > budget.allowance():
         raise ReleaseError("Release exceeds its read budget")

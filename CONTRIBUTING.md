@@ -110,18 +110,30 @@ Release.
 ## Course Workspace remotes
 
 A Course Workspace's remote is the ordinary Git remote `origin`; **Push** in the Release canvas
-runs the system `git` with your own configuration and credentials, with hooks disabled. Its
-terminal equivalent, from the Course folder, is:
+runs the system `git` with your own configuration and credentials, with hooks disabled. From the
+Course folder, it is close to:
 
 ```bash
 git push origin main 'refs/tags/course-release/*' 'refs/course-harness/release-files/*'
 ```
 
+Push first records missing Release files refs from local Release data, and leaves out (and
+reports) a files ref that does not match its manifest and cannot be corrected locally.
+
 `refs/course-harness/release-files/<slug>` names a commit that holds exactly a Release's
-`inputs/template.pptx` and `artifacts/<id>.pptx` (ADR 0019). Publishing writes it; Push from the
-app first writes it for older Releases from local Release data. `git clone --mirror` fetches these
-refs; a plain `git clone` does not. `course_harness.core.release_files` reads and verifies the
-files against the Release manifest.
+`inputs/template.pptx` and `artifacts/<id>.pptx` (ADR 0019). Publishing writes it as best effort.
+A plain `git clone` does not fetch these refs; a reader such as the Classroom fetches three
+refspecs:
+
+```bash
+git fetch <remote> '+refs/heads/main:refs/heads/main' \
+  '+refs/tags/course-release/*:refs/tags/course-release/*' \
+  '+refs/course-harness/release-files/*:refs/course-harness/release-files/*'
+```
+
+`course_harness.core.release_files` reads and verifies the files against the Release manifest:
+Artifacts by exact size and SHA-256, the template by SHA-256, with only the size cap applied
+before reading it, since the manifest records no template size.
 
 ## Debugging Course Agent runs
 

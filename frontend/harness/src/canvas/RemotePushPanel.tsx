@@ -5,9 +5,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { responseError } from "../api";
 
 type RemoteSettings = {
-	name: string;
 	url: string | null;
-	branch: string;
 	push_command: string;
 };
 
@@ -16,6 +14,7 @@ type PushResult = {
 	remote: string;
 	message: string;
 	releases_without_files: string[];
+	releases_with_invalid_files: string[];
 };
 
 async function request<T>(path: string, method: string, body?: object) {
@@ -138,12 +137,12 @@ export function RemotePushPanel() {
 				</Notice>
 			) : null}
 			{result ? (
-				<Notice tone={result.ok ? "success" : "error"} role="status">
+				<Notice
+					tone={result.ok ? "success" : "error"}
+					role={result.ok ? "status" : "alert"}
+				>
 					{result.ok ? (
-						<p>
-							Pushed to <span className="mono">{result.remote}</span>.{" "}
-							{result.message}
-						</p>
+						<p>{result.message}</p>
 					) : (
 						<>
 							<p>Git could not push to {result.remote}.</p>
@@ -157,6 +156,14 @@ export function RemotePushPanel() {
 							computer, so the remote has those releases without them.
 						</p>
 					) : null}
+					{result.releases_with_invalid_files.length > 0 ? (
+						<p>
+							The stored PowerPoint files of{" "}
+							{result.releases_with_invalid_files.join(", ")} don't match
+							their releases and aren't on this computer, so they were not
+							pushed.
+						</p>
+					) : null}
 				</Notice>
 			) : null}
 			<div className="release-publish">
@@ -164,14 +171,15 @@ export function RemotePushPanel() {
 					type="button"
 					className="btn btn-primary"
 					disabled={!settings?.url || changed || pushing || saving}
-					aria-describedby="release-remote-command"
 					onClick={() => void push()}
 				>
 					{pushing ? "Pushing…" : "Push"}
 				</button>
 				{settings ? (
-					<p id="release-remote-command" className="meta">
-						Same as <code>{settings.push_command}</code> in a terminal.
+					<p className="meta">
+						Close to <code>{settings.push_command}</code> in a terminal, except
+						that Push first records release files for older releases and
+						never runs Git hooks.
 					</p>
 				) : null}
 			</div>

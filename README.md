@@ -71,7 +71,7 @@ network you trust.
   PowerPoint.
 - **Push**: send the Course, its Releases, and their PowerPoint files to a Git remote you choose,
   using your own Git sign-in. Nothing is pushed until you choose **Push**. From a terminal in the
-  Course folder, the same push is:
+  Course folder, it is close to:
 
   ```bash
   git push origin main 'refs/tags/course-release/*' 'refs/course-harness/release-files/*'

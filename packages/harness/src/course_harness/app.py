@@ -217,6 +217,7 @@ from course_harness.release_service import (
     PublishReleaseRequest,
     ReleaseConflict,
     ReleaseValidationError,
+    backfill_release_files,
     list_releases,
     publish_release,
     read_release,
@@ -263,7 +264,6 @@ from course_harness.workspace_remote import (
     RemoteSettings,
     RemoteUpdateRequest,
     WorkspaceRemoteError,
-    prepare_push,
     push_workspace,
     read_remote,
     set_remote,
@@ -1255,13 +1255,18 @@ def create_app(
             # Course lock.
             async with exclusive_mutation(active):
                 try:
-                    plan = await asyncio.to_thread(
-                        prepare_push, active, release_data_root=release_data
+                    remote = (await asyncio.to_thread(read_remote, active)).url
+                    if remote is None:
+                        raise WorkspaceRemoteError("Set a Git remote before pushing.")
+                    backfill = await asyncio.to_thread(
+                        backfill_release_files, workspace=active, release_data_root=release_data
                     )
                 except (WorkspaceRemoteError, WorkspaceHistoryError, ReleaseError) as error:
                     raise remote_http_error(error) from error
             try:
-                return await asyncio.to_thread(push_workspace, active, plan)
+                return await asyncio.to_thread(
+                    push_workspace, active, remote=remote, backfill=backfill
+                )
             except WorkspaceRemoteError as error:
                 raise remote_http_error(error) from error
 

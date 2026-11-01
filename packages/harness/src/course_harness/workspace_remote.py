@@ -14,23 +14,18 @@ import re
 import signal
 import subprocess
 from contextlib import suppress
-from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from course_harness.core.release_files import RELEASE_FILES_REF_PREFIX
-from course_harness.release_service import backfill_release_files
+from course_harness.release_service import ReleaseFilesBackfill
 from course_harness.workspace_history import list_revisions
 
 REMOTE_NAME = "origin"
 BRANCH = "main"
-PUSH_REFSPECS = (
-    f"refs/heads/{BRANCH}",
-    "refs/tags/course-release/*",
-    f"{RELEASE_FILES_REF_PREFIX}*",
-)
+RELEASE_TAGS = "refs/tags/course-release/*"
 PUSH_COMMAND = (
     f"git push {REMOTE_NAME} {BRANCH} 'refs/tags/course-release/*' '{RELEASE_FILES_REF_PREFIX}*'"
 )
@@ -42,6 +37,8 @@ MAX_REPORTED_OUTPUT = 4_000
 _SCP_LIKE = re.compile(r"(?:[A-Za-z0-9._-]+@)?([^@:/\s]+):(\S+)")
 _HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\]")
 _URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]*@")
+_URL_PASSWORD = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^/\s:@]*):[^/\s@]*@")
+_LOCAL_HINT = "To use a local folder, run `git remote add origin <path>` in a terminal."
 # Environment that would point Git at another repository, object store or configuration.
 _REDIRECTING_ENVIRONMENT = (
     "GIT_DIR",
@@ -68,9 +65,7 @@ class InvalidRemoteUrl(WorkspaceRemoteError, ValueError):
 class RemoteSettings(BaseModel):
     """The Workspace's Git remote and the terminal command that Push runs."""
 
-    name: str = REMOTE_NAME
     url: str | None
-    branch: str = BRANCH
     push_command: str = PUSH_COMMAND
 
 
@@ -88,6 +83,8 @@ class PushResult(BaseModel):
     message: str
     # Releases whose files are neither in Git nor in this computer's Release data.
     releases_without_files: list[str] = Field(default_factory=list)
+    # Releases whose files ref does not match the manifest; their files ref was not pushed.
+    releases_with_invalid_files: list[str] = Field(default_factory=list)
 
 
 def validate_remote_url(url: str) -> str:
@@ -106,6 +103,8 @@ def validate_remote_url(url: str) -> str:
             parts.port  # noqa: B018 - raises for an invalid port
         except ValueError as error:
             raise InvalidRemoteUrl("Use an HTTPS or SSH Git URL.") from error
+        if parts.scheme == "file":
+            raise InvalidRemoteUrl(f"Use an HTTPS or SSH Git URL. {_LOCAL_HINT}")
         if parts.scheme not in {"https", "ssh"} or not hostname or parts.path in {"", "/"}:
             raise InvalidRemoteUrl("Use an HTTPS or SSH Git URL with a repository path.")
         if parts.password is not None:
@@ -118,7 +117,7 @@ def validate_remote_url(url: str) -> str:
     match = _SCP_LIKE.fullmatch(url)
     if match is None or not _HOST.fullmatch(match.group(1)):
         raise InvalidRemoteUrl(
-            "Use an HTTPS URL or an SSH address such as git@host:owner/repo.git."
+            "Use an HTTPS URL or an SSH address such as git@host:owner/repo.git. " + _LOCAL_HINT
         )
     return url
 
@@ -126,6 +125,14 @@ def validate_remote_url(url: str) -> str:
 def redact(text: str) -> str:
     """Hide any credentials Git prints inside URLs."""
     return _URL_USERINFO.sub(r"\1***@", text)
+
+
+def _hide_password(url: str) -> str:
+    """Show a stored URL as it is, except a password someone set outside the app.
+
+    Saving never stores the result: a URL with a password is refused.
+    """
+    return _URL_PASSWORD.sub(r"\1:***@", url)
 
 
 def read_remote(workspace: Path) -> RemoteSettings:
@@ -136,7 +143,7 @@ def read_remote(workspace: Path) -> RemoteSettings:
     if result.returncode != 0:
         raise WorkspaceRemoteError("The Workspace's Git remote cannot be read")
     url = result.stdout.decode("utf-8", errors="replace").strip()
-    return RemoteSettings(url=redact(url) or None)
+    return RemoteSettings(url=_hide_password(url) or None)
 
 
 def set_remote(workspace: Path, url: str | None) -> RemoteSettings:
@@ -154,37 +161,37 @@ def set_remote(workspace: Path, url: str | None) -> RemoteSettings:
     return read_remote(workspace)
 
 
-@dataclass(frozen=True)
-class PushPlan:
-    """A configured remote, with every Release whose files could be recorded now in Git."""
-
-    remote: str
-    releases_without_files: list[str]
-
-
-def prepare_push(workspace: Path, *, release_data_root: Path) -> PushPlan:
-    """Require a remote and record any missing Release files refs from local Release data."""
-    remote = read_remote(workspace)
-    if remote.url is None:
-        raise WorkspaceRemoteError("Set a Git remote before pushing.")
-    backfill = backfill_release_files(workspace=workspace, release_data_root=release_data_root)
-    return PushPlan(remote=remote.url, releases_without_files=backfill.missing)
-
-
 def push_workspace(
-    workspace: Path, plan: PushPlan, *, timeout: float = PUSH_TIMEOUT_SECONDS
+    workspace: Path,
+    *,
+    remote: str,
+    backfill: ReleaseFilesBackfill,
+    timeout: float = PUSH_TIMEOUT_SECONDS,
 ) -> PushResult:
-    """Push the branch, the Release tags and the Release files refs; see ``PUSH_COMMAND``."""
-    ok, message = _run_push(workspace, timeout=timeout)
+    """Push the branch, the Release tags and the Release files refs; see ``PUSH_COMMAND``.
+
+    Files refs that do not match their manifest are left out, so one bad ref never blocks the
+    rest: the glob is then replaced by one refspec per ready Release.
+    """
+    files = (
+        [f"{RELEASE_FILES_REF_PREFIX}{slug}" for slug in backfill.ready]
+        if backfill.invalid
+        else [f"{RELEASE_FILES_REF_PREFIX}*"]
+    )
+    refspecs = [f"refs/heads/{BRANCH}", RELEASE_TAGS, *files]
+    ok, message = _run_push(workspace, refspecs, remote=remote, timeout=timeout)
     return PushResult(
         ok=ok,
-        remote=plan.remote,
+        remote=remote,
         message=message,
-        releases_without_files=plan.releases_without_files,
+        releases_without_files=backfill.missing,
+        releases_with_invalid_files=backfill.invalid,
     )
 
 
-def _run_push(workspace: Path, *, timeout: float) -> tuple[bool, str]:
+def _run_push(
+    workspace: Path, refspecs: list[str], *, remote: str, timeout: float
+) -> tuple[bool, str]:
     command = [
         "git",
         "-c",
@@ -196,7 +203,7 @@ def _run_push(workspace: Path, *, timeout: float) -> tuple[bool, str]:
         "push",
         "--porcelain",
         REMOTE_NAME,
-        *PUSH_REFSPECS,
+        *refspecs,
     ]
     environment = {
         key: value for key, value in os.environ.items() if key not in _REDIRECTING_ENVIRONMENT
@@ -220,24 +227,25 @@ def _run_push(workspace: Path, *, timeout: float) -> tuple[bool, str]:
     except subprocess.TimeoutExpired:
         with suppress(OSError):
             os.killpg(process.pid, signal.SIGKILL)
-        process.communicate()
+        with suppress(subprocess.TimeoutExpired):
+            process.communicate(timeout=5)
         return False, f"The push did not finish within {int(timeout)} seconds."
     output = _trim(redact(stderr.decode("utf-8", errors="replace")))
     if process.returncode != 0:
         detail = _trim(redact(stdout.decode("utf-8", errors="replace")))
         return False, output or detail or "Git could not push to the remote."
-    return True, _summary(stdout.decode("utf-8", errors="replace"))
+    return True, _summary(stdout.decode("utf-8", errors="replace"), remote)
 
 
-def _summary(porcelain: str) -> str:
+def _summary(porcelain: str, remote: str) -> str:
     updated = sum(
         1
         for line in porcelain.splitlines()
         if line[:1] in {" ", "+", "*"} and "\t" in line and not line.startswith("To ")
     )
     if updated == 0:
-        return "Everything was already up to date."
-    return f"Pushed {updated} {'ref' if updated == 1 else 'refs'}."
+        return f"{remote} is already up to date."
+    return f"Pushed {updated} {'ref' if updated == 1 else 'refs'} to {remote}."
 
 
 def _trim(text: str) -> str:
