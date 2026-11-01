@@ -28,6 +28,14 @@ from course_harness.core.canonical_mutation import (
 )
 from course_harness.core.course_plan import CoursePlan, InvalidCoursePlan, read_course_plan
 from course_harness.core.presentation import InvalidPresentation, Presentation, read_presentation
+from course_harness.core.quiz import (
+    LECTURE_ID_PATTERN,
+    QUIZZES_DIRECTORY,
+    InvalidQuiz,
+    Quiz,
+    quiz_problems,
+    read_quiz,
+)
 from course_harness.core.sources import InvalidSourcesIndex, SourcesIndex, read_sources_index
 
 GIT_TIMEOUT_SECONDS = 5
@@ -41,6 +49,8 @@ MAX_CANONICAL_TOTAL_BYTES = 64_000_000
 MAX_CURRENT_STATE_DIFF_LINES = 200
 MAX_CURRENT_STATE_DIFF_CHARS = 24_000
 CANONICAL_TOP_LEVEL_FILES = ("course.yaml", "sources.yaml")
+# Directories whose direct ``*.yaml`` children are canonical Course state.
+CANONICAL_DIRECTORIES = ("presentations", QUIZZES_DIRECTORY)
 HISTORY_NOT_INITIALIZED = "Course Workspace history is not initialized"
 HISTORY_UNSAFE = "Course Workspace history cannot be read safely"
 TRANSACTION_FILE = "course-harness-transaction"
@@ -372,10 +382,9 @@ def _require_private_workspace_repository(workspace: Path) -> None:
     top_level = Path(_git(workspace, "rev-parse", "--show-toplevel").strip()).resolve()
     if top_level != workspace:
         raise WorkspaceHistoryError(HISTORY_UNSAFE)
-    presentations = workspace / "presentations"
-    if _is_ordinary_directory(presentations):
-        presentations_git = presentations / ".git"
-        if _path_exists_or_symlink(presentations_git):
+    for directory_name in CANONICAL_DIRECTORIES:
+        directory = workspace / directory_name
+        if _is_ordinary_directory(directory) and _path_exists_or_symlink(directory / ".git"):
             raise WorkspaceHistoryError(HISTORY_UNSAFE)
 
 
@@ -455,7 +464,7 @@ def _is_canonical_path(path: str) -> bool:
         return True
     candidate = Path(path)
     return (
-        candidate.parent == Path("presentations")
+        candidate.parent in {Path(name) for name in CANONICAL_DIRECTORIES}
         and candidate.suffix == ".yaml"
         and not candidate.is_absolute()
     )
@@ -474,9 +483,10 @@ def _current_canonical_paths(workspace: Path) -> set[str]:
             paths.add(name)
             if len(paths) > MAX_CANONICAL_ENTRIES:
                 raise WorkspaceHistoryError("Canonical Course state has too many files")
-    presentations = workspace / "presentations"
-    if _is_ordinary_directory(presentations):
-        for candidate in _presentation_yaml_paths(workspace):
+    for directory_name in CANONICAL_DIRECTORIES:
+        if not _is_ordinary_directory(workspace / directory_name):
+            continue
+        for candidate in _canonical_yaml_paths(workspace, directory_name):
             path = candidate.relative_to(workspace).as_posix()
             mode = _lstat_mode(candidate)
             if (
@@ -490,17 +500,17 @@ def _current_canonical_paths(workspace: Path) -> set[str]:
     return paths
 
 
-def _presentation_yaml_paths(workspace: Path) -> list[Path]:
-    """List presentation candidates without allowing arbitrary directory scans."""
-    presentations = workspace / "presentations"
+def _canonical_yaml_paths(workspace: Path, directory_name: str = "presentations") -> list[Path]:
+    """List candidates in one canonical directory without allowing arbitrary scans."""
+    directory = workspace / directory_name
     candidates: list[Path] = []
     entries_seen = 0
     try:
-        with os.scandir(presentations) as entries:
+        with os.scandir(directory) as entries:
             for entry in entries:
                 entries_seen += 1
                 if entries_seen > MAX_PRESENTATIONS_DIRECTORY_ENTRIES:
-                    raise WorkspaceHistoryError("Course presentations directory is too large")
+                    raise WorkspaceHistoryError(f"Course {directory_name} directory is too large")
                 if entry.name.endswith(".yaml"):
                     candidates.append(Path(entry.path))
     except OSError as error:
@@ -516,17 +526,22 @@ def _canonical_structure_findings(workspace: Path) -> list[str]:
         mode = _lstat_mode(candidate)
         if mode is not None and not (stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
             findings.append(f"{name} must be a regular file when it exists")
-    presentations = workspace / "presentations"
-    if presentations.is_symlink():
-        return [*findings, "presentations is a symbolic link and is not canonical Course state"]
-    if _path_exists_or_symlink(presentations) and not _is_ordinary_directory(presentations):
-        return [*findings, "presentations must be a directory when it exists"]
-    if not _is_ordinary_directory(presentations):
-        return findings
-    for candidate in _presentation_yaml_paths(workspace):
-        path = candidate.relative_to(workspace).as_posix()
-        if not _is_safe_path_text(path):
-            findings.append("A Presentation filename is not valid UTF-8")
+    for directory_name, kind in (("presentations", "Presentation"), (QUIZZES_DIRECTORY, "Quiz")):
+        directory = workspace / directory_name
+        if directory.is_symlink():
+            findings.append(
+                f"{directory_name} is a symbolic link and is not canonical Course state"
+            )
+            continue
+        if _path_exists_or_symlink(directory) and not _is_ordinary_directory(directory):
+            findings.append(f"{directory_name} must be a directory when it exists")
+            continue
+        if not _is_ordinary_directory(directory):
+            continue
+        for candidate in _canonical_yaml_paths(workspace, directory_name):
+            path = candidate.relative_to(workspace).as_posix()
+            if not _is_safe_path_text(path):
+                findings.append(f"A {kind} filename is not valid UTF-8")
     return findings
 
 
@@ -672,7 +687,7 @@ def _validate_complete_state(
         findings.append("presentations must be a directory when it exists")
     loaded_presentations: list[tuple[str, Presentation]] = []
     if _is_ordinary_directory(presentations):
-        for candidate in _presentation_yaml_paths(workspace):
+        for candidate in _canonical_yaml_paths(workspace, "presentations"):
             path = candidate.relative_to(workspace).as_posix()
             if not _is_safe_path_text(path):
                 findings.append("A Presentation filename is not valid UTF-8")
@@ -690,6 +705,7 @@ def _validate_complete_state(
             if candidate.name != f"{presentation.id}.yaml":
                 findings.append(f"{path} filename does not match Presentation ID {presentation.id}")
             loaded_presentations.append((path, presentation))
+    loaded_quizzes = _load_quizzes(workspace, findings)
 
     if course is not None:
         lectures = {lecture.id: lecture for lecture in course.lectures}
@@ -749,8 +765,75 @@ def _validate_complete_state(
                     f"Lecture {lecture.id} links to Presentation {lecture.presentation_id} "
                     "for another Lecture"
                 )
+        findings.extend(_quiz_graph_findings(loaded_quizzes, set(lectures), source_ids))
 
     return CurrentStateValidation(valid=not findings, findings=findings)
+
+
+def _load_quizzes(workspace: Path, findings: list[str]) -> list[Quiz]:
+    """Read every Quiz file, recording why a file cannot be canonical Course state."""
+    directory = workspace / QUIZZES_DIRECTORY
+    if directory.is_symlink():
+        findings.append(f"{QUIZZES_DIRECTORY} is a symbolic link and is not canonical Course state")
+        return []
+    if _path_exists_or_symlink(directory) and not _is_ordinary_directory(directory):
+        findings.append(f"{QUIZZES_DIRECTORY} must be a directory when it exists")
+        return []
+    if not _is_ordinary_directory(directory):
+        return []
+    quizzes: list[Quiz] = []
+    for candidate in _canonical_yaml_paths(workspace, QUIZZES_DIRECTORY):
+        path = candidate.relative_to(workspace).as_posix()
+        if not _is_safe_path_text(path):
+            findings.append("A Quiz filename is not valid UTF-8")
+            continue
+        if candidate.is_symlink():
+            findings.append(f"{path} is a symbolic link and is not canonical Course state")
+            continue
+        if re.fullmatch(LECTURE_ID_PATTERN, candidate.stem) is None:
+            findings.append(f"{path} is not named after a Lecture ID")
+            continue
+        try:
+            quiz = read_quiz(workspace, candidate.stem)
+        except InvalidQuiz as error:
+            findings.append(f"{path} is invalid: {error}")
+            continue
+        if quiz is not None:
+            quizzes.append(quiz)
+    return quizzes
+
+
+def _quiz_graph_findings(
+    quizzes: list[Quiz], lecture_ids: set[str], source_ids: set[str]
+) -> list[str]:
+    """Check Quiz answer keys, Lecture links, Citation Sources and Question IDs."""
+    findings: list[str] = []
+    question_lectures: dict[str, str] = {}
+    for quiz in quizzes:
+        if quiz.lecture_id not in lecture_ids:
+            findings.append(f"Quiz for Lecture {quiz.lecture_id} references a missing Lecture")
+        findings.extend(
+            f"Quiz for Lecture {quiz.lecture_id}: {problem.message}"
+            for problem in quiz_problems(quiz)
+        )
+        for question in quiz.questions:
+            owner = question_lectures.setdefault(question.id, quiz.lecture_id)
+            if owner != quiz.lecture_id:
+                findings.append(
+                    f"Question ID {question.id} appears in the Quizzes of Lectures {owner} "
+                    f"and {quiz.lecture_id}"
+                )
+            citations = [
+                *question.citations,
+                *(citation for option in question.options for citation in option.citations),
+            ]
+            for citation in citations:
+                if citation.source_id not in source_ids:
+                    findings.append(
+                        f"Question {question.id} Citation references missing Source "
+                        f"{citation.source_id}"
+                    )
+    return findings
 
 
 @_serialized
@@ -1622,7 +1705,9 @@ def _write_blob(workspace: Path, path: str, content: bytes) -> None:
 
 def _write_entry(workspace: Path, path: str, entry: _CapturedEntry) -> None:
     target = workspace / path
-    if target.parent == workspace / "presentations" and not _path_exists_or_symlink(target.parent):
+    if target.parent in {
+        workspace / name for name in CANONICAL_DIRECTORIES
+    } and not _path_exists_or_symlink(target.parent):
         try:
             target.parent.mkdir(mode=0o700)
         except OSError as error:

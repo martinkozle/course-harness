@@ -110,6 +110,7 @@ from course_harness.core.presentation import (
     slide_by_id,
     write_presentation,
 )
+from course_harness.core.quiz import list_quizzes
 from course_harness.core.release_validation import (
     InvalidWaiver,
     ReleaseSelection,
@@ -767,15 +768,18 @@ def create_app(
             path = active / name
             if path.exists() or path.is_symlink():
                 return True
-        presentations = active / "presentations"
-        if presentations.is_symlink():
-            return True
-        if not presentations.is_dir():
-            return False
-        try:
-            return any(path.suffix == ".yaml" for path in presentations.iterdir())
-        except OSError:
-            return True
+        for directory_name in ("presentations", "quizzes"):
+            directory = active / directory_name
+            if directory.is_symlink():
+                return True
+            if not directory.is_dir():
+                continue
+            try:
+                if any(path.suffix == ".yaml" for path in directory.iterdir()):
+                    return True
+            except OSError:
+                return True
+        return False
 
     def require_workspace() -> Path:
         if workspace is None:
@@ -1068,6 +1072,7 @@ def create_app(
                     sources=sources,
                     selection=request.selection,
                     waivers=request.waivers,
+                    quizzes=list_quizzes(active),
                     evidence_line_counts=sources_module.read_pinned_evidence_line_counts(
                         cache_dir, sources.sources
                     ),

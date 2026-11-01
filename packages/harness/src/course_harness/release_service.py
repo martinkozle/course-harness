@@ -36,11 +36,13 @@ from course_harness.core.releases import (
     ReleaseError,
     ReleaseTemplatePin,
     canonical_json,
+    release_quizzes,
     run_git,
     sha256_hex,
     source_pin,
     tag_exists,
     tagged_presentation,
+    tagged_quiz,
     verify_release_manifest,
 )
 from course_harness.core.sources import (
@@ -115,6 +117,9 @@ def publish_release(
             ) from error
         if presentation is not None:
             presentations.append(presentation)
+    # Quizzes are read from the Revision being published; Current State is clean against it.
+    quiz_entries = release_quizzes(workspace, revision, list(request.selection.lecture_ids))
+    quizzes = [tagged_quiz(workspace, revision, entry.lecture_id) for entry in quiz_entries]
     try:
         validation = validate_release(
             plan=plan,
@@ -123,6 +128,7 @@ def publish_release(
             selection=request.selection,
             waivers=request.waivers,
             evidence_line_counts=evidence_line_counts,
+            quizzes=quizzes,
         )
     except InvalidWaiver as error:
         raise ReleaseValidationError(str(error)) from error
@@ -206,6 +212,7 @@ def publish_release(
         template_profile=template_pin,
         validation=validation,
         artifacts=[artifact for artifact, _content in exports],
+        quizzes=quiz_entries,
     )
     verify_release_manifest(workspace, release)
     manifest = canonical_json(release.model_dump(mode="json"))

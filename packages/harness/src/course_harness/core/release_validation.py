@@ -1,16 +1,27 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from course_harness.core.course_plan import CoursePlan
-from course_harness.core.presentation import Presentation
+from course_harness.core.presentation import Presentation, SlideCitation
+from course_harness.core.quiz import Quiz, quiz_problems
 from course_harness.core.sources import SourcesIndex
 
 FindingSeverity = Literal["error", "warning"]
-FindingScope = Literal["release", "lecture", "artifact", "slide", "content_block", "citation"]
+FindingScope = Literal[
+    "release",
+    "lecture",
+    "artifact",
+    "slide",
+    "content_block",
+    "citation",
+    "quiz",
+    "question",
+    "option",
+]
 LectureId = Annotated[str, Field(pattern=r"^lecture-[0-9a-f]{12}$")]
 ArtifactId = Annotated[str, Field(pattern=r"^presentation-[0-9a-f]{12}$")]
 
@@ -44,6 +55,9 @@ class FindingTarget(BaseModel):
     source_id: str | None = None
     line_start: int | None = None
     line_end: int | None = None
+    # Quiz targets are omitted when absent so manifests of earlier Releases stay exact.
+    question_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    option_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class ValidationFinding(BaseModel):
@@ -88,8 +102,12 @@ def validate_release(
     selection: ReleaseSelection,
     waivers: list[Waiver] | None = None,
     evidence_line_counts: Mapping[str, int] | None = None,
+    quizzes: Sequence[Quiz] = (),
 ) -> ReleaseValidationResult:
-    """Validate a proposed partial Release without mutating Course state."""
+    """Validate a proposed partial Release without mutating Course state.
+
+    ``quizzes`` may hold any Quizzes; only those of selected Lectures are validated.
+    """
 
     findings: list[ValidationFinding] = []
     lectures_by_id = {lecture.id: lecture for lecture in plan.lectures}
@@ -244,6 +262,16 @@ def validate_release(
                 )
             )
 
+    findings.extend(
+        _quiz_findings(
+            quizzes,
+            selection=selection,
+            source_ids=source_ids,
+            sources_by_id=sources_by_id,
+            evidence_line_counts=evidence_line_counts,
+        )
+    )
+
     applied_waivers = _apply_waivers(findings, waivers or [])
     structurally_valid = not any(finding.severity == "error" for finding in findings)
 
@@ -255,6 +283,188 @@ def validate_release(
         can_publish=structurally_valid
         and not any(finding.severity == "warning" and not finding.waived for finding in findings),
     )
+
+
+def _quiz_findings(
+    quizzes: Sequence[Quiz],
+    *,
+    selection: ReleaseSelection,
+    source_ids: set[str],
+    sources_by_id: Mapping[str, object],
+    evidence_line_counts: Mapping[str, int] | None,
+) -> list[ValidationFinding]:
+    """Validate the Quizzes of selected Lectures in selection order."""
+    findings: list[ValidationFinding] = []
+    by_lecture: dict[str, list[Quiz]] = {}
+    for quiz in quizzes:
+        by_lecture.setdefault(quiz.lecture_id, []).append(quiz)
+    question_lectures: dict[str, str] = {}
+    for lecture_id in selection.lecture_ids:
+        matches = by_lecture.get(lecture_id, [])
+        if len(matches) > 1:
+            code = "quiz.duplicate-lecture"
+            findings.append(
+                ValidationFinding(
+                    id=f"{code}:{lecture_id}",
+                    code=code,
+                    severity="error",
+                    message=f"Lecture {lecture_id} has more than one Quiz.",
+                    target=FindingTarget(scope="quiz", lecture_id=lecture_id),
+                )
+            )
+        for quiz in matches[:1]:
+            for problem in quiz_problems(quiz):
+                findings.append(
+                    ValidationFinding(
+                        id=":".join(
+                            [problem.code, lecture_id, problem.question_id]
+                            + ([problem.option_id] if problem.option_id else [])
+                        ),
+                        code=problem.code,
+                        severity="error",
+                        message=problem.message,
+                        target=FindingTarget(
+                            scope="option" if problem.option_id else "question",
+                            lecture_id=lecture_id,
+                            question_id=problem.question_id,
+                            option_id=problem.option_id,
+                        ),
+                    )
+                )
+            for question in quiz.questions:
+                owner = question_lectures.setdefault(question.id, lecture_id)
+                if owner != lecture_id:
+                    code = "quiz.duplicate-question-id"
+                    findings.append(
+                        ValidationFinding(
+                            id=f"{code}:{lecture_id}:{question.id}:{owner}",
+                            code=code,
+                            severity="error",
+                            message=(
+                                f"Question ID {question.id} is also used in the Quiz of "
+                                f"Lecture {owner}."
+                            ),
+                            target=FindingTarget(
+                                scope="question", lecture_id=lecture_id, question_id=question.id
+                            ),
+                        )
+                    )
+                cited = bool(question.citations)
+                citation_owners: list[tuple[str | None, list[SlideCitation]]] = [
+                    (None, question.citations)
+                ]
+                for option in question.options:
+                    citation_owners.append((option.id, option.citations))
+                    cited = cited or bool(option.citations)
+                for option_id, citations in citation_owners:
+                    findings.extend(
+                        _quiz_citation_findings(
+                            citations,
+                            lecture_id=lecture_id,
+                            question_id=question.id,
+                            option_id=option_id,
+                            source_ids=source_ids,
+                            sources_by_id=sources_by_id,
+                            evidence_line_counts=evidence_line_counts,
+                        )
+                    )
+                for option in question.options:
+                    if option.correct or option.explanation:
+                        continue
+                    code = "quiz.unexplained-option"
+                    findings.append(
+                        ValidationFinding(
+                            id=f"{code}:{lecture_id}:{question.id}:{option.id}",
+                            code=code,
+                            severity="warning",
+                            message=(
+                                f"Wrong Option {option.id} of Question {question.id} has no "
+                                "Explanation."
+                            ),
+                            target=FindingTarget(
+                                scope="option",
+                                lecture_id=lecture_id,
+                                question_id=question.id,
+                                option_id=option.id,
+                            ),
+                        )
+                    )
+                if not cited:
+                    code = "grounding.uncited-question"
+                    findings.append(
+                        ValidationFinding(
+                            id=f"{code}:{lecture_id}:{question.id}",
+                            code=code,
+                            severity="warning",
+                            message=f"Question {question.id} has no supporting Citation.",
+                            target=FindingTarget(
+                                scope="question", lecture_id=lecture_id, question_id=question.id
+                            ),
+                        )
+                    )
+    return findings
+
+
+def _quiz_citation_findings(
+    citations: list[SlideCitation],
+    *,
+    lecture_id: str,
+    question_id: str,
+    option_id: str | None,
+    source_ids: set[str],
+    sources_by_id: Mapping[str, object],
+    evidence_line_counts: Mapping[str, int] | None,
+) -> list[ValidationFinding]:
+    """Apply the Slide Citation rules to a Question's or an Option's Citations."""
+    findings: list[ValidationFinding] = []
+    owner = (
+        f"Option {option_id} of Question {question_id}"
+        if option_id
+        else (f"Question {question_id}")
+    )
+    for citation_index, citation in enumerate(citations):
+        if citation.source_id not in source_ids:
+            code = "citation.missing-source"
+            message = (
+                f"Citation {citation_index + 1} on {owner} references missing Source "
+                f"{citation.source_id}."
+            )
+            identity_suffix = f":{citation.source_id}"
+        elif _citation_coordinates_are_invalid(citation):
+            code = "citation.invalid-coordinates"
+            message = f"Citation {citation_index + 1} on {owner} has invalid Evidence coordinates."
+            identity_suffix = ""
+        elif _citation_cannot_be_resolved(
+            citation, sources_by_id[citation.source_id], evidence_line_counts
+        ):
+            code = "citation.unresolvable-evidence"
+            message = (
+                f"Citation {citation_index + 1} on {owner} does not resolve against the "
+                "admitted Source Version's extracted Evidence."
+            )
+            identity_suffix = ""
+        else:
+            continue
+        identity = ":".join([code, lecture_id, question_id, *([option_id] if option_id else [])])
+        findings.append(
+            ValidationFinding(
+                id=f"{identity}:{citation_index}{identity_suffix}",
+                code=code,
+                severity="error",
+                message=message,
+                target=FindingTarget(
+                    scope="citation",
+                    lecture_id=lecture_id,
+                    question_id=question_id,
+                    option_id=option_id,
+                    citation_index=citation_index,
+                    source_id=citation.source_id,
+                    line_start=citation.line_start,
+                    line_end=citation.line_end,
+                ),
+            )
+        )
+    return findings
 
 
 def _apply_waivers(findings: list[ValidationFinding], waivers: list[Waiver]) -> list[Waiver]:

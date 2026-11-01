@@ -36,6 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from course_harness.core.canonical_yaml import load_canonical_yaml
 from course_harness.core.course_plan import CoursePlan
 from course_harness.core.presentation import Presentation
+from course_harness.core.quiz import InvalidQuiz, Quiz, parse_quiz, quiz_path
 from course_harness.core.release_validation import (
     InvalidWaiver,
     ReleaseValidationResult,
@@ -98,6 +99,15 @@ class ReleaseArtifact(BaseModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class ReleaseQuiz(BaseModel):
+    """A Quiz published with an included Lecture, read from the tagged Revision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lecture_id: str = Field(pattern=r"^lecture-[0-9a-f]{12}$")
+    path: str = Field(pattern=r"^quizzes/lecture-[0-9a-f]{12}\.yaml$", max_length=40)
+
+
 class CourseRelease(BaseModel):
     """The canonical, bounded manifest stored in an annotated Git tag."""
 
@@ -119,6 +129,10 @@ class CourseRelease(BaseModel):
     template_profile: ReleaseTemplatePin
     validation: ReleaseValidationResult
     artifacts: list[ReleaseArtifact] = Field(default_factory=list, max_length=1_000)
+    # Omitted when empty so manifests of Releases published before Quizzes stay exact.
+    quizzes: list[ReleaseQuiz] = Field(
+        default_factory=list, max_length=1_000, exclude_if=lambda value: not value
+    )
 
 
 @dataclass(frozen=True)
@@ -413,6 +427,11 @@ def verify_release_manifest(repository: Path, release: CourseRelease) -> None:
         for presentation, artifact in zip(presentations, release.artifacts, strict=True)
     ):
         raise ReleaseError("Release manifest Artifact metadata does not match its tagged Revision")
+    if release.quizzes != release_quizzes(repository, release.commit_oid, selection.lecture_ids):
+        raise ReleaseError("Release manifest Quizzes do not match its tagged Revision")
+    quizzes = [
+        tagged_quiz(repository, release.commit_oid, quiz.lecture_id) for quiz in release.quizzes
+    ]
     try:
         expected_validation = validate_release(
             plan=plan,
@@ -420,6 +439,7 @@ def verify_release_manifest(repository: Path, release: CourseRelease) -> None:
             sources=sources,
             selection=selection,
             waivers=release.validation.waivers,
+            quizzes=quizzes,
         )
     except InvalidWaiver as error:
         raise ReleaseError("Release manifest contains an invalid Waiver") from error
@@ -515,6 +535,41 @@ def parse_tagged_presentation(
     if presentation.id != presentation_id:
         raise ReleaseError("Tagged Presentation identity is inconsistent")
     return presentation
+
+
+def release_quizzes(repository: Path, commit_oid: str, lecture_ids: list[str]) -> list[ReleaseQuiz]:
+    """The Quizzes a Revision holds for the given Lectures, in Lecture order."""
+    if not OID_PATTERN.fullmatch(commit_oid):
+        raise ReleaseError("Course Revision identity is invalid")
+    listing = run_git(repository, "ls-tree", "-z", "--name-only", commit_oid, "--", "quizzes/")
+    try:
+        present = set(listing.decode("utf-8").split("\0"))
+    except UnicodeError as error:
+        raise ReleaseError("Tagged Quizzes cannot be identified safely") from error
+    quizzes: list[ReleaseQuiz] = []
+    for lecture_id in lecture_ids:
+        try:
+            path = quiz_path(lecture_id)
+        except ValueError as error:
+            raise ReleaseError("Release Lecture identity is invalid") from error
+        if path in present:
+            quizzes.append(ReleaseQuiz(lecture_id=lecture_id, path=path))
+    return quizzes
+
+
+def tagged_quiz(repository: Path, commit_oid: str, lecture_id: str) -> Quiz:
+    """Read one Lecture's Quiz from a Revision's Git objects."""
+    try:
+        path = quiz_path(lecture_id)
+    except ValueError as error:
+        raise ReleaseError("Release Quiz identity is invalid") from error
+    try:
+        quiz = parse_quiz(read_commit_blob(repository, commit_oid, path))
+    except InvalidQuiz as error:
+        raise ReleaseError("Tagged Quiz is invalid") from error
+    if quiz.lecture_id != lecture_id:
+        raise ReleaseError("Tagged Quiz identity is inconsistent")
+    return quiz
 
 
 def read_commit_blob(repository: Path, commit_oid: str, path: str) -> bytes:
