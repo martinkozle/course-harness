@@ -7,6 +7,8 @@ Routes:
   course cookie and redirect to ``/c/<course slug>``.
 - ``/api/c/<course slug>`` and below: the served Release of one course, for its cookie holders:
   its Lectures, its Quizzes without answer keys, Answers and a student's progress.
+- ``/api/c/<course slug>/insights``, ``/answers.csv`` and ``/sync``: Instructor Insights, the
+  Answers export and "Sync now", for Instructor cookie holders only.
 - Everything else that is a ``GET``: the built Classroom interface, a single-page app.
 """
 
@@ -20,7 +22,7 @@ from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import unquote
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError
@@ -29,6 +31,12 @@ from starlette.staticfiles import StaticFiles
 from course_harness.core.quiz import option_by_id
 from course_harness.core.slide_preview import PreviewSlot
 from course_harness_classroom.config import ClassroomSettings
+from course_harness_classroom.insights import (
+    Insights,
+    ReleaseQuizzes,
+    answers_csv,
+    build_insights,
+)
 from course_harness_classroom.learning import (
     LearnerQuiz,
     OptionFeedback,
@@ -85,6 +93,8 @@ NO_RELEASE = "This course has no Release yet."
 # no C0 or C1 controls, line or paragraph separators, or bidirectional overrides and isolates.
 UNPRINTABLE = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
 STUDENT_HEADER = "X-Classroom-Student"
+ONLY_INSTRUCTORS = "Only the course's Instructors can see this."
+RELEASE_TAG_PATTERN = r"^course-release/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
 MAX_ANSWER_BYTES = 4_096
 # Answers per minute: one network address may be a whole classroom behind one router.
 ANSWERS_PER_ADDRESS = 240
@@ -211,6 +221,16 @@ class AnswerResponse(OptionFeedback):
 class ProgressResponse(BaseModel):
     student_id: str
     questions: list[QuestionProgress]
+
+
+class CourseSyncResponse(BaseModel):
+    """Where a course's sync stands, for an Instructor's "Sync now"."""
+
+    syncing: bool
+    last_sync_at: str | None
+    sync_status: SyncStatus
+    sync_message: str | None
+    release: ServedReleaseResponse | None
 
 
 class CourseResponse(BaseModel):
@@ -658,6 +678,85 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
             student_id=student,
             questions=progress(snapshot, store.answers(course.id, student_id=student)),
         )
+
+    # Instructor Insights
+
+    def instructor_course(access: CourseAccess) -> Course:
+        course, role = access
+        if role != "instructor":
+            raise HTTPException(status_code=403, detail=ONLY_INSTRUCTORS)
+        return course
+
+    InstructorCourse = Annotated[Course, Depends(instructor_course)]
+    ReleaseTag = Annotated[str | None, Query(max_length=79, pattern=RELEASE_TAG_PATTERN)]
+
+    def grading_release(course: Course, release: str | None) -> tuple[ReleaseQuizzes, str]:
+        """The Quizzes to grade against, and the served Release's tag."""
+        snapshot, _directory = served(course)
+        served_tag = snapshot.manifest.tag
+        quizzes = sync_service.release_quizzes(course, release or served_tag)
+        if quizzes is None:
+            raise HTTPException(status_code=404, detail="That Release cannot be read.")
+        return quizzes, served_tag
+
+    @app.get("/api/c/{slug}/insights")
+    def insights(
+        course: InstructorCourse,
+        release: ReleaseTag = None,
+        include_instructors: bool = False,
+    ) -> Insights:
+        """Where Learners get stuck, graded against the served Release or the one named."""
+        grading, served_tag = grading_release(course, release)
+        answers = store.answers(course.id)
+        tags = dict.fromkeys(answer.release_tag for answer in answers)
+        return build_insights(
+            answers,
+            grading,
+            {tag: sync_service.release_quizzes(course, tag) for tag in tags},
+            served_tag=served_tag,
+            include_instructors=include_instructors,
+        )
+
+    @app.get("/api/c/{slug}/answers.csv")
+    def answers_export(
+        course: InstructorCourse,
+        release: ReleaseTag = None,
+        include_instructors: bool = False,
+    ) -> Response:
+        """Every Answer with its correctness and score derived against the grading Release."""
+        grading, _served_tag = grading_release(course, release)
+        content = answers_csv(
+            store.answers(course.id), grading, include_instructors=include_instructors
+        )
+        name = f"{course.slug}-answers-{grading.tag.removeprefix('course-release/')}.csv"
+        return Response(
+            content.encode("utf-8"),
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{name}"',
+                "Cache-Control": "no-store",
+            },
+        )
+
+    def sync_state(course: Course) -> CourseSyncResponse:
+        current = store.course_by_id(course.id) or course
+        return CourseSyncResponse(
+            syncing=sync_service.is_syncing(course.id),
+            last_sync_at=current.last_sync_at,
+            sync_status=current.sync_status,
+            sync_message=current.sync_message,
+            release=_release_response(current),
+        )
+
+    @app.get("/api/c/{slug}/sync")
+    def course_sync_status(course: InstructorCourse) -> CourseSyncResponse:
+        return sync_state(course)
+
+    @app.post("/api/c/{slug}/sync", status_code=202)
+    def course_sync_now(course: InstructorCourse) -> CourseSyncResponse:
+        """Start syncing the course in the background; poll ``GET`` for the outcome."""
+        sync_service.start_background_sync(course.id)
+        return sync_state(course)
 
     @app.get("/api/c/{slug}/assets/{name}/{path:path}")
     def course_asset(name: str, path: str, access: CourseAccess) -> FileResponse:

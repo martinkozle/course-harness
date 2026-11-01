@@ -1,6 +1,7 @@
 import "@course-harness/ui/styles.css";
 import "./classroom.css";
 import "./learner.css";
+import "./insights.css";
 
 import { Notice } from "@course-harness/ui";
 import { StrictMode } from "react";

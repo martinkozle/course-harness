@@ -3,6 +3,7 @@ import { type MouseEvent, useEffect, useState } from "react";
 export type CourseView =
 	| { view: "lectures" }
 	| { view: "exercises" }
+	| { view: "insights" }
 	| { view: "lecture"; lectureId: string };
 
 export type Route =
@@ -18,19 +19,21 @@ export function parseRoute(pathname: string): Route {
 	if (path === "/admin") return { page: "admin" };
 	if (path === "/link-not-valid") return { page: "link-not-valid" };
 	const course =
-		/^\/c\/([a-z0-9-]{1,64})(?:\/(exercises)|\/lectures\/(lecture-[0-9a-f]{12}))?$/.exec(
+		/^\/c\/([a-z0-9-]{1,64})(?:\/(exercises|insights)|\/lectures\/(lecture-[0-9a-f]{12}))?$/.exec(
 			path,
 		);
 	if (course) {
-		const [, slug, exercises, lectureId] = course;
+		const [, slug, tab, lectureId] = course;
 		if (lectureId) return { page: "course", slug, view: "lecture", lectureId };
-		return { page: "course", slug, view: exercises ? "exercises" : "lectures" };
+		if (tab === "insights") return { page: "course", slug, view: "insights" };
+		return { page: "course", slug, view: tab ? "exercises" : "lectures" };
 	}
 	return { page: "not-found" };
 }
 
 export const coursePath = (slug: string) => `/c/${slug}`;
 export const exercisesPath = (slug: string) => `/c/${slug}/exercises`;
+export const insightsPath = (slug: string) => `/c/${slug}/insights`;
 export const lecturePath = (slug: string, lectureId: string) =>
 	`/c/${slug}/lectures/${lectureId}`;
 export const QUIZ_ANCHOR = "check-your-understanding";

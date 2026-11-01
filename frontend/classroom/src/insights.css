@@ -1,0 +1,228 @@
+/* Instructor Insights: stat tiles and plain tables, one accent hue for the single measure. */
+
+.insights {
+	gap: 24px;
+}
+
+.insights-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: 12px 20px;
+}
+
+.insights-toolbar .field {
+	min-width: min(260px, 100%);
+}
+
+.insights-toolbar .check-row {
+	min-height: var(--control-h);
+	align-items: center;
+}
+
+.insights-toolbar .check-row input {
+	margin-top: 0;
+}
+
+.insights-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-left: auto;
+}
+
+.sync-line {
+	display: grid;
+	gap: 8px;
+	margin-top: -12px;
+}
+
+.sync-failed {
+	color: var(--danger);
+}
+
+/* ---------- Stat tiles ---------- */
+
+.stat-tiles {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 12px;
+}
+
+@media (max-width: 640px) {
+	.stat-tiles {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+.stat-tile {
+	display: grid;
+	align-content: start;
+	gap: 4px;
+	padding: 14px 16px;
+	border: 1px solid var(--rule);
+	border-radius: var(--radius-m);
+	background: var(--surface);
+	box-shadow: var(--shadow-card);
+}
+
+.stat-tile dt {
+	font-size: 0.8125rem;
+	font-weight: 600;
+	color: var(--ink-muted);
+}
+
+.stat-tile dd {
+	display: grid;
+	gap: 2px;
+	margin: 0;
+}
+
+.stat-value {
+	font-family: var(--font-display);
+	font-size: 1.875rem;
+	line-height: 1.1;
+	color: var(--ink);
+	font-variant-numeric: lining-nums tabular-nums;
+}
+
+.stat-detail {
+	font-size: 0.8125rem;
+	color: var(--ink-muted);
+}
+
+/* ---------- Sections and tables ---------- */
+
+.insights-section {
+	display: grid;
+	gap: 10px;
+	min-width: 0;
+}
+
+.insights-section h3 {
+	font-size: 1.0625rem;
+	font-weight: 600;
+}
+
+.table-scroll {
+	overflow-x: auto;
+	border: 1px solid var(--rule);
+	border-radius: var(--radius-m);
+	background: var(--surface);
+	box-shadow: var(--shadow-card);
+}
+
+.insights-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.9375rem;
+}
+
+.insights-table th,
+.insights-table td {
+	padding: 10px 14px;
+	border-bottom: 1px solid var(--rule);
+	text-align: left;
+	vertical-align: top;
+}
+
+.insights-table tbody tr:last-child > * {
+	border-bottom: 0;
+}
+
+.insights-table thead th {
+	background: var(--surface-sunken);
+	font-size: 0.8125rem;
+	font-weight: 600;
+	color: var(--ink-muted);
+	white-space: nowrap;
+}
+
+.insights-table tbody th {
+	font-weight: 600;
+}
+
+.insights-table .numeric {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.insights-table .mono {
+	font-family: var(--font-mono);
+	font-size: 0.8125rem;
+	overflow-wrap: anywhere;
+}
+
+.question-cell {
+	display: grid;
+	gap: 2px;
+	min-width: 16rem;
+}
+
+.insights-table tbody .question-cell {
+	font-weight: 400;
+}
+
+.question-prompt {
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.question-number {
+	color: var(--ink-faint);
+	font-variant-numeric: tabular-nums;
+}
+
+.change-note {
+	font-size: 0.8125rem;
+	color: var(--warning);
+}
+
+.wrong-option {
+	display: grid;
+	gap: 2px;
+	min-width: 9rem;
+	overflow-wrap: anywhere;
+}
+
+/* A first-try rate: a thin bar on a recessive track, the value in ink beside it. */
+.rate {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 8.5rem;
+}
+
+.rate-track {
+	flex: 1;
+	height: 8px;
+	border-radius: 4px;
+	background: var(--surface-sunken);
+	overflow: hidden;
+}
+
+.rate-fill {
+	display: block;
+	height: 100%;
+	border-radius: 4px;
+	background: var(--accent);
+}
+
+.rate-value {
+	min-width: 2.75rem;
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 640px) {
+	/* Keep the first-try rate within reach of a sideways scroll on a phone. */
+	.question-cell {
+		min-width: 11rem;
+	}
+
+	.insights-table th,
+	.insights-table td {
+		padding: 10px;
+	}
+}

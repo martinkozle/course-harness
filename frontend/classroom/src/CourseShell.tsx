@@ -17,10 +17,16 @@ import {
 } from "./api";
 import { CoursePage } from "./CoursePage";
 import { IdentityForm } from "./IdentityForm";
+import { InsightsPage } from "./InsightsPage";
 import { type Identity, useIdentity } from "./identity";
 import { LecturePage } from "./LecturePage";
 import { type ProgressMap, progressMap, withAnswer } from "./progress";
-import { type CourseView, coursePath, followLink } from "./router";
+import {
+	type CourseView,
+	coursePath,
+	followLink,
+	insightsPath,
+} from "./router";
 
 export type LearnerState = {
 	course: CourseSummary;
@@ -146,6 +152,17 @@ export function CourseShell({
 		);
 	} else if (!course) {
 		content = <p className="meta">Loading…</p>;
+	} else if (view.view === "insights") {
+		// Insights need no student identity: they are about everyone's answers.
+		content =
+			course.role === "instructor" ? (
+				<InsightsPage course={course} />
+			) : (
+				<Notice tone="info">
+					Insights are for the course’s Instructors. Your Lectures and Exercises
+					are on the course page.
+				</Notice>
+			);
 	} else if (!identity) {
 		content = (
 			<section className="welcome" aria-labelledby="welcome-title">
@@ -158,6 +175,17 @@ export function CourseShell({
 					follows you to other devices and the course’s Instructors can see
 					where you are.
 				</p>
+				{course.role === "instructor" ? (
+					<Notice tone="info">
+						You opened an Instructor link.{" "}
+						<a href={insightsPath(slug)} onClick={followLink}>
+							Open Insights
+						</a>{" "}
+						to see where Learners get stuck, or enter a name and student ID to
+						try the course as a Learner. Your own answers are left out of
+						Insights unless you include them.
+					</Notice>
+				) : null}
 				<IdentityForm
 					initial={null}
 					submitLabel="Start"

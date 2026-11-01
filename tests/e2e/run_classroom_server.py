@@ -2,7 +2,7 @@
 
 The Course is authored and released with Course Harness's own services and pushed to a local
 bare remote, as a Course Author would. By default the Classroom attaches that remote, syncs it,
-and gets a Learner Share Link with a fixed token so the Learner journey can open it.
+and gets a Learner and an Instructor Share Link with fixed tokens so the journeys can open them.
 
 With ``--admin`` the Classroom starts with no courses and an Administrator token instead, for the
 Administrator journey; the remote is published to a fixed folder (``ADMIN_FIXTURE_DIR``) so the
@@ -52,6 +52,7 @@ ADMIN_TOKEN = "e2e-administrator-token-0123456789abcdef"
 # classroom-admin.spec.ts attaches `<this>/author/remote.git`.
 ADMIN_FIXTURE_DIR = Path(__file__).resolve().parents[2] / ".cache" / "classroom-e2e-admin"
 LEARNER_TOKEN = "e2e-learner-share-link-token-0123456789abcdef"
+INSTRUCTOR_TOKEN = "e2e-instructor-share-link-token-0123456789abcdef"
 SOURCE_ID = "source-aaaaaaaaaaaa"
 OTHER_SOURCE_ID = "source-bbbbbbbbbbbb"
 LINE_COUNT = 400
@@ -337,6 +338,7 @@ def main() -> None:
         if synced.release_slug is None:
             raise SystemExit(f"The fixture Course did not sync: {synced.sync_message}")
         store.set_share_link(course.id, "learner", token_hash(LEARNER_TOKEN))
+        store.set_share_link(course.id, "instructor", token_hash(INSTRUCTOR_TOKEN))
         uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")
 
 

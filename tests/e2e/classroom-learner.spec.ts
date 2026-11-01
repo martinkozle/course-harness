@@ -7,6 +7,8 @@ const CLASSROOM = "http://127.0.0.1:18766";
 const LEARNER_LINK = `${CLASSROOM}/l/e2e-learner-share-link-token-0123456789abcdef`;
 // A fresh student each run, so earlier answers never leak into this one.
 const STUDENT_ID = `e2e-${Date.now().toString(36)}`;
+const SECOND_STUDENT_ID = `${STUDENT_ID}-b`;
+const INSTRUCTOR_LINK = `${CLASSROOM}/i/e2e-instructor-share-link-token-0123456789abcdef`;
 
 test("a Learner identifies, reads a Lecture and retries a Quiz until correct", async ({
 	page,
@@ -109,4 +111,77 @@ test("a Learner identifies, reads a Lecture and retries a Quiz until correct", a
 		375,
 	);
 	await device.close();
+});
+
+test("an Instructor sees where Learners get stuck after a Learner answers", async ({
+	browser,
+}) => {
+	// A Learner gets the second Question of Lecture 2 right only on the second try.
+	const learnerContext = await browser.newContext({ reducedMotion: "reduce" });
+	const learner = await learnerContext.newPage();
+	await learner.goto(LEARNER_LINK);
+	await learner.getByLabel("Your name").fill("Grace Hopper");
+	await learner.getByLabel("Student ID").fill(SECOND_STUDENT_ID);
+	await learner.getByRole("button", { name: "Start" }).click();
+	await learner.getByRole("link", { name: /Randomised experiments/ }).click();
+	const question = learner
+		.locator("#check-your-understanding .quiz-question")
+		.nth(1);
+	await question.getByRole("button", { name: /P\(Y \| X = x\)/ }).click();
+	await expect(
+		question.getByText("Not this one", { exact: true }),
+	).toBeVisible();
+	await question.getByRole("button", { name: /P\(Y \| do\(X = x\)\)/ }).click();
+	await expect(question.getByText("Correct", { exact: true })).toBeVisible();
+	await learnerContext.close();
+
+	const instructorContext = await browser.newContext({
+		viewport: { width: 1280, height: 900 },
+		reducedMotion: "reduce",
+	});
+	const page = await instructorContext.newPage();
+	await page.goto(INSTRUCTOR_LINK);
+	await expect(page).toHaveURL(`${CLASSROOM}/c/causal`);
+	// Insights need no student identity.
+	await page.getByRole("link", { name: "Open Insights" }).click();
+	await expect(page).toHaveURL(`${CLASSROOM}/c/causal/insights`);
+	await expect(
+		page.getByRole("heading", { name: "Where Learners get stuck" }),
+	).toBeVisible();
+	await expect(page.getByRole("tab", { name: "Insights" })).toHaveAttribute(
+		"aria-selected",
+		"true",
+	);
+
+	const stuck = page.getByRole("region", { name: "Where Learners get stuck" });
+	const row = stuck.getByRole("row", {
+		name: /Which expression describes an intervention/,
+	});
+	await expect(row.first()).toContainText("P(Y | X = x)");
+	await expect(row.first()).toContainText("1 Learner");
+	const learners = page.getByRole("region", { name: "Learners", exact: true });
+	const grace = learners.getByRole("row", { name: /Grace Hopper/ });
+	await expect(grace).toContainText(SECOND_STUDENT_ID);
+	await expect(
+		page.getByRole("link", { name: "Download CSV" }),
+	).toHaveAttribute("href", "/api/c/causal/answers.csv");
+	await expectNoAccessibilityViolations(page, "Instructor Insights");
+
+	await page.getByRole("button", { name: "Sync now" }).click();
+	await expect(
+		page.getByText(/Last synced .* · serving Autumn 2026/),
+	).toBeVisible({ timeout: 30_000 });
+	await instructorContext.close();
+});
+
+test("Learners cannot open Insights", async ({ page }) => {
+	await page.goto(LEARNER_LINK);
+	await page.goto(`${CLASSROOM}/c/causal/insights`);
+	await expect(
+		page.getByText("Insights are for the course’s Instructors."),
+	).toBeVisible();
+	const status = await page.evaluate(
+		async () => (await fetch("/api/c/causal/insights")).status,
+	);
+	expect(status).toBe(403);
 });

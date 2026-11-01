@@ -1,7 +1,7 @@
 import { Tabs } from "@course-harness/ui";
 import { ArrowRight } from "lucide-react";
 
-import type { LectureSummary } from "./api";
+import type { CourseSummary, LectureSummary } from "./api";
 import type { LearnerState } from "./CourseShell";
 import { Marks } from "./Marks";
 import { tally, tallySummary } from "./progress";
@@ -9,12 +9,48 @@ import {
 	coursePath,
 	exercisesPath,
 	followLink,
+	insightsPath,
 	lecturePath,
 	navigate,
 	QUIZ_ANCHOR,
 } from "./router";
 
-type Tab = "lectures" | "exercises";
+export type CourseTab = "lectures" | "exercises" | "insights";
+type Tab = Exclude<CourseTab, "insights">;
+
+const TAB_PATH: Record<CourseTab, (slug: string) => string> = {
+	lectures: coursePath,
+	exercises: exercisesPath,
+	insights: insightsPath,
+};
+
+/** The course's tabs; Instructors also get Insights. */
+export function CourseTabs({
+	course,
+	tab,
+}: {
+	course: CourseSummary;
+	tab: CourseTab;
+}) {
+	const tabs: { id: CourseTab; label: string; count?: number }[] = [
+		{ id: "lectures", label: "Lectures", count: course.lectures.length },
+		{
+			id: "exercises",
+			label: "Exercises",
+			count: course.lectures.filter((lecture) => lecture.has_quiz).length,
+		},
+	];
+	if (course.role === "instructor")
+		tabs.push({ id: "insights", label: "Insights" });
+	return (
+		<Tabs
+			label="Course"
+			tabs={tabs}
+			value={tab}
+			onChange={(next: CourseTab) => navigate(TAB_PATH[next](course.slug))}
+		/>
+	);
+}
 
 function plural(count: number, one: string, many: string) {
 	return count === 1 ? `1 ${one}` : `${count} ${many}`;
@@ -173,30 +209,7 @@ export function CoursePage({ tab, state }: { tab: Tab; state: LearnerState }) {
 			</header>
 			{course.lectures.length ? (
 				<>
-					<Tabs
-						label="Course"
-						tabs={[
-							{
-								id: "lectures",
-								label: "Lectures",
-								count: course.lectures.length,
-							},
-							{
-								id: "exercises",
-								label: "Exercises",
-								count: course.lectures.filter((lecture) => lecture.has_quiz)
-									.length,
-							},
-						]}
-						value={tab}
-						onChange={(next: Tab) =>
-							navigate(
-								next === "lectures"
-									? coursePath(course.slug)
-									: exercisesPath(course.slug),
-							)
-						}
-					/>
+					<CourseTabs course={course} tab={tab} />
 					{tab === "lectures" ? (
 						<LectureList state={state} />
 					) : (

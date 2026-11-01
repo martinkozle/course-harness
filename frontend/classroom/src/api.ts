@@ -123,6 +123,110 @@ export type AnswerRequest = {
 	student_id: string;
 };
 
+/** Instructor Insights, graded against one Release (ADR 0018). */
+export type InsightsRelease = {
+	tag: string;
+	name: string | null;
+	published_at: string | null;
+	answers: number;
+	learners: number;
+	first_answer_at: string | null;
+	last_answer_at: string | null;
+	served: boolean;
+	graded: boolean;
+	readable: boolean;
+};
+
+export type AnswerChanges = {
+	answer_key_changed: number;
+	question_changed: number;
+	option_removed: number;
+	release_unavailable: number;
+};
+
+export type QuestionInsight = {
+	lecture_id: string;
+	lecture_title: string;
+	question_id: string;
+	number: number;
+	prompt: string;
+	option_count: number;
+	correct_option_text: string | null;
+	attempts: number;
+	learners: number;
+	correct_learners: number;
+	first_try_correct_rate: number | null;
+	mean_score: number | null;
+	most_chosen_wrong: {
+		option_id: string;
+		text: string;
+		learners: number;
+		picks: number;
+	} | null;
+	releases: { tag: string; answers: number }[];
+	changes: AnswerChanges;
+	gradable: boolean;
+};
+
+export type StudentInsight = {
+	student_id: string;
+	name: string;
+	role: Role;
+	attempts: number;
+	questions_answered: number;
+	correct: number;
+	total_score: number;
+	last_activity: string;
+};
+
+export type Insights = {
+	graded_release: InsightsRelease;
+	include_instructors: boolean;
+	overview: {
+		learners: number;
+		questions: number;
+		answers: number;
+		mean_score: number | null;
+		average_total_score: number | null;
+		hidden_instructor_answers: number;
+	};
+	questions: QuestionInsight[];
+	removed_questions: {
+		question_id: string;
+		lecture_id: string;
+		prompt: string | null;
+		answers: number;
+		learners: number;
+	}[];
+	students: StudentInsight[];
+	releases: InsightsRelease[];
+};
+
+export type CourseSync = {
+	syncing: boolean;
+	last_sync_at: string | null;
+	sync_status: SyncStatus;
+	sync_message: string | null;
+	release: ServedRelease | null;
+};
+
+export type InsightsOptions = {
+	release: string | null;
+	includeInstructors: boolean;
+};
+
+function insightsQuery({ release, includeInstructors }: InsightsOptions) {
+	const query = new URLSearchParams();
+	if (release) query.set("release", release);
+	if (includeInstructors) query.set("include_instructors", "true");
+	const text = query.toString();
+	return text ? `?${text}` : "";
+}
+
+/** Where the CSV of every Answer, graded like the Insights shown, is downloaded from. */
+export const answersCsvUrl = (slug: string, options: InsightsOptions) =>
+	`/api/c/${encodeURIComponent(slug)}/answers.csv${insightsQuery(options)}`;
+
 export class ApiError extends Error {
 	constructor(
 		message: string,
@@ -217,4 +321,13 @@ export const api = {
 			`/api/c/${encodeURIComponent(slug)}/answers`,
 			answer,
 		),
+	insights: (slug: string, options: InsightsOptions) =>
+		request<Insights>(
+			"GET",
+			`/api/c/${encodeURIComponent(slug)}/insights${insightsQuery(options)}`,
+		),
+	syncStatus: (slug: string) =>
+		request<CourseSync>("GET", `/api/c/${encodeURIComponent(slug)}/sync`),
+	syncNow: (slug: string) =>
+		request<CourseSync>("POST", `/api/c/${encodeURIComponent(slug)}/sync`),
 };
