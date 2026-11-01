@@ -357,6 +357,20 @@ export function Tabs<T extends string>({
 	value: T;
 	onChange: (value: T) => void;
 }) {
+	const listRef = useRef<HTMLDivElement>(null);
+	// On a screen too narrow for every tab, the row scrolls; keep the selected tab in view.
+	useEffect(() => {
+		const list = listRef.current;
+		if (!list || list.scrollWidth <= list.clientWidth) return;
+		const tab = list.querySelector<HTMLElement>(`[data-tab="${value}"]`);
+		if (!tab) return;
+		const bounds = list.getBoundingClientRect();
+		const target = tab.getBoundingClientRect();
+		if (target.left < bounds.left) list.scrollLeft += target.left - bounds.left;
+		else if (target.right > bounds.right)
+			list.scrollLeft += target.right - bounds.right;
+	}, [value]);
+
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
 		if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
 		event.preventDefault();
@@ -377,6 +391,7 @@ export function Tabs<T extends string>({
 	}
 	return (
 		<div
+			ref={listRef}
 			className="tabs"
 			role="tablist"
 			aria-label={label}

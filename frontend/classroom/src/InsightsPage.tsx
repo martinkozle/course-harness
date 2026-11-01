@@ -594,7 +594,7 @@ export function InsightsPage({
 						checked={includeInstructors}
 						onChange={(event) => setIncludeInstructors(event.target.checked)}
 					/>
-					Include answers given with the Instructor link
+					Include Instructors’ own answers
 				</label>
 				<div className="insights-actions">
 					<a
@@ -653,8 +653,8 @@ export function InsightsPage({
 					</details>
 					{hidden ? (
 						<p className="meta">
-							{plural(hidden, "answer", "answers")} given with the Instructor
-							link {hidden === 1 ? "is" : "are"} left out.
+							{plural(hidden, "answer", "answers")} by Instructors{" "}
+							{hidden === 1 ? "is" : "are"} left out.
 						</p>
 					) : null}
 					<section className="insights-section" aria-labelledby="stuck-title">

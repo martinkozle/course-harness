@@ -233,6 +233,17 @@ test("an Instructor shows and copies the course's links without rotating them", 
 	await expect(confirm).toBeHidden();
 	await expect(learnerField).toHaveValue(LEARNER_LINK);
 	await expectNoAccessibilityViolations(page, "Links to this course");
+
+	// On a phone the tabs scroll instead of widening the page, with Insights in view.
+	await page.setViewportSize({ width: 375, height: 800 });
+	await page.reload();
+	await expect(learnerField).toHaveValue(LEARNER_LINK);
+	await expect(page.getByRole("tab", { name: "Insights" })).toBeInViewport();
+	const width = await page.evaluate(() => document.documentElement.scrollWidth);
+	expect(
+		width,
+		"Insights never scroll sideways on a phone",
+	).toBeLessThanOrEqual(375);
 	await context.close();
 });
 

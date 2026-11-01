@@ -489,7 +489,7 @@
 }
 
 .lecture-parts .tabs {
-	border-bottom: 0;
+	box-shadow: none;
 }
 
 .canvas-head-copy .lecture-parts .meta {

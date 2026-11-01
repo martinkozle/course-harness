@@ -4,6 +4,7 @@ import {
 	type ReactNode,
 	useCallback,
 	useEffect,
+	useId,
 	useMemo,
 	useRef,
 	useState,
@@ -165,6 +166,9 @@ function useViewAs(slug: string) {
 	return [viewAs, choose] as const;
 }
 
+const VIEW_SWITCH_DESCRIPTION =
+	"Your answers still count as an Instructor’s and stay out of Insights.";
+
 /** The Instructor | Learner switch; only shown to people the server lets in as Instructors. */
 function ViewSwitch({
 	viewAs,
@@ -173,9 +177,17 @@ function ViewSwitch({
 	viewAs: Role;
 	onChange: (role: Role) => void;
 }) {
+	const descriptionId = useId();
 	return (
-		<fieldset className="view-switch">
+		<fieldset
+			className="view-switch"
+			aria-describedby={descriptionId}
+			title={VIEW_SWITCH_DESCRIPTION}
+		>
 			<legend className="visually-hidden">Viewing as</legend>
+			<span id={descriptionId} className="visually-hidden">
+				{VIEW_SWITCH_DESCRIPTION}
+			</span>
 			<span className="view-switch-label" aria-hidden="true">
 				Viewing as
 			</span>
@@ -206,7 +218,9 @@ export function CourseShell({
 	const { course: served, error, refresh: refreshCourse } = useCourse(slug);
 	const [identity, setIdentity] = useIdentity();
 	const [editing, setEditing] = useState(false);
-	const [viewAs, setViewAs] = useViewAs(slug);
+	const [chosenView, setViewAs] = useViewAs(slug);
+	// Insights are always seen as an Instructor.
+	const viewAs: Role = view.view === "insights" ? "instructor" : chosenView;
 	const instructor = served?.role === "instructor";
 	// Viewing as a Learner shows exactly the Learner pages; the server's role is unchanged.
 	const course = useMemo(
@@ -217,13 +231,6 @@ export function CourseShell({
 		[served, instructor, viewAs],
 	);
 	const learning = useLearning(slug, course, identity?.studentId ?? null);
-
-	// Opening Insights means looking as an Instructor.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: only a change of page switches back, never the switch itself
-	useEffect(() => {
-		if (instructor && view.view === "insights" && viewAs === "learner")
-			setViewAs("instructor");
-	}, [instructor, view.view]);
 
 	function switchView(role: Role) {
 		setViewAs(role);

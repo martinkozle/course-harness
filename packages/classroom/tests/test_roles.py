@@ -79,7 +79,13 @@ def test_a_changed_admin_token_ends_instructor_access_too(
     restarted.cookies.update(admin.cookies)
 
     assert restarted.get("/api/c/causal").status_code == 401
+
+
+def test_an_administrator_session_opens_no_course_that_is_not_attached(
+    admin: TestClient, attached: None
+) -> None:
     assert admin.get("/api/c/unknown").status_code == 401
+    assert admin.get("/api/c/unknown/links").status_code == 401
 
 
 def test_an_instructor_sees_both_links_and_rotates_only_the_learner_link(

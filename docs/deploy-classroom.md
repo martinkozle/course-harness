@@ -67,7 +67,7 @@ Every variable in `.env` reaches the Classroom (`env_file`); `CONTRIBUTING.md` l
 | Variable | In production |
 | --- | --- |
 | `CLASSROOM_ADMIN_TOKEN` | Required: the Administrator token for `/admin`, at least 24 characters. Keep it in `.env`, never in a URL. |
-| `CLASSROOM_PUBLIC_URL` | Required: the `https://` address people use, such as `https://classroom.example.org`. Share Links use it, and cookies are `Secure`. |
+| `CLASSROOM_PUBLIC_URL` | Required: the `https://` address people use, such as `https://classroom.example.org`. Share Links use it, and cookies are `Secure`. Set it so the links shown on `/admin` and in Insights use the public host; without it they use whatever host the request came in on, which behind a proxy may be an internal one. |
 | `CLASSROOM_TRUSTED_PROXIES` | The address the reverse proxy connects from, as the container sees it. Compose default: `172.29.81.1`. |
 | `CLASSROOM_RENDER_SANDBOX` | `required` (compose default) or `auto`; see [LibreOffice and untrusted templates](#libreoffice-and-untrusted-templates). |
 

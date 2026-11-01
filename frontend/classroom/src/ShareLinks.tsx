@@ -11,6 +11,12 @@ export const ROLE_LABEL: Record<Role, string> = {
 
 const ROLES: Role[] = ["learner", "instructor"];
 
+const COPY_KEYS =
+	typeof navigator !== "undefined" &&
+	/Mac|iPhone|iPad/.test(navigator.userAgent)
+		? "⌘C"
+		: "Ctrl+C";
+
 function formatTime(value: string): string {
 	const date = new Date(value);
 	return Number.isNaN(date.getTime())
@@ -72,15 +78,19 @@ function ShareLinkRow({
 	const [confirming, setConfirming] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const [copied, setCopied] = useState(false);
+	// "manual" when the browser refused the clipboard and the link is selected instead.
+	const [copyState, setCopyState] = useState<"idle" | "copied" | "manual">(
+		"idle",
+	);
+	const copied = copyState === "copied";
 	const inputId = useId();
 	const label = `${ROLE_LABEL[role]} link`;
 
 	useEffect(() => {
-		if (!copied) return;
-		const timer = window.setTimeout(() => setCopied(false), 2_000);
+		if (copyState !== "copied") return;
+		const timer = window.setTimeout(() => setCopyState("idle"), 2_000);
 		return () => window.clearTimeout(timer);
-	}, [copied]);
+	}, [copyState]);
 
 	async function rotate() {
 		setBusy(true);
@@ -98,11 +108,15 @@ function ShareLinkRow({
 	async function copy(url: string) {
 		try {
 			await navigator.clipboard.writeText(url);
-			setCopied(true);
+			setCopyState("copied");
 		} catch {
 			// Without clipboard access, select the link so it can be copied by hand.
 			const input = document.getElementById(inputId);
-			if (input instanceof HTMLInputElement) input.select();
+			if (input instanceof HTMLInputElement) {
+				input.focus();
+				input.select();
+			}
+			setCopyState("manual");
 		}
 	}
 
@@ -170,8 +184,15 @@ function ShareLinkRow({
 				{link ? <span className="meta">{linkAge(link)}</span> : null}
 			</div>
 			{body}
-			<span className="visually-hidden" role="status">
-				{copied ? `${label} copied` : ""}
+			<span
+				className={copyState === "manual" ? "meta" : "visually-hidden"}
+				role="status"
+			>
+				{copyState === "copied"
+					? `${label} copied`
+					: copyState === "manual"
+						? `The ${label} is selected. Press ${COPY_KEYS} to copy it.`
+						: ""}
 			</span>
 			{confirming && link ? (
 				<ConfirmDialog
@@ -187,7 +208,7 @@ function ShareLinkRow({
 				>
 					<p>
 						The current {label} stops working, and everyone who opened it must
-						open the new one.
+						open the new one. Their progress is kept.
 					</p>
 				</ConfirmDialog>
 			) : null}
