@@ -205,6 +205,20 @@ def test_share_link_tokens_are_redacted_from_the_access_log() -> None:
     assert "/l/[redacted]?x=1" in record.getMessage()
 
 
+def test_health_checks_are_left_out_of_the_access_log() -> None:
+    record = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:5000", "GET", "/healthz", "1.1", 200),
+        None,
+    )
+
+    assert not RedactShareLinks().filter(record)
+
+
 def test_a_session_is_only_opened_while_the_link_exists(
     admin: TestClient, attached: Any, settings: ClassroomSettings
 ) -> None:

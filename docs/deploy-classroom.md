@@ -7,34 +7,37 @@ from a Course in Course Harness to a link you share.
 
 ## What runs
 
-`packages/classroom/Dockerfile` builds the image from the repository root in three stages:
+`packages/classroom/Dockerfile` builds the image from the repository root in three stages. Each
+base image is pinned by digest, with its tag in a comment:
 
-1. Bun builds the Classroom interface (`frontend/classroom`) from `bun.lock`.
-2. uv installs the Classroom and its locked dependencies from `uv.lock` into `/opt/classroom`
-   (`uv sync --frozen --no-dev --package course-harness-classroom`), then copies only
-   `course_harness/__init__.py` and `course_harness/core/` from Course Harness next to it. Course
-   Harness itself, docling and the agent stack are never installed (ADR 0017).
-3. The runtime is `python:3.14-slim` (Debian trixie) with Git, headless LibreOffice Impress and
-   metric-compatible fonts, running as the non-root user `classroom` (uid 10001). The interface
-   is at `/opt/classroom-static` (`CLASSROOM_STATIC_DIR`), and all state lives in the `/data`
-   volume (`CLASSROOM_DATA_DIR`): the SQLite store, the bare mirrors, the served Releases and
-   their rendered slide backgrounds.
+1. `oven/bun:1.3.13` builds the Classroom interface (`frontend/classroom`) from `bun.lock`.
+2. `python:3.14.6-slim-trixie` with uv 0.11.28 installs the Classroom's locked dependencies from
+   `uv.lock` into `/opt/classroom` (`uv sync --frozen --no-dev --package
+   course-harness-classroom`, dependencies before the source so they stay cached), then copies
+   only `course_harness/__init__.py` and `course_harness/core/` from Course Harness next to it.
+   Course Harness itself, docling and the agent stack are never installed (ADR 0017).
+3. The runtime is `python:3.14.6-slim-trixie` (Debian 13) with Git, headless LibreOffice Impress
+   (`libreoffice-impress-nogui`) and metric-compatible fonts, running as the non-root user
+   `classroom` (uid and gid 10001). The interface is at `/opt/classroom-static`
+   (`CLASSROOM_STATIC_DIR`), and all state lives in the `/data` volume (`CLASSROOM_DATA_DIR`): the
+   SQLite store, the bare mirrors, the served Releases and their rendered slide backgrounds.
 
 The build runs `packages/classroom/docker/check_image.py`, which fails the build if docling,
 pydantic-ai, fastmcp or any `course_harness` module outside `core` is importable, imports
 `course_harness.core` and the Classroom app, and renders one slide with LibreOffice. You can run
-it again in a running container:
+it again in a running container; it also says whether the LibreOffice sandbox is active:
 
 ```bash
 docker compose exec classroom python -I /opt/check_image.py --render
 ```
 
-The container listens on port 8000 and has a health check on `/healthz`. The image is about
-950 MB on disk (about 250 MB compressed), most of it LibreOffice.
+The container listens on port 8000 and has a health check on `/healthz` (left out of the access
+log). The image is about 950 MB on disk (about 250 MB compressed), most of it LibreOffice.
 
 ## Build and run
 
-You need Docker with Compose v2 (rootless Docker works). From a checkout of this repository:
+You need Docker with Compose 2.24 or later (rootless Docker works). From a checkout of this
+repository:
 
 ```bash
 cp .env.example .env
@@ -42,6 +45,7 @@ python3 -c 'import secrets; print(secrets.token_urlsafe(32))'   # paste as CLASS
 $EDITOR .env                                                    # also set CLASSROOM_PUBLIC_URL
 docker compose up -d --build
 docker compose ps                                               # wait for "healthy"
+docker compose logs classroom | grep LibreOffice                # the sandbox is active
 ```
 
 `compose.yaml` runs the `classroom` service with:
@@ -49,19 +53,23 @@ docker compose ps                                               # wait for "heal
 - the named volume `classroom-data` at `/data`;
 - the port bound to `127.0.0.1:8000` only (`CLASSROOM_PORT` changes the host port), so only the
   reverse proxy on the same host reaches it;
-- `restart: unless-stopped`, a read-only root filesystem with a 512 MB `tmpfs` at `/tmp` for
-  LibreOffice and Git, all capabilities dropped, `no-new-privileges`, and memory and process
-  limits.
+- its own network with the fixed subnet `172.29.81.0/24` and gateway `172.29.81.1`;
+- `restart: unless-stopped` and `init: true`, so an init process reaps LibreOffice's children;
+- a read-only root filesystem with a 512 MB `tmpfs` at `/tmp` for LibreOffice and Git, all
+  capabilities dropped, `no-new-privileges`, the seccomp profile
+  `packages/classroom/docker/seccomp-classroom.json` (see
+  [LibreOffice and untrusted templates](#libreoffice-and-untrusted-templates)), and memory and
+  process limits.
 
-The settings come from `.env` (see `.env.example`); `CONTRIBUTING.md` lists every
-`CLASSROOM_*` variable.
+Every variable in `.env` reaches the Classroom (`env_file`); `CONTRIBUTING.md` lists all
+`CLASSROOM_*` settings. These matter in production:
 
 | Variable | In production |
 | --- | --- |
 | `CLASSROOM_ADMIN_TOKEN` | Required: the Administrator token for `/admin`, at least 24 characters. Keep it in `.env`, never in a URL. |
 | `CLASSROOM_PUBLIC_URL` | Required: the `https://` address people use, such as `https://classroom.example.org`. Share Links use it, and cookies are `Secure`. |
-| `CLASSROOM_TRUSTED_PROXIES` | The address the reverse proxy connects from, as the container sees it. |
-| `CLASSROOM_RENDER_SANDBOX` | `auto` (default) or `required`; see [LibreOffice and untrusted templates](#libreoffice-and-untrusted-templates). |
+| `CLASSROOM_TRUSTED_PROXIES` | The address the reverse proxy connects from, as the container sees it. Compose default: `172.29.81.1`. |
+| `CLASSROOM_RENDER_SANDBOX` | `required` (compose default) or `auto`; see [LibreOffice and untrusted templates](#libreoffice-and-untrusted-templates). |
 
 Never set `CLASSROOM_ALLOW_LOCAL_REPOS` in production: it lets the Classroom fetch from local
 paths and private network addresses.
@@ -74,13 +82,17 @@ reads the real client address and scheme from `X-Forwarded-For` and `X-Forwarded
 from the addresses in `CLASSROOM_TRUSTED_PROXIES` (comma-separated addresses or networks). Unset,
 the headers are ignored and all Learners share one rate limit.
 
-A proxy on the host connects through the Docker bridge gateway (such as `172.18.0.1`), so the
-compose default trusts Docker's bridge networks, `172.16.0.0/12`. If your proxy runs in another
-container, set the proxy container's address instead. Only the proxy should be able to reach the
-container: keep the port bound to `127.0.0.1`, and do not attach other containers to the
-Classroom's network, because anything on a trusted address can claim any client address. To
-check, open the Classroom through the proxy and look at `docker compose logs classroom`: requests
-should show your own address, not the gateway's.
+A proxy on the host connects to the published port, and the container sees the connection come
+from the gateway of its network. `compose.yaml` pins that network to `172.29.81.0/24` with the
+gateway `172.29.81.1` and trusts only the gateway. If the subnet collides with one of your
+networks, change the subnet, the gateway and `CLASSROOM_TRUSTED_PROXIES` together. If your proxy
+runs in a container instead, attach it to the Classroom's network with a fixed address and trust
+that address.
+
+Anything that connects from a trusted address can claim any client address, so only the proxy may
+reach the container: keep the port bound to `127.0.0.1`, and attach no other containers to the
+Classroom's network. To check, open the Classroom through the proxy and look at
+`docker compose logs classroom`: requests should show your own address, not `172.29.81.1`.
 
 ## Reverse proxy
 
@@ -95,7 +107,7 @@ Attaching or syncing a course fetches the repository during the request, which c
 
 ### Caddy
 
-Caddy obtains and renews the certificate itself.
+Caddy obtains and renews the certificate itself and redirects HTTP to HTTPS.
 
 ```caddy
 classroom.example.org {
@@ -131,12 +143,13 @@ log_format classroom '$remote_addr - $remote_user [$time_local] '
 server {
     listen 80;
     server_name classroom.example.org;
+    # A Share Link opened over plain HTTP still carries its token: redact it here too.
+    access_log /var/log/nginx/classroom.access.log classroom;
     return 301 https://$host$request_uri;
 }
 
 server {
-    listen 443 ssl;
-    http2 on;
+    listen 443 ssl http2;
     server_name classroom.example.org;
 
     ssl_certificate     /etc/letsencrypt/live/classroom.example.org/fullchain.pem;
@@ -164,9 +177,11 @@ server {
 }
 ```
 
-The `classroom` log format never logs `$request` or `$request_uri`, which hold the token, and
-leaves out the `Referer` header. nginx's error log still includes the request line when a request
-fails (for example while the Classroom restarts), so restrict who can read it.
+`listen 443 ssl http2` works on every current nginx; from 1.25.1 you may write `listen 443 ssl`
+with `http2 on;` instead. The `classroom` log format never logs `$request` or `$request_uri`,
+which hold the token, and leaves out the `Referer` header. nginx's error log still includes the
+request line when a request fails (for example while the Classroom restarts), so restrict who can
+read it.
 
 ## LibreOffice and untrusted templates
 
@@ -175,29 +190,42 @@ template with LibreOffice. The template comes from a repository someone else con
 image treats the rendering as untrusted:
 
 - `/usr/local/bin/libreoffice` wraps `soffice` and runs it in a new user and network namespace
-  (`unshare --user --map-root-user --net`) that has no network interface but loopback, so a
-  template cannot fetch anything or reach the network.
-- Docker's default seccomp profile refuses unprivileged user namespaces, so with the default
-  `compose.yaml` the sandbox cannot be created. With `CLASSROOM_RENDER_SANDBOX=auto` (the
-  default) LibreOffice then runs with the container's network; with `required` it does not run
-  at all, and the Classroom shows plain slide backgrounds with the same copyable text.
-- In both cases `classroom-hardening.xcd` sets finalized LibreOffice defaults: no macros (highest
-  macro security, macro execution disabled), no active content (OLE, DDE, OLE automation), links
-  from the document blocked (`BlockUntrustedRefererLinks`), and no Java. The image has no
-  LibreOffice update checker. Each render uses a throwaway profile, runs as the unprivileged
-  `classroom` user on a read-only root filesystem with no capabilities, is limited to 30
-  seconds, after `course_harness.core` has checked the template's zip size and entry count.
+  (`unshare --user --map-root-user --net`). Its only interface is a loopback that is down, so a
+  template cannot reach the internet, the host, cloud metadata services or the Classroom itself.
+- Docker's default seccomp profile allows creating namespaces only with `CAP_SYS_ADMIN`, which the
+  container drops. `compose.yaml` therefore uses `seccomp-classroom.json`: Docker's default
+  profile plus one rule that allows `unshare` when the only namespaces it asks for are user and
+  network. Mount, PID, IPC, UTS and cgroup namespaces stay refused.
+- `CLASSROOM_RENDER_SANDBOX=required` (the compose default) never runs LibreOffice outside the
+  sandbox: where it cannot be created, the Classroom shows plain slide backgrounds with the same
+  copyable text. `auto` (the image default, for `docker run` without the profile) runs
+  LibreOffice with the container's network instead. On start, the Classroom logs which applies:
+  `LibreOffice renders templates in a sandbox without network access`, or a warning.
+- In every case `classroom-hardening.xcd` sets finalized LibreOffice defaults: no macros (highest
+  macro security, macro execution disabled), no active content (OLE, DDE, OLE automation), and
+  links from the document blocked (`BlockUntrustedRefererLinks`). The image installs no Java
+  runtime and no LibreOffice update checker. Each render uses a throwaway profile, runs as the
+  unprivileged `classroom` user on a read-only root filesystem with no capabilities, is limited
+  to 30 seconds, after `course_harness.core` has checked the template's zip size and entry
+  count.
 
-The residual risk with the default compose file: a malicious template that exploits a LibreOffice
-bug could make network requests from the container (the same network the Classroom uses to fetch
-from GitHub) and read or change what the `classroom` user can: `/data`, including the SQLite
-store with Learner answers. To close the network part, run the container where unprivileged user
-namespaces are allowed, for example with a seccomp profile derived from Docker's default that also
-permits `unshare` and `clone` with `CLONE_NEWUSER | CLONE_NEWNET` (passed with
-`security_opt: [seccomp=/path/to/profile.json]`), and set `CLASSROOM_RENDER_SANDBOX=required`, so
-rendering never falls back to running with the network. `docker compose exec classroom
-python -I /opt/check_image.py --render` then confirms the sandbox works. Attach only repositories
-from Course Authors you trust, and keep the image up to date for LibreOffice security fixes.
+`seccomp-classroom.json` is derived from the default profile of `github.com/moby/profiles/seccomp`
+v0.2.3, the version Docker Engine 29.6.0 uses, by
+`packages/classroom/docker/make_seccomp_profile.py`; its docstring shows how to regenerate it for
+a later Docker release. The sandbox can still be unavailable, for example where the host forbids
+unprivileged user namespaces (Ubuntu 24.04's AppArmor restriction, or
+`user.max_user_namespaces=0`); with `required` you then get plain backgrounds and a warning in the
+log.
+
+The residual risk: a template that exploits a LibreOffice bug runs code as the `classroom` user.
+In the sandbox it has no network, but it can read and change what that user can: `/data`,
+including the SQLite store with Learner answers. With `auto` and no sandbox it can also use the
+container's network: the internet (as the Classroom does to fetch from GitHub), the host through
+the bridge gateway `172.29.81.1` including services that listen on all host interfaces, and on a
+cloud machine the instance metadata service at `169.254.169.254`, which can hand out the
+machine's credentials. Keep `required`, block `169.254.169.254` from containers on cloud hosts
+regardless, attach only repositories from Course Authors you trust, and rebuild the image
+regularly for LibreOffice security fixes.
 
 ## Backups
 
@@ -224,9 +252,21 @@ docker run --rm -v course-harness-classroom_classroom-data:/data:ro -v "$PWD":/b
 docker compose start classroom
 ```
 
-To restore, stop the service, empty the volume, extract the archive into it (as above, with
-`tar -xzf`), make sure the files belong to uid 10001, and start it again. The backups contain
-Learner names, student IDs and answers: store them as carefully as the server.
+To restore an archive, replace the volume's contents with it while the service is stopped. The
+volume is mounted writable here, and the files are given back to uid 10001:
+
+```bash
+docker compose stop classroom
+docker run --rm -v course-harness-classroom_classroom-data:/data -v "$PWD":/backup:ro \
+  debian:trixie-slim sh -c 'find /data -mindepth 1 -delete \
+    && tar -C /data -xzf /backup/classroom-data-2026-11-01.tar.gz \
+    && chown -R 10001:10001 /data'
+docker compose start classroom
+```
+
+To restore only the store from an online copy, put it at `/data/classroom.sqlite3` the same way
+(and delete any `classroom.sqlite3-wal` and `-shm` files beside it). The backups contain Learner
+names, student IDs and answers: store them as carefully as the server.
 
 ## Upgrade
 
@@ -236,9 +276,10 @@ docker compose up -d --build
 docker image prune
 ```
 
-The Classroom migrates its SQLite store on start, so back it up first. Rebuilding also picks up
-Debian security updates for LibreOffice and Git; rebuild without the cache now and then
-(`docker compose build --pull --no-cache`) to get them.
+The Classroom migrates its SQLite store on start, so back it up first. The base images are pinned
+by digest, so a rebuild changes them only when the repository does; rebuild without the cache now
+and then (`docker compose build --no-cache`) to pick up Debian security updates for LibreOffice
+and Git.
 
 ## From Course Harness to a shared link
 

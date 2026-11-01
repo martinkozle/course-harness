@@ -1,6 +1,7 @@
 """The `course-classroom` command line. Settings come from the environment (see ``config``)."""
 
 import logging
+import os
 from typing import Annotated
 
 import typer
@@ -8,6 +9,7 @@ import uvicorn
 
 from course_harness_classroom.app import create_app
 from course_harness_classroom.config import ClassroomSettings, ConfigurationError
+from course_harness_classroom.render_sandbox import render_sandbox_report
 from course_harness_classroom.security import LOOPBACK_HOSTS
 
 cli = typer.Typer(no_args_is_help=True, help="Course Harness Classroom.")
@@ -41,6 +43,10 @@ def serve(
         logging.getLogger(__name__).warning(
             "CLASSROOM_ADMIN_TOKEN is not set, so /admin cannot be used"
         )
+    sandbox = render_sandbox_report(os.environ)
+    if sandbox is not None:
+        active, message = sandbox
+        logging.getLogger(__name__).log(logging.INFO if active else logging.WARNING, message)
     uvicorn.run(
         create_app(settings),
         host=host,

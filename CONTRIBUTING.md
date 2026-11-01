@@ -26,7 +26,7 @@ The repository is a uv workspace (one root `uv.lock`) and a Bun workspace (one r
 | `frontend/harness` | The Course Harness interface, built into `packages/harness/src/course_harness/static` |
 | `frontend/classroom` | The Classroom interface, built into `frontend/classroom/dist` |
 | `frontend/ui` | `@course-harness/ui`, code shared by both interfaces |
-| `tests/e2e` | The Playwright smoke journey, including the Classroom Learner journey |
+| `tests/e2e` | The Playwright smoke journey, including the Classroom Learner and Administrator journeys |
 
 The root `pyproject.toml` holds the workspace, the development dependencies, and the Ruff, ty, and
 pytest settings. `packages/harness` links `README.md`, `LICENSE`, and `uv.lock` from the root; a
@@ -81,7 +81,7 @@ Classroom reads its settings from the environment:
 | `CLASSROOM_MAX_MIRROR_BYTES` | Largest a course's mirror may grow on disk | `1000000000` |
 | `CLASSROOM_STATIC_DIR` | The built Classroom interface | `frontend/classroom/dist` |
 | `CLASSROOM_ALLOW_LOCAL_REPOS` | `1` also accepts local paths, `file://`, `http://` and private hosts; development only | off |
-| `CLASSROOM_RENDER_SANDBOX` | Docker image only: `required` never runs LibreOffice without its network-less sandbox | `auto` |
+| `CLASSROOM_RENDER_SANDBOX` | Docker image only: `required` never runs LibreOffice outside its network-less sandbox (slides get plain backgrounds); `auto` falls back to running it with network access | `auto`; `required` in `compose.yaml` |
 
 ```bash
 bun run build
@@ -97,8 +97,8 @@ addresses.
 
 The production image is `packages/classroom/Dockerfile` (build context: the repository root),
 run by the root `compose.yaml`; [docs/deploy-classroom.md](docs/deploy-classroom.md) covers
-building, the reverse proxy, the LibreOffice sandbox (`CLASSROOM_RENDER_SANDBOX`), backups and
-upgrades. The image build fails unless only `course_harness/__init__.py` and
+building, the reverse proxy, the LibreOffice sandbox (`CLASSROOM_RENDER_SANDBOX` and
+`packages/classroom/docker/seccomp-classroom.json`), backups and upgrades. The image build fails unless only `course_harness/__init__.py` and
 `course_harness/core/` of Course Harness ship (`packages/classroom/docker/check_image.py`).
 
 For frontend hot reload, run the API and Vite side by side; Vite serves `http://127.0.0.1:5173`

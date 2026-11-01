@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib
 import importlib.metadata
 import importlib.util
+import os
 import pkgutil
 import sys
 import tempfile
@@ -79,6 +80,11 @@ def check_render() -> list[str]:
 def main() -> int:
     problems = check_import_boundary()
     if "--render" in sys.argv[1:]:
+        from course_harness_classroom.render_sandbox import render_sandbox_report
+
+        sandbox = render_sandbox_report(os.environ)
+        if sandbox is not None:
+            print(f"Render sandbox {'active' if sandbox[0] else 'not active'}: {sandbox[1]}")
         problems += check_render()
     for problem in problems:
         print(f"Classroom image check failed: {problem}", file=sys.stderr)

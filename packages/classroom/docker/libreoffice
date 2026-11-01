@@ -2,11 +2,12 @@
 # LibreOffice for the Classroom image, which renders untrusted Course templates at sync time.
 #
 # `course_harness.core.slide_preview` runs the first `libreoffice` on PATH, which is this script.
-# It runs soffice in a new user and network namespace with no network interfaces, so a template
-# cannot reach the network. Docker's default seccomp profile refuses unprivileged namespaces;
-# then soffice runs with the network (CLASSROOM_RENDER_SANDBOX=auto, the default) or not at all
-# (CLASSROOM_RENDER_SANDBOX=required, so the Classroom falls back to plain backgrounds). Either
-# way classroom-hardening.xcd turns off macros, update checks and remote resources.
+# It runs soffice in a new user and network namespace whose only interface is a loopback that is
+# down, so a template cannot reach any network, the host or the Classroom. Docker's default
+# seccomp profile refuses unprivileged namespaces (compose.yaml uses seccomp-classroom.json,
+# which allows exactly this one); then soffice runs with the network
+# (CLASSROOM_RENDER_SANDBOX=auto) or not at all (required, so the Classroom shows plain
+# backgrounds). Either way classroom-hardening.xcd turns off macros, active content and links.
 set -eu
 
 soffice=/usr/lib/libreoffice/program/soffice

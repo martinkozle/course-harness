@@ -30,5 +30,13 @@ export default defineConfig({
 			reuseExistingServer: false,
 			timeout: 120_000,
 		},
+		{
+			// An empty Classroom with an Administrator token, for classroom-admin.spec.ts.
+			command: "uv run python tests/e2e/run_classroom_server.py --admin",
+			url: "http://127.0.0.1:18767/healthz",
+			env: { ...process.env, UV_CACHE_DIR: ".cache/uv" },
+			reuseExistingServer: false,
+			timeout: 120_000,
+		},
 	],
 });

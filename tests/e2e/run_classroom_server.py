@@ -1,11 +1,17 @@
-"""A Classroom serving one published fixture Course, for the Playwright Learner journey.
+"""A Classroom serving one published fixture Course, for the Playwright Classroom journeys.
 
 The Course is authored and released with Course Harness's own services and pushed to a local
-bare remote, as a Course Author would; the Classroom attaches that remote, syncs it, and gets a
-Learner Share Link with a fixed token so the journey can open it.
+bare remote, as a Course Author would. By default the Classroom attaches that remote, syncs it,
+and gets a Learner Share Link with a fixed token so the Learner journey can open it.
+
+With ``--admin`` the Classroom starts with no courses and an Administrator token instead, for the
+Administrator journey; the remote is published to a fixed folder (``ADMIN_FIXTURE_DIR``) so the
+journey can attach it by path.
 """
 
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -41,6 +47,10 @@ from course_harness_classroom.config import ClassroomSettings
 from course_harness_classroom.security import token_hash
 
 PORT = 18766  # playwright.config.ts and classroom-learner.spec.ts use this port
+ADMIN_PORT = 18767  # playwright.config.ts and classroom-admin.spec.ts use this port
+ADMIN_TOKEN = "e2e-administrator-token-0123456789abcdef"
+# classroom-admin.spec.ts attaches `<this>/author/remote.git`.
+ADMIN_FIXTURE_DIR = Path(__file__).resolve().parents[2] / ".cache" / "classroom-e2e-admin"
 LEARNER_TOKEN = "e2e-learner-share-link-token-0123456789abcdef"
 SOURCE_ID = "source-aaaaaaaaaaaa"
 OTHER_SOURCE_ID = "source-bbbbbbbbbbbb"
@@ -285,7 +295,30 @@ def publish_fixture_course(root: Path) -> Path:
     return remote
 
 
+def serve_for_administrator() -> None:
+    """An empty Classroom with an Administrator token that accepts local repositories."""
+    shutil.rmtree(ADMIN_FIXTURE_DIR, ignore_errors=True)
+    try:
+        publish_fixture_course(ADMIN_FIXTURE_DIR / "author")
+        settings = ClassroomSettings(
+            data_dir=ADMIN_FIXTURE_DIR / "classroom",
+            admin_token=ADMIN_TOKEN,
+            public_url=f"http://127.0.0.1:{ADMIN_PORT}",
+            fetch_interval_seconds=0,
+            fetch_timeout_seconds=60,
+            allow_local_repos=True,
+            static_dir=None,
+        )
+        app = create_app(settings, periodic_sync=False)
+        uvicorn.run(app, host="127.0.0.1", port=ADMIN_PORT, log_level="warning")
+    finally:
+        shutil.rmtree(ADMIN_FIXTURE_DIR, ignore_errors=True)
+
+
 def main() -> None:
+    if "--admin" in sys.argv[1:]:
+        serve_for_administrator()
+        return
     with TemporaryDirectory(prefix="classroom-e2e-") as directory:
         root = Path(directory)
         remote = publish_fixture_course(root / "author")

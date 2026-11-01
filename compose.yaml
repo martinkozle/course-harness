@@ -11,19 +11,27 @@ services:
       dockerfile: packages/classroom/Dockerfile
     image: course-harness-classroom:local
     restart: unless-stopped
+    init: true
+    # Every setting in .env reaches the Classroom (see CONTRIBUTING.md for all CLASSROOM_*
+    # variables); `environment` below adds the required ones and the deployment's defaults.
+    env_file:
+      - path: .env
+        required: false
     environment:
       CLASSROOM_ADMIN_TOKEN: ${CLASSROOM_ADMIN_TOKEN:?Set CLASSROOM_ADMIN_TOKEN in .env}
       CLASSROOM_PUBLIC_URL: ${CLASSROOM_PUBLIC_URL:?Set CLASSROOM_PUBLIC_URL in .env}
-      # The proxy's address as the Classroom sees it. A proxy on the host reaches the container
-      # through the Docker bridge gateway, so the default trusts the bridge networks. Without it,
-      # every Learner shares the proxy's address for rate limits.
-      CLASSROOM_TRUSTED_PROXIES: ${CLASSROOM_TRUSTED_PROXIES:-172.16.0.0/12}
-      CLASSROOM_FETCH_INTERVAL: ${CLASSROOM_FETCH_INTERVAL:-900}
-      # `required` refuses to run LibreOffice when no network-less sandbox can be created.
-      CLASSROOM_RENDER_SANDBOX: ${CLASSROOM_RENDER_SANDBOX:-auto}
+      # A reverse proxy on the host reaches the container through the gateway of the network
+      # below, so only that address may set X-Forwarded-For. Without it, every Learner shares
+      # the proxy's address for rate limits.
+      CLASSROOM_TRUSTED_PROXIES: ${CLASSROOM_TRUSTED_PROXIES:-172.29.81.1}
+      # LibreOffice renders untrusted templates only in its network-less sandbox; where it cannot
+      # be created, slides get plain backgrounds instead.
+      CLASSROOM_RENDER_SANDBOX: ${CLASSROOM_RENDER_SANDBOX:-required}
     ports:
       # Only the host's reverse proxy reaches the Classroom; it terminates TLS.
       - "127.0.0.1:${CLASSROOM_PORT:-8000}:8000"
+    networks:
+      - classroom
     volumes:
       - classroom-data:/data
     read_only: true
@@ -34,8 +42,20 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+      # Docker's default seccomp profile plus unshare of a user and network namespace, for the
+      # LibreOffice sandbox (packages/classroom/docker/make_seccomp_profile.py).
+      - seccomp=packages/classroom/docker/seccomp-classroom.json
     pids_limit: 512
     mem_limit: 2g
+
+networks:
+  classroom:
+    ipam:
+      config:
+        # A fixed subnet, so the gateway the host's proxy connects from is a known address.
+        # Change both if it collides with a network of yours.
+        - subnet: 172.29.81.0/24
+          gateway: 172.29.81.1
 
 volumes:
   classroom-data:

@@ -163,11 +163,16 @@ _SHARE_LINK_PATH = re.compile(r"^(/[li]/)[^?\s]*")
 
 
 class RedactShareLinks(logging.Filter):
-    """Keep Share Link tokens out of the access log: ``/l/<token>`` is logged as ``/l/…``."""
+    """Keep Share Link tokens out of the access log: ``/l/<token>`` is logged as ``/l/…``.
+
+    Health checks (``GET /healthz``, every 30 seconds from the container) are left out.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.args, tuple) and len(record.args) >= 3:
             arguments = list(record.args)
+            if arguments[2] == "/healthz":
+                return False
             if isinstance(arguments[2], str):
                 arguments[2] = _SHARE_LINK_PATH.sub(r"\1[redacted]", arguments[2])
                 record.args = tuple(arguments)
