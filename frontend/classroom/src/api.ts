@@ -138,6 +138,8 @@ export type InsightsRelease = {
 	tag: string;
 	name: string | null;
 	published_at: string | null;
+	/** What changed since the previous Release, as the Course Author wrote it. */
+	notes?: string | null;
 	answers: number;
 	learners: number;
 	first_answer_at: string | null;

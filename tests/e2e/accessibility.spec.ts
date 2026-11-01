@@ -284,11 +284,16 @@ test("major Course Author journey surfaces meet automated and keyboard accessibi
 	await expect(page.getByText("Reading history…")).toHaveCount(0);
 	await expectNoAccessibilityViolations(page, "History");
 
-	await page.getByRole("button", { name: "Publish release" }).first().click();
-	await expect(
-		page.getByRole("heading", { name: "Publish a Course Release" }),
-	).toBeVisible();
+	await page
+		.getByRole("button", { name: "Publish", exact: true })
+		.first()
+		.click();
+	const publish = page.getByRole("dialog", { name: "Publish a release" });
+	await expect(publish.getByLabel("Name")).toBeVisible();
+	await expect(publish.getByText("Checking the release…")).toHaveCount(0);
 	await expectNoAccessibilityViolations(page, "Release preparation");
+	await page.keyboard.press("Escape");
+	await expect(publish).toBeHidden();
 
 	// The Course Plan canvas and its details dialog.
 	await navigator.getByRole("button", { name: "Course Plan" }).click();

@@ -23,6 +23,7 @@ import {
 	X,
 } from "lucide-react";
 import {
+	type ReactNode,
 	type RefObject,
 	useCallback,
 	useEffect,
@@ -62,6 +63,8 @@ type Props = {
 	library: Library;
 	presentations: PresentationSummary[];
 	lectureNumber: Map<string, number>;
+	/** Publish and Sync, shown here while no canvas is open. */
+	headerActions?: ReactNode;
 	canvasOpen: boolean;
 	focusContext: AgentContext | null;
 	composerRef: RefObject<HTMLTextAreaElement | null>;
@@ -91,6 +94,7 @@ export function ConversationPane({
 	library,
 	presentations,
 	lectureNumber,
+	headerActions,
 	canvasOpen,
 	focusContext,
 	composerRef,
@@ -182,6 +186,7 @@ export function ConversationPane({
 						{agent.status === "stopping" ? "Stopping…" : "Working…"}
 					</span>
 				) : null}
+				{headerActions}
 				<div className="conversation-bar-actions">
 					{conversation ? (
 						<Menu

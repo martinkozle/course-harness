@@ -67,18 +67,23 @@ network you trust.
   to the Course can be cited.
 - **Connectors**: web search and page reading through remote MCP servers. Exa is set up by default
   and works without a key.
-- **History**: save and restore Course Revisions, publish Releases, and export Lectures to
-  PowerPoint.
-- **Push**: send the Course, its Releases, and their PowerPoint files to a Git remote you choose,
-  using your own Git sign-in. Nothing is pushed until you choose **Push**. From a terminal in the
-  Course folder, it is close to:
+- **Publish**: name a checked Release in one dialog. Your edits are saved as a Course Revision
+  on their own first, and the header shows how many changes the next Release would include.
+- **Sync**: send the Course, its Releases, and their PowerPoint files to a GitHub repository (or
+  any Git remote) and receive changes made elsewhere, using your own Git sign-in. With the GitHub
+  CLI signed in, Course Harness can create the repository for you. Nothing is sent until you choose
+  **Sync** or **Share** when you publish. From a terminal in the Course folder, sending is close
+  to:
 
   ```bash
   git push origin main 'refs/tags/course-release/*' 'refs/course-harness/release-files/*'
   ```
 
-  Each Release's files travel in their own ref, never in the Course branch. Pushing
-  from the app also records those refs for Releases published by earlier versions.
+  Each Release's files travel in their own ref, never in the Course branch. Sending
+  from the app also records those refs for Releases published by earlier versions. Sync only
+  receives changes when your Course can simply move forward to them; otherwise it explains why
+  and changes nothing.
+- **History**: see and restore earlier Course Revisions and Releases.
 
 <table>
   <tr>

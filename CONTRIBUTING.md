@@ -147,15 +147,21 @@ Release.
 
 ## Course Workspace remotes
 
-A Course Workspace's remote is the ordinary Git remote `origin`; **Push** in the Release canvas
-runs the system `git` with your own configuration and credentials, with hooks disabled. From the
-Course folder, it is close to:
+A Course Workspace's remote is the ordinary Git remote `origin`, set in Settings > Sharing (or
+created with your own `gh`). **Sync** and **Share** in the Publish dialog run the system `git` with
+your own configuration and credentials, with hooks disabled. Sending is close to:
 
 ```bash
 git push origin main 'refs/tags/course-release/*' 'refs/course-harness/release-files/*'
 ```
 
-Push first records missing Release files refs from local Release data, and leaves out (and
+Sync first saves uncommitted edits as an automatic Course Revision and fast-forwards `main` to
+the remote's when that is possible (it never merges). The Sync button's counts compare local refs
+with the last background check (`git ls-remote` and a fetch of only `main`), kept in
+`.git/course-harness-remote-check.json`. For development, `COURSE_HARNESS_ALLOW_LOCAL_REMOTES=1`
+accepts an absolute local path as the remote; the Playwright smoke server sets it.
+
+Sending first records missing Release files refs from local Release data, and leaves out (and
 reports) a files ref that does not match its manifest and cannot be corrected locally.
 
 `refs/course-harness/release-files/<slug>` names a commit that holds exactly a Release's

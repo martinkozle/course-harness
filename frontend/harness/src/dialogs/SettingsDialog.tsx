@@ -7,6 +7,7 @@ import {
 	FolderOpen,
 	LayoutTemplate,
 	Plug,
+	Share2,
 	Stethoscope,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
@@ -25,6 +26,7 @@ import { ModelSettings } from "../ProviderSetup";
 import { RuntimeDiagnosticsPanel } from "../RuntimeDiagnostics";
 import { TemplateSettings } from "../TemplatesView";
 import type { Library } from "../useLibrary";
+import { SharingSettings } from "./RemoteSetup";
 
 export type SettingsSection =
 	| "models"
@@ -32,6 +34,7 @@ export type SettingsSection =
 	| "connectors"
 	| "templates"
 	| "workspace"
+	| "sharing"
 	| "diagnostics";
 
 const sections: { id: SettingsSection; label: string; icon: ReactNode }[] = [
@@ -52,6 +55,7 @@ const sections: { id: SettingsSection; label: string; icon: ReactNode }[] = [
 		icon: <LayoutTemplate aria-hidden="true" />,
 	},
 	{ id: "workspace", label: "Workspace", icon: <Folder aria-hidden="true" /> },
+	{ id: "sharing", label: "Sharing", icon: <Share2 aria-hidden="true" /> },
 	{
 		id: "diagnostics",
 		label: "Diagnostics",
@@ -68,6 +72,7 @@ export function SettingsDialog({
 	templates,
 	onTemplatesChange,
 	library,
+	onSharingChange,
 	onClose,
 }: {
 	section: SettingsSection;
@@ -78,6 +83,7 @@ export function SettingsDialog({
 	templates: TemplateProfileSummary[];
 	onTemplatesChange: (templates: TemplateProfileSummary[]) => void;
 	library: Library;
+	onSharingChange?: () => void;
 	onClose: () => void;
 }) {
 	const current = sections.find((item) => item.id === section) ?? sections[0];
@@ -136,6 +142,8 @@ export function SettingsDialog({
 						/>
 					) : section === "workspace" ? (
 						<WorkspaceDetails workspace={workspace} />
+					) : section === "sharing" ? (
+						<SharingSettings onChange={onSharingChange} />
 					) : (
 						<Diagnostics library={library} />
 					)}

@@ -148,6 +148,7 @@ def test_insights_show_where_learners_get_stuck(classroom: dict[str, Any]) -> No
             "tag": FALL,
             "name": "Fall 2026",
             "published_at": insights["releases"][0]["published_at"],
+            "notes": None,
             "answers": 4,
             "learners": 3,
             "first_answer_at": insights["releases"][0]["first_answer_at"],

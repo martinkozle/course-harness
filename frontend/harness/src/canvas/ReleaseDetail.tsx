@@ -122,6 +122,13 @@ export function ReleaseDetail({
 				planned
 			</p>
 
+			{release.notes ? (
+				<div className="release-detail-block">
+					<h4>What changed</h4>
+					<p className="release-notes">{release.notes}</p>
+				</div>
+			) : null}
+
 			<div className="release-detail-block">
 				<h4>Files</h4>
 				{release.artifacts.length === 0 ? (
@@ -181,7 +188,12 @@ export function ReleaseDetail({
 					<ul className="release-record">
 						{release.validation.findings.map((finding) => (
 							<li className={`is-${finding.severity}`} key={finding.id}>
-								<p className="meta">{findingScope(finding, course)}</p>
+								<p className="meta">
+									{finding.severity === "info"
+										? "Note · did not block publishing · "
+										: ""}
+									{findingScope(finding, course)}
+								</p>
 								<p>{finding.message}</p>
 								{finding.waived ? (
 									<p className="release-waiver-record">

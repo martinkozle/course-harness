@@ -170,6 +170,14 @@ from course_harness.document_processing_settings import (
     ProcessorKeyView,
 )
 from course_harness.document_processors import DocumentProcessors, ProcessorView
+from course_harness.github_repositories import (
+    GitHubCliError,
+    GitHubCliStatus,
+    GitHubRepositoryRequest,
+    create_github_repository,
+    github_cli_status,
+    suggested_repository_name,
+)
 from course_harness.hosted_processors import installed_processors
 from course_harness.paper_search_keys import (
     PaperSearchKeyError,
@@ -241,6 +249,7 @@ from course_harness.workspace_history import (
     CourseRevision,
     CurrentState,
     DriftAcceptRequest,
+    FastForwardRefused,
     ReconciliationApplyRequest,
     RevisionCreateRequest,
     SelectiveRevertRequest,
@@ -254,6 +263,7 @@ from course_harness.workspace_history import (
     capture_reconciliation_context,
     checkpoint_run_mutation,
     create_revision,
+    fast_forward_main,
     finish_run_boundary,
     list_revisions,
     mark_run_mutation,
@@ -266,14 +276,25 @@ from course_harness.workspace_history import (
     revert_current_path,
 )
 from course_harness.workspace_remote import (
+    BRANCH,
     InvalidRemoteUrl,
     PushResult,
     RemoteSettings,
     RemoteUpdateRequest,
     WorkspaceRemoteError,
+    check_remote,
     push_workspace,
     read_remote,
+    remote_label,
     set_remote,
+)
+from course_harness.workspace_sync import (
+    AutomaticRevisionBlocked,
+    AutomaticRevisionResult,
+    SharingStatus,
+    SyncResult,
+    create_automatic_revision,
+    sharing_status,
 )
 from course_harness.workspaces import (
     WorkspaceSelectionError,
@@ -545,6 +566,10 @@ class DocumentProcessingView(BaseModel):
     keys: list[ProcessorKeyView]
 
 
+class GitHubSetupResponse(GitHubCliStatus):
+    suggested_name: str
+
+
 def create_app(
     workspace: Path | None = None,
     *,
@@ -785,6 +810,7 @@ def create_app(
     reconciliation_agent = create_reconciliation_agent()
     mutation_locks: dict[Path, asyncio.Lock] = {}
     push_locks: dict[Path, asyncio.Lock] = {}
+    check_locks: dict[Path, asyncio.Lock] = {}
     cancel_events: dict[Path, asyncio.Event] = {}
     recovered_workspaces: set[Path] = set()
 
@@ -1297,10 +1323,190 @@ def create_app(
                 except (WorkspaceRemoteError, WorkspaceHistoryError, ReleaseError) as error:
                     raise remote_http_error(error) from error
             try:
-                return await asyncio.to_thread(
-                    push_workspace, active, remote=remote, backfill=backfill
+                result = await asyncio.to_thread(
+                    push_workspace, active, remote=remote_label(remote), backfill=backfill
                 )
+                if result.ok:
+                    # Keep Sync's counts current; a failed check only shows in its tooltip.
+                    await asyncio.to_thread(check_remote, active)
+                return result
             except WorkspaceRemoteError as error:
+                raise remote_http_error(error) from error
+
+    def sharing_http_error(error: Exception) -> HTTPException:
+        if isinstance(error, ReleaseError):
+            return release_http_error(error)
+        return remote_http_error(error)
+
+    async def read_sharing_status(active: Path) -> SharingStatus:
+        try:
+            return await asyncio.to_thread(sharing_status, active)
+        except (WorkspaceRemoteError, WorkspaceHistoryError, ReleaseError) as error:
+            raise sharing_http_error(error) from error
+
+    @app.get("/api/workspace/sharing", response_model=SharingStatus)
+    async def get_sharing_status() -> SharingStatus:
+        """Changes since the newest Release and against the remote's last check; no network."""
+        return await read_sharing_status(require_workspace())
+
+    @app.post("/api/workspace/remote/check", response_model=SharingStatus)
+    async def check_workspace_remote() -> SharingStatus:
+        """Ask the remote what it has, in the background; failures are reported in the status."""
+        active = require_bound_workspace()
+        # Checks have their own lock, so a background check never refuses a push or Sync;
+        # while one of those runs, it checks the remote itself.
+        lock = check_locks.setdefault(active.resolve(), asyncio.Lock())
+        pushing = push_locks.setdefault(active.resolve(), asyncio.Lock()).locked()
+        if not lock.locked() and not pushing:
+            async with lock:
+                try:
+                    if (await asyncio.to_thread(read_remote, active)).url is not None:
+                        await asyncio.to_thread(check_remote, active)
+                except (WorkspaceRemoteError, WorkspaceHistoryError) as error:
+                    raise remote_http_error(error) from error
+        return await read_sharing_status(active)
+
+    @app.post("/api/workspace/revisions/automatic", response_model=AutomaticRevisionResult)
+    async def create_automatic_workspace_revision() -> AutomaticRevisionResult:
+        """Save uncommitted edits as a Course Revision named after what changed."""
+        active = require_workspace()
+        async with exclusive_mutation(active):
+            try:
+                revision = await asyncio.to_thread(create_automatic_revision, active)
+            except AutomaticRevisionBlocked as error:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "message": str(error),
+                        "code": "current-state-blocked",
+                        "findings": error.findings,
+                    },
+                ) from error
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            except WorkspaceHistoryNotInitializedError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            except WorkspaceHistoryError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
+        return AutomaticRevisionResult(revision=revision)
+
+    @app.post("/api/workspace/sync", response_model=SyncResult)
+    async def sync_workspace() -> SyncResult:
+        """Save edits as a Revision, receive the remote's new Revisions if that is a simple
+        fast-forward, then send everything the remote lacks."""
+        active = require_bound_workspace()
+        lock = push_locks.setdefault(active.resolve(), asyncio.Lock())
+        if lock.locked():
+            raise HTTPException(status_code=409, detail="Sync is already running.")
+        async with lock:
+            async with exclusive_mutation(active):
+                try:
+                    url = (await asyncio.to_thread(read_remote, active)).url
+                    if url is None:
+                        raise WorkspaceRemoteError("Set up sharing before you sync.")
+                    revision = await asyncio.to_thread(create_automatic_revision, active)
+                except AutomaticRevisionBlocked as error:
+                    return SyncResult(
+                        ok=False,
+                        message=str(error),
+                        findings=error.findings,
+                        status=await read_sharing_status(active),
+                    )
+                except ValueError as error:
+                    raise HTTPException(status_code=422, detail=str(error)) from error
+                except (WorkspaceRemoteError, WorkspaceHistoryError) as error:
+                    raise remote_http_error(error) from error
+            label = remote_label(url)
+            try:
+                check = await asyncio.to_thread(check_remote, active)
+            except (WorkspaceRemoteError, WorkspaceHistoryError) as error:
+                raise remote_http_error(error) from error
+            if check.error is not None:
+                return SyncResult(
+                    ok=False,
+                    message=f"Course Harness couldn't reach {label}.",
+                    detail=check.error,
+                    revision=revision,
+                    status=await read_sharing_status(active),
+                )
+            received = 0
+            remote_main = check.refs.get(f"refs/heads/{BRANCH}")
+            async with exclusive_mutation(active):
+                try:
+                    if remote_main is not None:
+                        received = await asyncio.to_thread(fast_forward_main, active, remote_main)
+                    backfill = await asyncio.to_thread(
+                        backfill_release_files, workspace=active, release_data_root=release_data
+                    )
+                except FastForwardRefused as error:
+                    return SyncResult(
+                        ok=False,
+                        message=(
+                            f"{error} Course Harness can't combine them, so nothing was sent "
+                            "or received. Your work here is saved."
+                        ),
+                        revision=revision,
+                        status=await read_sharing_status(active),
+                    )
+                except (WorkspaceRemoteError, WorkspaceHistoryError, ReleaseError) as error:
+                    raise sharing_http_error(error) from error
+            try:
+                pushed = await asyncio.to_thread(
+                    push_workspace, active, remote=label, backfill=backfill
+                )
+                if pushed.ok:
+                    await asyncio.to_thread(check_remote, active)
+            except WorkspaceRemoteError as error:
+                raise remote_http_error(error) from error
+            status = await read_sharing_status(active)
+            if not pushed.ok:
+                return SyncResult(
+                    ok=False,
+                    message=f"Course Harness couldn't send your changes to {label}.",
+                    detail=pushed.message,
+                    revision=revision,
+                    received=received,
+                    status=status,
+                )
+            return SyncResult(
+                ok=True,
+                message=f"In sync with {label}.",
+                revision=revision,
+                received=received,
+                status=status,
+            )
+
+    @app.get("/api/workspace/remote/github", response_model=GitHubSetupResponse)
+    async def get_github_setup() -> GitHubSetupResponse:
+        active = require_bound_workspace()
+        status = await asyncio.to_thread(github_cli_status)
+        try:
+            plan = read_course_plan(active)
+        except InvalidCoursePlan:
+            plan = None
+        return GitHubSetupResponse(
+            **status.model_dump(),
+            suggested_name=suggested_repository_name(plan.title if plan else None),
+        )
+
+    @app.post("/api/workspace/remote/github", response_model=RemoteSettings, status_code=201)
+    async def create_github_remote(request: GitHubRepositoryRequest) -> RemoteSettings:
+        """Create an empty GitHub repository with the Course Author's ``gh`` and use it."""
+        active = require_bound_workspace()
+        try:
+            plan = read_course_plan(active)
+        except InvalidCoursePlan:
+            plan = None
+        try:
+            url = await asyncio.to_thread(
+                create_github_repository, request, description=plan.title if plan else ""
+            )
+        except GitHubCliError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        async with exclusive_mutation(active):
+            try:
+                return await asyncio.to_thread(set_remote, active, url)
+            except (WorkspaceRemoteError, WorkspaceHistoryError) as error:
                 raise remote_http_error(error) from error
 
     @app.post("/api/workspace/revisions", response_model=CourseRevision, status_code=201)

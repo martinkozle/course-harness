@@ -39,6 +39,8 @@ class ReleaseQuizzes:
     published_at: str
     # Keyed by (Lecture ID, Question ID), like Answers and progress.
     questions: dict[QuestionKey, ReleaseQuestion]
+    # What changed since the previous Release, as the Course Author wrote it.
+    notes: str | None = None
 
 
 # Responses
@@ -116,6 +118,7 @@ class ReleaseInsight(BaseModel):
     tag: str
     name: str | None
     published_at: str | None
+    notes: str | None = None
     answers: int
     learners: int
     first_answer_at: str | None
@@ -238,6 +241,7 @@ def _release_insight(
         tag=tag,
         name=release.name if release else None,
         published_at=release.published_at if release else None,
+        notes=release.notes if release else None,
         answers=len(answers),
         learners=len({student_key(answer) for answer in answers}),
         first_answer_at=min(times) if times else None,

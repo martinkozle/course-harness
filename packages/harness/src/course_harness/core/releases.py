@@ -61,6 +61,9 @@ SLUG_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\Z")
 OID_PATTERN = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 
 
+MAX_RELEASE_NOTES_CHARACTERS = 4_000
+
+
 class ReleaseError(RuntimeError):
     """A Course Release cannot be published or inspected safely."""
 
@@ -134,6 +137,11 @@ class CourseRelease(BaseModel):
     # Omitted when empty so manifests of Releases published before Quizzes stay exact.
     quizzes: list[ReleaseQuiz] = Field(
         default_factory=list, max_length=1_000, exclude_if=lambda value: not value
+    )
+    # What changed since the previous Release, in the Course Author's words. Omitted when
+    # absent so manifests of Releases published before notes stay exact.
+    notes: str | None = Field(
+        default=None, max_length=MAX_RELEASE_NOTES_CHARACTERS, exclude_if=lambda value: not value
     )
 
 

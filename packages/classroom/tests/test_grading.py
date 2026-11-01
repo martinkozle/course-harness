@@ -330,3 +330,20 @@ def test_the_average_score_counts_unanswered_questions_as_zero() -> None:
     assert overview.mean_answered_score == 1
     assert overview.average_total_score == 1
     assert overview.average_score == 0.5
+
+
+def test_release_notes_reach_the_insights() -> None:
+    noted = replace(FIXED, notes="Fixed the answer key of the first question")
+    insights = build_insights(
+        SAMPLE,
+        noted,
+        {OLD.tag: OLD, noted.tag: noted},
+        served_tag=noted.tag,
+        include_instructors=False,
+    )
+
+    assert insights.graded_release.notes == "Fixed the answer key of the first question"
+    assert {item.tag: item.notes for item in insights.releases} == {
+        FIXED.tag: "Fixed the answer key of the first question",
+        OLD.tag: None,
+    }

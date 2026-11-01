@@ -279,3 +279,17 @@
 	margin-top: 8px;
 	color: var(--ink-muted);
 }
+
+.release-notes {
+	margin-bottom: 16px;
+}
+
+.release-notes h3 {
+	font-size: 0.9375rem;
+	font-weight: 650;
+}
+
+.release-notes p {
+	white-space: pre-line;
+	color: var(--ink-muted);
+}

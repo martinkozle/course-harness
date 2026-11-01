@@ -406,7 +406,9 @@ function ReleasesTable({ insights }: { insights: Insights }) {
 					{insights.releases.map((release) => (
 						<tr key={release.tag}>
 							<th scope="row">
-								{releaseLabel(release)}
+								<span title={release.notes ?? undefined}>
+									{releaseLabel(release)}
+								</span>
 								<span className="meta">
 									{[
 										release.served ? "served now" : null,
@@ -552,6 +554,15 @@ export function InsightsPage({
 				<p className="meta">Loading…</p>
 			) : (
 				<>
+					{insights.graded_release.notes ? (
+						<section
+							className="release-notes"
+							aria-label={`What changed in ${releaseLabel(insights.graded_release)}`}
+						>
+							<h3>What changed in {releaseLabel(insights.graded_release)}</h3>
+							<p>{insights.graded_release.notes}</p>
+						</section>
+					) : null}
 					<Overview insights={insights} />
 					<details className="score-help">
 						<summary>How scores work</summary>

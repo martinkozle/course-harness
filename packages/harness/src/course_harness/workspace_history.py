@@ -2220,3 +2220,80 @@ def restore_revision(workspace: Path, revision_id: str) -> CurrentState:
     except Exception:
         _rollback_transaction(workspace, snapshot, expected_current=revision_blobs)
         raise
+
+
+class FastForwardRefused(ValueError):
+    """Course history cannot simply move forward to the other commit; nothing was changed."""
+
+
+@_serialized
+def fast_forward_main(workspace: Path, target: str) -> int:
+    """Move ``main`` and the canonical files forward to ``target``, a descendant of ``main``.
+
+    Current State must be clean and provenance-clean, so no uncommitted work can be lost, and
+    ``target`` must contain ``main``. Returns how many Course Revisions were added.
+    """
+    _require_private_workspace_repository(workspace)
+    if not OID_PATTERN.fullmatch(target):
+        raise WorkspaceHistoryError(HISTORY_UNSAFE)
+    _require_commit(workspace, target)
+    state = read_current_state(workspace)
+    if not state.clean or state.drift == "drift":
+        raise FastForwardRefused("Save or undo your changes before receiving others.")
+    head = _head_oid(workspace)
+    if head == target:
+        return 0
+    if head is not None:
+        if _git_result(workspace, "merge-base", "--is-ancestor", target, head).returncode == 0:
+            # Only this computer has new Revisions; there is nothing to receive.
+            return 0
+        ancestor = _git_result(workspace, "merge-base", "--is-ancestor", head, target)
+        if ancestor.returncode == 1:
+            raise FastForwardRefused(
+                "This computer and the shared copy both have changes the other lacks."
+            )
+        if ancestor.returncode != 0:
+            raise WorkspaceHistoryError(HISTORY_UNSAFE)
+    count = _git_result(
+        workspace,
+        "rev-list",
+        "--count",
+        "--first-parent",
+        target,
+        *([f"^{head}"] if head is not None else []),
+    )
+    try:
+        added = int(count.stdout.decode("ascii", errors="strict").strip())
+    except (UnicodeError, ValueError) as error:
+        raise WorkspaceHistoryError(HISTORY_UNSAFE) from error
+    target_blobs = _tree_blobs(workspace, target)
+    if any(entry.mode == "120000" for entry in target_blobs.values()):
+        raise WorkspaceHistoryError(HISTORY_UNSAFE)
+    if not _validate_captured_blobs(workspace, target_blobs, set(target_blobs)).valid:
+        raise FastForwardRefused("The shared copy of the Course has problems to fix first.")
+    _recovery_ref, snapshot = _begin_transaction(workspace)
+    snapshot_blobs = _tree_blobs(workspace, snapshot)
+    changed_paths = {
+        path
+        for path in snapshot_blobs.keys() | target_blobs.keys()
+        if snapshot_blobs.get(path) != target_blobs.get(path)
+    }
+    try:
+        if changed_paths:
+            apply_canonical_mutation(
+                workspace,
+                expected={
+                    path: _canonical_file(snapshot_blobs.get(path)) for path in changed_paths
+                },
+                updates={path: _canonical_file(target_blobs.get(path)) for path in changed_paths},
+            )
+        _git(workspace, "update-ref", "refs/heads/main", target, head or "0" * len(target))
+        _complete_transaction(workspace, snapshot)
+    except Exception:
+        _rollback_transaction(workspace, snapshot, expected_current=target_blobs)
+        raise
+    payload = json.dumps(
+        {"version": 1, "canonical": _fingerprints(target_blobs)}, separators=(",", ":")
+    )
+    _write_blob(workspace / ".git", PROVENANCE_FILE, payload.encode("ascii"))
+    return added

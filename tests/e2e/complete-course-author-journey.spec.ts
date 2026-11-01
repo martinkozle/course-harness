@@ -1,4 +1,7 @@
-import { resolve } from "node:path";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { expect, test } from "@playwright/test";
 
 import { clearSmokeModelCatalog } from "./smokeState";
@@ -559,53 +562,104 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 		page.getByRole("heading", { name: "No changes since the last revision." }),
 	).toBeVisible();
 
+	// The header says what Publish and Sync would do, without visiting History.
+	const sharing = page.locator(".canvas-bar .sharing-controls");
+	await expect(sharing.getByText("Not released yet")).toBeVisible();
+	const unsetSync = sharing.getByRole("button", {
+		name: "Sync: set up sharing first",
+	});
+	await expect(unsetSync).toBeVisible();
+	// Sync without a remote opens the sharing setup.
+	await unsetSync.click();
+	const setup = page.getByRole("dialog", { name: "Share to GitHub" });
+	const existingInSetup = setup.getByLabel("Use a repository you already have");
+	if (await existingInSetup.isVisible()) await existingInSetup.check();
+	await expect(setup.getByLabel("Repository address")).toBeVisible();
+	await setup.getByRole("button", { name: "Cancel" }).click();
+	await expect(setup).toBeHidden();
+
 	// Publish only the first Lecture and its PowerPoint; the second remains planned.
-	await page.getByRole("button", { name: "Publish release" }).first().click();
-	await expect(
-		page.getByRole("heading", { name: "Publish a Course Release" }),
-	).toBeVisible();
-	await page.getByRole("checkbox", { name: firstLecture.title }).check();
-	const powerPoint = page.getByRole("checkbox", {
+	await sharing.getByRole("button", { name: "Publish", exact: true }).click();
+	const publish = page.getByRole("dialog", { name: "Publish a release" });
+	await expect(publish.getByLabel("Name")).toHaveValue(
+		/^Release 1 · \d{1,2} \w{3} \d{4}$/,
+	);
+	await expect(publish.getByLabel("What changed")).toHaveValue(
+		/Review cited Presentation/,
+	);
+	await publish.getByText(/^Includes 2 Lectures of 2/).click();
+	await publish.getByRole("checkbox", { name: secondLecture.title }).uncheck();
+	const powerPoint = publish.getByRole("checkbox", {
 		name: /PowerPoint · 2 Slides/,
 	});
 	await expect(powerPoint).toBeChecked();
-	await expect(page.getByText("1 Lecture · 1 PowerPoint file")).toBeVisible();
-	await powerPoint.uncheck();
 	await expect(
-		page.getByText(
-			"No Presentation files included — this release records the plan only.",
-		),
+		publish.getByText("Includes 1 Lecture of 2 · 1 PowerPoint file"),
 	).toBeVisible();
-	await powerPoint.check();
-	await expect(page.getByText("No Presentation files included")).toHaveCount(0);
-	await page.getByLabel("Release name").fill("Causal Foundations Preview");
-	await expect(page.getByLabel("Release ID")).toHaveValue(
-		"causal-foundations-preview",
-	);
-	await page.getByRole("button", { name: "Check release" }).click();
-	await expect(page.getByText("No issues found.")).toBeVisible();
 	// The uploaded Source has no public locator: a note that does not block publishing.
 	await expect(
-		page.getByText(
+		publish.getByText(
 			"Source “chapter_causal.md” has no public link, so its Citations show only their label in a Classroom.",
 		),
 	).toBeVisible();
-	await page.getByRole("button", { name: "Publish release" }).click();
+	await expect(publish.getByText("Note · does not block publishing")).toBeVisible();
+	await publish.getByLabel("Name").fill("Causal Foundations Preview");
+
+	// Share to a local bare repository, which the smoke server accepts for development.
+	const bareRemote = join(
+		mkdtempSync(join(tmpdir(), "course-remote-")),
+		"course.git",
+	);
+	execFileSync("git", ["init", "--quiet", "--bare", bareRemote]);
+	const share = publish.getByRole("checkbox", { name: "Share to GitHub" });
+	await expect(share).not.toBeChecked();
+	await share.check();
+	const existing = publish.getByLabel("Use a repository you already have");
+	if (await existing.isVisible()) await existing.check();
+	await publish.getByLabel("Repository address").fill(bareRemote);
+	await publish.getByRole("button", { name: "Save" }).click();
 	await expect(
-		page.getByRole("heading", { name: "Published Causal Foundations Preview" }),
+		publish.getByRole("checkbox", { name: `Share to ${bareRemote}` }),
+	).toBeChecked();
+	await publish.getByRole("button", { name: "Publish", exact: true }).click();
+	await expect(
+		publish.getByRole("heading", {
+			name: "Published Causal Foundations Preview",
+		}),
 	).toBeVisible();
+	await expect(
+		publish.getByText(/Classrooms attached to this repository pick it up/),
+	).toBeVisible();
+	await publish.getByRole("button", { name: "Done" }).click();
+
+	await expect(sharing.getByText("Released · up to date")).toBeVisible();
+	await expect(
+		sharing.getByRole("button", { name: `In sync with ${bareRemote}` }),
+	).toBeDisabled();
+	expect(
+		execFileSync("git", [
+			"--git-dir",
+			bareRemote,
+			"for-each-ref",
+			"--format=%(refname)",
+		])
+			.toString()
+			.trim()
+			.split("\n"),
+	).toEqual([
+		"refs/course-harness/release-files/causal-foundations-preview",
+		"refs/heads/main",
+		"refs/tags/course-release/causal-foundations-preview",
+	]);
+
+	// History keeps the record, with what changed.
+	await page.getByRole("tab", { name: /Releases/ }).click();
+	await page
+		.getByRole("button", { name: /Causal Foundations Preview/ })
+		.click();
 	const releaseDetail = page.locator(".release-detail").first();
 	await expect(releaseDetail).toContainText("1 lectures included");
 	await expect(releaseDetail).toContainText("1 still planned");
 	await expect(releaseDetail).toContainText("chapter_causal.md");
-
-	// Pushing is explicit and needs a remote; a local path is refused.
-	const push = page.getByRole("button", { name: "Push", exact: true });
-	await expect(push).toBeDisabled();
-	await page.getByLabel("Remote URL").fill("/tmp/course.git");
-	await page.getByRole("button", { name: "Save remote" }).click();
-	await expect(page.getByText("Use an HTTPS URL or an SSH address")).toBeVisible();
-	await page.getByLabel("Remote URL").fill("git@example.invalid:you/course.git");
-	await page.getByRole("button", { name: "Save remote" }).click();
-	await expect(push).toBeEnabled();
+	await expect(releaseDetail).toContainText("Review cited Presentation");
 });

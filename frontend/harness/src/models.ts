@@ -507,6 +507,55 @@ export type CourseRelease = {
 	template_profile: ReleaseTemplatePin;
 	validation: ReleaseValidation;
 	artifacts: ReleaseArtifact[];
+	notes?: string;
+};
+
+export type SharingStatus = {
+	release_count: number;
+	latest_release_name: string | null;
+	changes_since_release: number;
+	uncommitted: boolean;
+	pending_summary: string | null;
+	revision_summaries: string[];
+	blocked: "invalid" | "drift" | null;
+	findings: string[];
+	remote_url: string | null;
+	remote_label: string | null;
+	ahead: number | null;
+	behind: number | null;
+	checked_at: string | null;
+	check_error: string | null;
+};
+
+export type SyncResult = {
+	ok: boolean;
+	message: string;
+	detail: string | null;
+	findings: string[];
+	revision: CourseRevision | null;
+	received: number;
+	status: SharingStatus | null;
+};
+
+export type RemoteSettings = {
+	url: string | null;
+	push_command: string;
+};
+
+export type PushResult = {
+	ok: boolean;
+	remote: string;
+	message: string;
+	releases_without_files: string[];
+	releases_with_invalid_files: string[];
+};
+
+export type GitHubSetup = {
+	available: boolean;
+	reason: "missing" | "signed-out" | null;
+	owner: string | null;
+	protocol: "ssh" | "https";
+	suggested_name: string;
 };
 
 export type Lecture = {

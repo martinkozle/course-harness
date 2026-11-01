@@ -38,6 +38,7 @@ from course_harness.core.release_validation import (
 from course_harness.core.releases import (
     MAX_ARTIFACT_BYTES,
     MAX_MANIFEST_BYTES,
+    MAX_RELEASE_NOTES_CHARACTERS,
     OID_PATTERN,
     SLUG_PATTERN,
     CourseRelease,
@@ -87,6 +88,7 @@ class PublishReleaseRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     selection: ReleaseSelection
     waivers: list[Waiver] = Field(default_factory=list, max_length=1_000)
+    notes: str | None = Field(default=None, max_length=MAX_RELEASE_NOTES_CHARACTERS)
 
 
 def publish_release(
@@ -223,6 +225,7 @@ def publish_release(
         validation=validation,
         artifacts=[artifact for artifact, _content in exports],
         quizzes=quiz_entries,
+        notes=request.notes or None,
     )
     verify_release_manifest(workspace, release)
     manifest = canonical_json(release.model_dump(mode="json"))

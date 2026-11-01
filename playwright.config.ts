@@ -18,7 +18,12 @@ export default defineConfig({
 		{
 			command: "uv run python tests/e2e/run_smoke_server.py",
 			url: "http://127.0.0.1:18765/api/health",
-			env: { ...process.env, UV_CACHE_DIR: ".cache/uv" },
+			env: {
+				...process.env,
+				UV_CACHE_DIR: ".cache/uv",
+				// Lets the Publish journey share to a local bare repository.
+				COURSE_HARNESS_ALLOW_LOCAL_REMOTES: "1",
+			},
 			reuseExistingServer: false,
 			timeout: 60_000,
 		},

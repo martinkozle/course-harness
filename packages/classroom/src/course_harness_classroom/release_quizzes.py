@@ -44,6 +44,7 @@ def snapshot_quizzes(snapshot: ServedSnapshot) -> ReleaseQuizzes:
         tag=snapshot.manifest.tag,
         name=snapshot.manifest.name,
         published_at=snapshot.manifest.published_at,
+        notes=snapshot.manifest.notes,
         questions={
             (lecture.id, question.id): ReleaseQuestion(
                 lecture_id=lecture.id, lecture_title=lecture.title, question=question
@@ -112,7 +113,11 @@ def read_release_quizzes(mirror: Path, tag: str) -> ReleaseQuizzes | None:
                 ),
             )
     return ReleaseQuizzes(
-        tag=release.tag, name=release.name, published_at=release.published_at, questions=questions
+        tag=release.tag,
+        name=release.name,
+        published_at=release.published_at,
+        questions=questions,
+        notes=release.notes,
     )
 
 

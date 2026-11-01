@@ -3,7 +3,6 @@ import {
 	Maximize2,
 	Menu as MenuIcon,
 	Minimize2,
-	Send,
 	X,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -17,9 +16,7 @@ export function CanvasFrame({
 	onClose,
 	onShowConversation,
 	onOpenNav,
-	canPublish,
-	onPublish,
-	publishActive,
+	actions,
 	children,
 }: {
 	layout: LayoutMode;
@@ -27,9 +24,7 @@ export function CanvasFrame({
 	onClose: () => void;
 	onShowConversation: () => void;
 	onOpenNav: () => void;
-	canPublish: boolean;
-	onPublish: () => void;
-	publishActive: boolean;
+	actions: ReactNode;
 	children: ReactNode;
 }) {
 	return (
@@ -52,12 +47,7 @@ export function CanvasFrame({
 					Conversation
 				</button>
 				<div className="canvas-bar-spacer" />
-				{canPublish && !publishActive ? (
-					<button type="button" className="btn btn-small" onClick={onPublish}>
-						<Send aria-hidden="true" />
-						Publish release
-					</button>
-				) : null}
+				{actions}
 				<button
 					type="button"
 					className="icon-btn wide-only"

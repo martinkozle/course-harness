@@ -6,7 +6,6 @@ import { CoursePlanCanvas } from "./canvas/CoursePlanCanvas";
 import { ExercisesCanvas } from "./canvas/ExercisesCanvas";
 import { HistoryCanvas, type HistoryTab } from "./canvas/HistoryCanvas";
 import { LectureCanvas, type LectureView } from "./canvas/LectureCanvas";
-import { ReleaseCanvas } from "./canvas/ReleaseCanvas";
 import { SourceReader } from "./canvas/SourceReader";
 import { SourcesCanvas, type SourcesTab } from "./canvas/SourcesCanvas";
 import {
@@ -17,6 +16,8 @@ import { ConversationPane } from "./chat/ConversationPane";
 import { ModelDownloadDialog } from "./dialogs/ModelDownloadDialog";
 import { ModelSetupDialog } from "./dialogs/ModelSetupDialog";
 import { ProcessorConsentDialog } from "./dialogs/ProcessorConsentDialog";
+import { PublishDialog } from "./dialogs/PublishDialog";
+import { RemoteSetupDialog } from "./dialogs/RemoteSetup";
 import { SettingsDialog, type SettingsSection } from "./dialogs/SettingsDialog";
 import { Launcher, type RecentWorkspace } from "./Launcher";
 import type {
@@ -34,12 +35,14 @@ import type {
 import { CanvasFrame, type LayoutMode } from "./shell/CanvasFrame";
 import { DriftBanner } from "./shell/DriftBanner";
 import { Navigator } from "./shell/Navigator";
+import { SharingControls } from "./shell/SharingControls";
 import {
 	type AgentContext,
 	type RunResult,
 	useCourseAgent,
 } from "./useCourseAgent";
 import { useLibrary } from "./useLibrary";
+import { useSharing } from "./useSharing";
 
 export type CanvasTarget =
 	| { kind: "plan" }
@@ -47,8 +50,7 @@ export type CanvasTarget =
 	| { kind: "lecture"; lectureId: string; view?: LectureView }
 	| { kind: "exercises" }
 	| { kind: "reader"; target: ReaderTarget; returnTo: CanvasTarget | null }
-	| { kind: "history"; tab?: HistoryTab }
-	| { kind: "release" };
+	| { kind: "history"; tab?: HistoryTab };
 
 const emptyCatalog: ModelCatalog = {
 	provider_accounts: [],
@@ -209,6 +211,10 @@ function CourseWorkspace({
 	const [conversationDialog, setConversationDialog] =
 		useState<ConversationDialog | null>(null);
 	const [shellError, setShellError] = useState<string | null>(null);
+	const [publishOpen, setPublishOpen] = useState(false);
+	// History reads Releases when it opens; a new Release reopens it.
+	const [releaseVersion, setReleaseVersion] = useState(0);
+	const [remoteSetupOpen, setRemoteSetupOpen] = useState(false);
 	const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
 	function setLayout(next: LayoutMode) {
@@ -430,6 +436,14 @@ function CourseWorkspace({
 		return map;
 	}, [course]);
 
+	const sharing = useSharing(Boolean(course));
+	const { refresh: refreshSharing } = sharing;
+	// Every change to Current State can change what Publish and Sync count.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: currentState is the trigger
+	useEffect(() => {
+		void refreshSharing();
+	}, [currentState, refreshSharing]);
+
 	const changesCount = currentState?.changes.length ?? 0;
 	const drift =
 		currentState && currentState.drift !== "clean" ? currentState : null;
@@ -562,7 +576,7 @@ function CourseWorkspace({
 			case "history":
 				return (
 					<HistoryCanvas
-						key="history"
+						key={`history-${releaseVersion}`}
 						initialTab={target.tab}
 						course={course ?? null}
 						presentations={presentations}
@@ -587,33 +601,31 @@ function CourseWorkspace({
 								},
 							);
 						}}
-						onPublish={() => openCanvas({ kind: "release" })}
-					/>
-				);
-			case "release":
-				if (!course) return null;
-				return (
-					<ReleaseCanvas
-						course={course}
-						presentations={presentations}
-						sources={sources}
-						currentState={currentState}
-						onOpenHistory={(tab) => openCanvas({ kind: "history", tab })}
-						onOpenEvidence={(readerTarget) =>
-							openCanvas({
-								kind: "reader",
-								target: readerTarget,
-								returnTo: target,
-							})
-						}
-						onAskAgent={askAgent}
-						onPublished={() => void refreshCurrentState()}
+						onPublish={() => setPublishOpen(true)}
 					/>
 				);
 		}
 	}
 
 	const effectiveLayout: LayoutMode = canvas ? layout : "conversation";
+
+	function askAgentToFix(finding: string) {
+		setPublishOpen(false);
+		askAgent(`Please fix this problem in the Course: ${finding}`, {
+			key: "current-state-finding",
+			label: "Course problem",
+			instruction: `Current State has a validation problem that blocks saving a Course Revision: ${finding} Explain it and propose a fix for the Course Author to approve.`,
+		});
+	}
+
+	const sharingControls = course ? (
+		<SharingControls
+			sharing={sharing}
+			onPublish={() => setPublishOpen(true)}
+			onSetUpSharing={() => setRemoteSetupOpen(true)}
+			onAskAgent={askAgentToFix}
+		/>
+	) : null;
 
 	return (
 		<div
@@ -683,6 +695,7 @@ function CourseWorkspace({
 						onConversationDialog={setConversationDialog}
 						presentations={presentations}
 						lectureNumber={lectureNumber}
+						headerActions={canvas ? null : sharingControls}
 					/>
 					{canvas ? (
 						<CanvasFrame
@@ -691,9 +704,7 @@ function CourseWorkspace({
 							onClose={closeCanvas}
 							onShowConversation={() => setNarrowPane("conversation")}
 							onOpenNav={() => setNavOpen(true)}
-							canPublish={Boolean(course)}
-							onPublish={() => openCanvas({ kind: "release" })}
-							publishActive={canvas.kind === "release"}
+							actions={sharingControls}
 						>
 							{renderCanvas(canvas)}
 						</CanvasFrame>
@@ -725,7 +736,56 @@ function CourseWorkspace({
 					templates={templates}
 					onTemplatesChange={setTemplates}
 					library={library}
+					onSharingChange={() => void sharing.refresh().then(sharing.check)}
 					onClose={() => setSettings(null)}
+				/>
+			) : null}
+			{publishOpen && course ? (
+				<PublishDialog
+					course={course}
+					presentations={presentations}
+					sources={sources}
+					status={sharing.status}
+					onAskAgent={(finding) => {
+						if (typeof finding === "string") {
+							askAgentToFix(finding);
+							return;
+						}
+						setPublishOpen(false);
+						askAgent(`Please fix this release issue: ${finding.message}`, {
+							key: `finding-${finding.id}`,
+							label: "Release finding",
+							instruction: `Release validation needs editorial review. Finding: ${finding.message} Review the supporting Evidence and propose a correction; do not waive a finding unless the Course Author explicitly decides to publish with that warning.`,
+						});
+					}}
+					onOpenEvidence={(readerTarget) => {
+						setPublishOpen(false);
+						openCanvas({
+							kind: "reader",
+							target: readerTarget,
+							returnTo: canvas,
+						});
+					}}
+					onReviewChanges={() => {
+						setPublishOpen(false);
+						openCanvas({ kind: "history", tab: "changes" });
+					}}
+					onRemoteChanged={() => void sharing.refresh().then(sharing.check)}
+					onPublished={() => {
+						setReleaseVersion((version) => version + 1);
+						void refreshCurrentState();
+						void sharing.refresh();
+					}}
+					onClose={() => setPublishOpen(false)}
+				/>
+			) : null}
+			{remoteSetupOpen ? (
+				<RemoteSetupDialog
+					onSaved={() => {
+						setRemoteSetupOpen(false);
+						void sharing.refresh().then(sharing.check);
+					}}
+					onClose={() => setRemoteSetupOpen(false)}
 				/>
 			) : null}
 			{conversationDialog ? (

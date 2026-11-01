@@ -1,0 +1,327 @@
+/* ---------- Publish and Sync in the header ---------- */
+
+.sharing-controls {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.sharing-publish {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+}
+
+.sharing-status {
+	overflow: hidden;
+	color: var(--ink-muted);
+	font-size: 0.8125rem;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.sharing-sync {
+	position: relative;
+}
+
+.sync-btn {
+	gap: 6px;
+	font-variant-numeric: tabular-nums;
+}
+
+.sync-btn[aria-disabled="true"] {
+	border-color: var(--rule);
+	color: var(--ink-muted);
+	cursor: default;
+}
+
+.sync-btn[aria-disabled="true"]:hover {
+	background: var(--surface);
+}
+
+.sync-check {
+	color: var(--success);
+}
+
+.sync-btn.has-problem {
+	border-color: var(--warning);
+	color: var(--warning);
+}
+
+/* A failed background check: the reason is in the tooltip. */
+.sync-btn.has-check-error::after {
+	content: "";
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--warning);
+}
+
+.sync-counts {
+	display: inline-flex;
+	gap: 6px;
+	padding-left: 6px;
+	border-left: 1px solid var(--rule);
+	font-family: var(--font-mono);
+	font-size: 0.8125rem;
+}
+
+.sync-counts > span {
+	display: inline-flex;
+	align-items: center;
+	gap: 1px;
+}
+
+.sync-counts svg {
+	width: 12px;
+	height: 12px;
+}
+
+.sync-popover {
+	position: absolute;
+	top: calc(100% + 6px);
+	right: 0;
+	z-index: 20;
+	width: min(360px, calc(100vw - 32px));
+	padding: 12px 14px;
+	border: 1px solid var(--rule-strong);
+	border-radius: var(--radius-m);
+	background: var(--surface);
+	box-shadow: var(--shadow-pop);
+	font-size: 0.875rem;
+}
+
+.sync-popover:focus-visible {
+	outline: none;
+	box-shadow: var(--shadow-pop), var(--focus-ring);
+}
+
+.sync-popover > * + * {
+	margin-top: 8px;
+}
+
+.sync-popover-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.sync-popover-head .icon-btn {
+	width: 28px;
+	height: 28px;
+}
+
+.sync-popover-actions {
+	display: flex;
+	justify-content: flex-end;
+}
+
+.sync-findings {
+	display: grid;
+	gap: 6px;
+	margin: 6px 0 0;
+	padding: 0;
+	list-style: none;
+}
+
+.sync-findings li {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 4px 8px;
+}
+
+.sync-detail summary {
+	color: var(--ink-muted);
+	cursor: pointer;
+}
+
+.sync-detail pre {
+	max-height: 180px;
+	margin-top: 6px;
+	padding: 8px;
+	overflow: auto;
+	border-radius: var(--radius-s);
+	background: var(--surface-sunken);
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+@media (max-width: 1180px) {
+	.sharing-status {
+		display: none;
+	}
+}
+
+/* Phones: Publish and Sync keep their icons and counts; the words stay for screen readers. */
+@media (max-width: 600px) {
+	.sharing-publish-label,
+	.sync-label {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+
+	.sharing-controls {
+		gap: 4px;
+	}
+}
+
+/* ---------- Publish dialog and sharing setup ---------- */
+
+.publish-dialog,
+.remote-setup {
+	display: grid;
+	gap: 14px;
+}
+
+.remote-setup-intro {
+	margin-bottom: 14px;
+}
+
+.publish-contents > summary {
+	padding: 8px 0;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.publish-check .meta {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.publish-check .meta svg {
+	width: 16px;
+	height: 16px;
+}
+
+.publish-share {
+	display: grid;
+	gap: 10px;
+	padding-top: 12px;
+	border-top: 1px solid var(--rule);
+}
+
+.publish-share > .check-row {
+	font-weight: 600;
+}
+
+.publish-remote-setup {
+	padding: 12px 14px;
+	border: 1px solid var(--rule);
+	border-radius: var(--radius-m);
+	background: var(--surface-sunken);
+}
+
+.publish-blocker {
+	flex: 1;
+	min-width: 0;
+	margin-right: auto;
+}
+
+.publish-steps {
+	display: grid;
+	gap: 6px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+	font-size: 0.875rem;
+}
+
+.publish-steps li {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	color: var(--ink-muted);
+}
+
+.publish-steps svg {
+	flex: none;
+	width: 16px;
+	height: 16px;
+}
+
+.publish-steps .is-running,
+.publish-steps .is-done {
+	color: var(--ink);
+}
+
+.publish-steps .is-done svg {
+	color: var(--success);
+}
+
+.publish-steps .is-failed {
+	color: var(--danger);
+}
+
+.publish-done {
+	display: grid;
+	gap: 12px;
+}
+
+.publish-done h3 {
+	font-size: 1rem;
+	font-weight: 650;
+}
+
+.remote-setup-modes,
+.remote-setup-visibility {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 16px;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+.remote-setup-visibility legend {
+	margin-bottom: 4px;
+	font-size: 0.875rem;
+	font-weight: 600;
+}
+
+.remote-setup-visibility small {
+	flex-basis: 100%;
+	color: var(--ink-muted);
+}
+
+.remote-setup-create {
+	display: grid;
+	gap: 12px;
+}
+
+.remote-setup-owner {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.remote-setup-owner > span {
+	color: var(--ink-muted);
+}
+
+.remote-setup-owner > input {
+	flex: 1;
+	min-width: 0;
+}
+
+.remote-setup-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 8px;
+}
+
+.release-notes {
+	white-space: pre-line;
+}
