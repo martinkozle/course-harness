@@ -114,6 +114,8 @@ def _check_locked_versions(executable: Path, repository: Path) -> None:
                 "uv",
                 "export",
                 "--frozen",
+                "--package",
+                "course-harness",
                 "--no-dev",
                 "--no-emit-project",
                 "--no-hashes",
@@ -145,7 +147,7 @@ def main() -> None:
         build_environment["UV_CACHE_DIR"] = str(temporary / "uv-build-cache")
         build_environment["HATCH_PINNED_EXTRA_ENABLE"] = "1"
         subprocess.run(
-            ["uv", "build", "--out-dir", str(artifacts)],
+            ["uv", "build", "--package", "course-harness", "--out-dir", str(artifacts)],
             cwd=repository,
             env=build_environment,
             check=True,

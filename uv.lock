@@ -8,6 +8,23 @@ resolution-markers = [
     "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'",
 ]
 
+[manifest]
+members = [
+    "course-harness",
+    "course-harness-classroom",
+]
+
+[manifest.dependency-groups]
+dev = [
+    { name = "course-harness", editable = "packages/harness" },
+    { name = "course-harness-classroom", editable = "packages/classroom" },
+    { name = "fastmcp-slim", extras = ["server"], specifier = ">=4" },
+    { name = "pypdf", specifier = ">=6.0" },
+    { name = "pytest" },
+    { name = "ruff" },
+    { name = "ty" },
+]
+
 [[package]]
 name = "accelerate"
 version = "1.15.0"
@@ -321,7 +338,7 @@ wheels = [
 [[package]]
 name = "course-harness"
 version = "0.4.2"
-source = { editable = "." }
+source = { editable = "packages/harness" }
 dependencies = [
     { name = "docling-slim", extra = ["convert-core", "format-html", "format-office", "format-pdf"] },
     { name = "fastapi" },
@@ -347,15 +364,6 @@ docling = [
     { name = "torchvision", version = "0.29.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "fastmcp-slim", extra = ["server"] },
-    { name = "pypdf" },
-    { name = "pytest" },
-    { name = "ruff" },
-    { name = "ty" },
-]
-
 [package.metadata]
 requires-dist = [
     { name = "docling", marker = "extra == 'docling'", specifier = ">=2.129" },
@@ -379,13 +387,21 @@ requires-dist = [
 ]
 provides-extras = ["docling"]
 
-[package.metadata.requires-dev]
-dev = [
-    { name = "fastmcp-slim", extras = ["server"], specifier = ">=4" },
-    { name = "pypdf", specifier = ">=6.0" },
-    { name = "pytest" },
-    { name = "ruff" },
-    { name = "ty" },
+[[package]]
+name = "course-harness-classroom"
+version = "0.1.0"
+source = { editable = "packages/classroom" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "typer" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi" },
+    { name = "typer" },
+    { name = "uvicorn", extras = ["standard"] },
 ]
 
 [[package]]

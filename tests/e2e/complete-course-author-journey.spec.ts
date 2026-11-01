@@ -158,7 +158,7 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	await page.getByRole("tab", { name: /Library/ }).click();
 	const libraryUpload = page.getByLabel("Add files to Library");
 	await libraryUpload.setInputFiles(
-		resolve("tests/fixtures/resources/teaching.pdf"),
+		resolve("packages/harness/tests/fixtures/resources/teaching.pdf"),
 	);
 	// No model download stands between a PDF and the Library.
 	const pdfRow = page
@@ -206,7 +206,7 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	await settings.getByRole("button", { name: "Close" }).click();
 
 	await libraryUpload.setInputFiles(
-		resolve("tests/fixtures/search/chapter_causal.md"),
+		resolve("packages/harness/tests/fixtures/search/chapter_causal.md"),
 	);
 	const libraryRow = page
 		.getByRole("list", { name: "Library" })
@@ -356,7 +356,7 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 		),
 		settings
 			.locator("#template-upload")
-			.setInputFiles(resolve("tests/fixtures/templates/python-pptx-test.pptx")),
+			.setInputFiles(resolve("packages/harness/tests/fixtures/templates/python-pptx-test.pptx")),
 	]);
 	expect(templateResponse.ok()).toBe(true);
 	const templateBody = (await templateResponse.json()) as {

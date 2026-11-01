@@ -1,78 +1,16 @@
-[project]
-name = "course-harness"
-version = "0.4.2"
-description = "A local-first workspace for authoring source-grounded courses"
-readme = "README.md"
-requires-python = ">=3.14,<3.15"
-license = "MIT"
-license-files = ["LICENSE"]
-# Hatchling runs metadata hooks only when some field is dynamic, so this unused one lets the
-# pinned extra below be added. Removing it silently drops the extra.
-dynamic = ["maintainers"]
-keywords = ["course-authoring", "local-first", "presentations", "education"]
-classifiers = [
-  "Development Status :: 3 - Alpha",
-  "Environment :: Web Environment",
-  "Framework :: FastAPI",
-  "Intended Audience :: Education",
-  "Operating System :: OS Independent",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.14",
-  "Topic :: Education",
-]
-dependencies = [
-  # The default Document Processor: model-free PDF, Office, and HTML conversion (ADR 0015).
-  "docling-slim[convert-core,format-html,format-office,format-pdf]>=2.129",
-  "fastapi",
-  "fastmcp-slim[client]>=4",
-  "httpx2",
-  "keyring>=25.6",
-  "pillow>=12.3.0",
-  "pydantic-ai-slim[ag-ui,anthropic,bedrock,mcp,openai]",
-  # docling-slim imports packaging from a backend without declaring it.
-  "packaging",
-  "python-multipart>=0.0.32",
-  "python-pptx>=1.0.2",
-  "pyyaml>=6.0.3",
-  "typer",
-  "uvicorn[standard]",
-]
-
-[project.optional-dependencies]
-# Full Docling: layout, table, and OCR models for difficult PDFs. Course Harness never installs it.
-docling = ["docling>=2.129", "torch", "torchvision"]
+# Workspace root: not a distribution. `course-harness` (packages/harness) is the only package
+# published to PyPI; `course-harness-classroom` (packages/classroom) is deployed, not published.
+[tool.uv.workspace]
+members = ["packages/*"]
 
 [tool.uv.sources]
-torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }]
-torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }]
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
-[project.scripts]
-course-harness = "course_harness.cli:main"
-
-[project.urls]
-Homepage = "https://github.com/martinkozle/course-harness"
-Repository = "https://github.com/martinkozle/course-harness"
-Issues = "https://github.com/martinkozle/course-harness/issues"
-
-[build-system]
-requires = ["hatchling>=1.32.4,<2", "hatch-pinned-extra>=0.4.1,<0.5"]
-build-backend = "hatchling.build"
-
-# Releases add a `pinned` extra holding the exact versions from uv.lock that the release was
-# tested with; the release workflow and scripts/verify_distribution.py set
-# HATCH_PINNED_EXTRA_ENABLE=1.
-[tool.hatch.metadata.hooks.pinned_extra]
-
-[tool.hatch.build.targets.sdist]
-include = ["/src", "/uv.lock"]
+course-harness = { workspace = true }
+course-harness-classroom = { workspace = true }
 
 [dependency-groups]
 dev = [
+  "course-harness",
+  "course-harness-classroom",
   # In-process MCP servers stand in for Connectors in tests.
   "fastmcp-slim[server]>=4",
   "pypdf>=6.0",
@@ -82,12 +20,14 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-q"
-testpaths = ["tests"]
+addopts = "-q --import-mode=importlib"
+testpaths = ["packages/harness/tests", "packages/classroom/tests"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py314"
+# Sorts the workspace packages as first-party imports.
+src = ["packages/*/src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -96,7 +36,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python-version = "3.14"
 
 [tool.ty.src]
-include = ["src", "tests"]
+include = ["packages/*/src", "packages/*/tests", "tests"]
 
 [tool.ty.rules]
 "no-matching-overload" = "ignore"

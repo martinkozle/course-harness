@@ -26,7 +26,7 @@
           pkgs = import nixpkgs { inherit system; };
           hookExcludes = [
             "^\\.agents/"
-            "^src/course_harness/static/"
+            "^packages/harness/src/course_harness/static/"
           ];
           commonHooks = {
             biome = {
@@ -71,7 +71,10 @@
                 pass_filenames = false;
                 package = pkgs.ty;
               };
-              uv-check.enable = true;
+              uv-check = {
+                enable = true;
+                files = "(^|/)(uv\\.lock|pyproject\\.toml)$";
+              };
             };
           };
         in

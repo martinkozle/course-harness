@@ -1,0 +1,20 @@
+[project]
+name = "course-harness-classroom"
+version = "0.1.0"
+description = "A self-hostable classroom that serves published Course Harness Releases to students"
+requires-python = ">=3.14,<3.15"
+license = "MIT"
+# Deployed from this repository, never published to a package index.
+classifiers = ["Private :: Do Not Upload"]
+dependencies = [
+  "fastapi",
+  "typer",
+  "uvicorn[standard]",
+]
+
+[project.scripts]
+course-classroom = "course_harness_classroom.cli:main"
+
+[build-system]
+requires = ["hatchling>=1.32.4,<2"]
+build-backend = "hatchling.build"

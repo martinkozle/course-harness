@@ -12,10 +12,11 @@ on:
     paths:
       - .github/workflows/release.yml
       - frontend/**
-      - src/**
+      - packages/harness/**
       - scripts/verify_distribution.py
       - package.json
       - bun.lock
+      - tsconfig.base.json
       - pyproject.toml
       - uv.lock
       - README.md
@@ -50,9 +51,9 @@ jobs:
       - name: Check that the tag matches the package version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          version="$(uv version --short --color never)"
+          version="$(uv version --package course-harness --short --color never)"
           if [[ "${GITHUB_REF_NAME}" != "v${version}" ]]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} does not match pyproject.toml version ${version}"
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match packages/harness/pyproject.toml version ${version}"
             exit 1
           fi
 
@@ -60,15 +61,15 @@ jobs:
       - name: Check that the committed frontend bundle is current
         run: |
           bun install --frozen-lockfile
-          bun run build
-          if [[ -n "$(git status --porcelain -- src/course_harness/static)" ]]; then
-            git status --short -- src/course_harness/static
-            echo "::error::src/course_harness/static is stale; run 'bun run build' and commit it"
+          bun run --filter @course-harness/harness build
+          if [[ -n "$(git status --porcelain -- packages/harness/src/course_harness/static)" ]]; then
+            git status --short -- packages/harness/src/course_harness/static
+            echo "::error::packages/harness/src/course_harness/static is stale; run 'bun run build' and commit it"
             exit 1
           fi
 
       - name: Build
-        run: uv build
+        run: uv build --package course-harness
         env:
           # Adds the `pinned` extra with the exact versions from uv.lock.
           HATCH_PINNED_EXTRA_ENABLE: "1"

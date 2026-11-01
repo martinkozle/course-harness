@@ -21,8 +21,8 @@ Use the `gh` CLI (already authenticated) for everything on GitHub. Run tools ins
 
 3. **Bump and commit.**
    ```bash
-   nix develop -c uv version <x.y.z>        # or --bump minor|patch; updates pyproject.toml and uv.lock
-   git commit -m "Release <x.y.z>" -- pyproject.toml uv.lock
+   nix develop -c uv version --package course-harness <x.y.z>   # or --bump minor|patch
+   git commit -m "Release <x.y.z>" -- packages/harness/pyproject.toml uv.lock
    git push origin main
    ```
 
@@ -51,7 +51,7 @@ Use the `gh` CLI (already authenticated) for everything on GitHub. Run tools ins
    ```bash
    gh release create v<x.y.z> --target "$(git rev-parse HEAD)" --title "<x.y.z>" --notes-file <notes>
    ```
-   The tag must equal `v` + the `pyproject.toml` version, or the workflow stops.
+   The tag must equal `v` + the `packages/harness/pyproject.toml` version, or the workflow stops.
 
 7. **Watch the tag run** (`gh run list --workflow release.yml --limit 1`, then `gh run watch`).
    If only *Publish to PyPI* fails, fix the cause and run `gh run rerun <id> --failed`. Do not

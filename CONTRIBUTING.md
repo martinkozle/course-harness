@@ -15,6 +15,23 @@ freshness, and hygiene checks). Their configuration lives in `flake.nix`.
 Without Nix, install Python 3.14, uv, Bun 1.3 or newer, Node.js, and Chromium, then use the same
 commands.
 
+## Repository layout
+
+The repository is a uv workspace (one root `uv.lock`) and a Bun workspace (one root `bun.lock`):
+
+| Path | What it is |
+| --- | --- |
+| `packages/harness` | `course-harness`, the Python package published to PyPI |
+| `packages/classroom` | `course-harness-classroom`, Course Harness Classroom; not published |
+| `frontend/harness` | The Course Harness interface, built into `packages/harness/src/course_harness/static` |
+| `frontend/classroom` | The Classroom interface, built into `frontend/classroom/dist` |
+| `frontend/ui` | `@course-harness/ui`, code shared by both interfaces |
+| `tests/e2e` | The Playwright smoke journey |
+
+The root `pyproject.toml` holds the workspace, the development dependencies, and the Ruff, ty, and
+pytest settings. `packages/harness` links `README.md`, `LICENSE`, and `uv.lock` from the root; a
+small build hook puts the real files into the source distribution.
+
 ## Restricted networks and cloud agents
 
 Some sandboxes, such as cloud coding-agent containers, allow `git clone` from GitHub but refuse
@@ -41,6 +58,10 @@ bun install --frozen-lockfile
 bun run build
 uv run course-harness
 ```
+
+`bun run build` builds every interface. Course Harness Classroom runs with
+`uv run course-classroom serve` (`--host`, `--port`); `bun run dev:classroom` serves its interface
+with hot reload.
 
 For frontend hot reload, run the API and Vite side by side; Vite serves `http://127.0.0.1:5173`
 and proxies `/api`:
@@ -77,7 +98,7 @@ uv run python scripts/verify_distribution.py
 The Release workflow runs the distribution check on every push to `main`. To publish a version:
 
 ```bash
-uv version --bump minor   # or patch/major; updates pyproject.toml and uv.lock
+uv version --package course-harness --bump minor   # or patch/major; updates its pyproject.toml and uv.lock
 git commit -am "Release 0.2.0" && git push
 ```
 

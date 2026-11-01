@@ -17,9 +17,9 @@ publishes on a `v*` tag; never upload from a local machine.
 
 ## Architecture invariants
 
-- A running application may be unbound only in the restricted Workspace Launcher; after selection,
-  it is bound to at most one explicit Course Workspace.
-- The Python package owns the HTTP boundary and serves the production React bundle.
+- A running Course Harness application may be unbound only in the restricted Workspace Launcher;
+  after selection, it is bound to at most one explicit Course Workspace.
+- The Course Harness Python package owns its HTTP boundary and serves the production React bundle.
 - The browser may inspect the selected Workspace identity through `/api/workspace`; do not add a
   general filesystem browser or accept arbitrary paths through HTTP.
 - Keep Course Author-facing copy neutral. Use “you” where possible and `Course Author` when the role
@@ -37,8 +37,13 @@ Run development commands inside the pinned Nix shell. When `IN_NIX_SHELL` is abs
 command with `nix develop -c`. If `nix develop` fails to download GitHub archives (HTTP 403, as in
 cloud agent containers), use `scripts/nix-develop.sh -c` instead; it fetches the locked flake inputs
 with git. Do not fall back to tools outside the shell. Add system-facing tools to `flake.nix`; keep
-Python and frontend application dependencies in `pyproject.toml`/`uv.lock` and
-`package.json`/`bun.lock` respectively.
+Python and frontend application dependencies in the owning workspace member
+(`packages/*/pyproject.toml`, `frontend/*/package.json`) and the root `uv.lock`/`bun.lock`.
+
+## Layout
+
+Only `packages/harness` (`course-harness`) is published to PyPI; never upload `packages/classroom`.
+The repository layout is in the table in `CONTRIBUTING.md`.
 
 ## Git handoff
 
