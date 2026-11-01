@@ -1,6 +1,8 @@
+import ast
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 # Course Harness Classroom installs only the core and its light dependencies.
 FORBIDDEN_DEPENDENCIES = (
@@ -59,3 +61,39 @@ def test_core_imports_only_core_modules_and_light_dependencies() -> None:
         )
     ]
     assert dependencies == []
+
+
+# Imports inside functions or under TYPE_CHECKING never run on import, so check the source too.
+ALLOWED_THIRD_PARTY = {"pydantic", "yaml", "pptx", "PIL"}
+CORE_DIRECTORY = Path(__file__).parents[1] / "src" / "course_harness" / "core"
+
+
+def _disallowed_imports(path: Path) -> list[str]:
+    disallowed = []
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
+        if isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            if node.level > 0:
+                continue
+            modules = [node.module or ""]
+        else:
+            continue
+        for module in modules:
+            root = module.split(".")[0]
+            if (
+                root in sys.stdlib_module_names
+                or root in ALLOWED_THIRD_PARTY
+                or module == "course_harness.core"
+                or module.startswith("course_harness.core.")
+            ):
+                continue
+            disallowed.append(f"{path.name}:{node.lineno} imports {module}")
+    return disallowed
+
+
+def test_core_source_imports_only_core_and_light_dependencies() -> None:
+    paths = sorted(CORE_DIRECTORY.glob("*.py"))
+
+    assert paths
+    assert [problem for path in paths for problem in _disallowed_imports(path)] == []
