@@ -386,3 +386,15 @@ def test_a_fetch_connects_only_to_the_checked_address_without_proxies(
     assert "http.curloptResolve=git.example.org:443:[2606:4700::6810:84e5]" in command
     assert "protocol.allow=never" in command and "protocol.https.allow=always" in command
     assert "https_proxy" not in environment and "HTTPS_PROXY" not in environment
+
+
+def test_a_repository_with_no_release_says_how_to_publish_one(
+    admin: TestClient, course_repository: CourseRepository
+) -> None:
+    course_repository.push()
+
+    course = _attach(admin, course_repository)
+
+    assert course["release"] is None
+    assert course["sync_status"] == "error"
+    assert course["sync_message"].startswith("This repository has no published Release yet.")

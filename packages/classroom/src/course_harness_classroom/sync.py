@@ -202,7 +202,14 @@ class SyncService:
             logger.warning("Course %s: %s", course.slug, warning)
         release = scan.newest
         if release is None:
-            self._record(course, "error", "\n".join(["No valid Release was found.", *warnings]))
+            message = (
+                "No valid Release was found."
+                if warnings
+                else "This repository has no published Release yet. In Course Harness, "
+                "publish one with “Share to GitHub” ticked, then sync again."
+            )
+            logger.warning("Sync of course %s found no Release to serve", course.slug)
+            self._record(course, "error", "\n".join([message, *warnings]))
             return
         if (
             course.release_slug == release.slug

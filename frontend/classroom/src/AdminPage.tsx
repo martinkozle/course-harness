@@ -250,7 +250,11 @@ function AttachForm({
 						onChange={(event) => setRepoUrl(event.target.value)}
 						required
 					/>
-					<small>A public HTTPS Git repository, without credentials.</small>
+					<small>
+						A public HTTPS Git repository, without credentials. The address works with or
+						without .git at the end. The course appears once a Release has been published to
+						it.
+					</small>
 				</div>
 				<div className="field">
 					<label htmlFor={slugId}>Course address (optional)</label>
