@@ -1,4 +1,4 @@
-import { Menu, Notice } from "@course-harness/ui";
+import { Markdown, Menu, Notice } from "@course-harness/ui";
 import {
 	ArrowDown,
 	ArrowUp,
@@ -50,7 +50,6 @@ import {
 import { type Library, MATERIAL_ACCEPT } from "../useLibrary";
 import { ApprovalCard } from "./ApprovalCard";
 import type { ConversationDialog } from "./ConversationDialogs";
-import { Markdown } from "./Markdown";
 import { ResearchResults } from "./ResearchResults";
 import { StartSurface } from "./StartSurface";
 

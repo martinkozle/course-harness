@@ -2,13 +2,13 @@ import {
 	CitationList,
 	errorMessage,
 	isAbort,
+	Markdown,
 	Notice,
 } from "@course-harness/ui";
 import { Check, Sparkles, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { responseError } from "../api";
-import { Markdown } from "../chat/Markdown";
 import type {
 	Lecture,
 	Quiz,

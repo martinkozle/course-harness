@@ -5,7 +5,8 @@ Routes:
 - ``/api/admin/*``: the Administrator's session, attached courses, sync and Share Links.
 - ``/l/<token>`` and ``/i/<token>``: exchange a Learner or Instructor Share Link token for a
   course cookie and redirect to ``/c/<course slug>``.
-- ``/api/c/<course slug>`` and below: the served Release of one course, for its cookie holders.
+- ``/api/c/<course slug>`` and below: the served Release of one course, for its cookie holders:
+  its Lectures, its Quizzes without answer keys, Answers and a student's progress.
 - Everything else that is a ``GET``: the built Classroom interface, a single-page app.
 """
 
@@ -16,20 +17,33 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.staticfiles import StaticFiles
 
+from course_harness.core.quiz import option_by_id
+from course_harness.core.slide_preview import PreviewSlot
 from course_harness_classroom.config import ClassroomSettings
+from course_harness_classroom.learning import (
+    LearnerQuiz,
+    OptionFeedback,
+    QuestionProgress,
+    find_question,
+    is_correct,
+    learner_quizzes,
+    progress,
+)
 from course_harness_classroom.repo_urls import InvalidRepoUrl, validate_repo_url
 from course_harness_classroom.security import (
     ADMIN_COOKIE,
     ADMIN_SESSION_LIFETIME,
     COURSE_SESSION_LIFETIME,
     ExchangeLimiter,
+    RateLimiter,
     admin_fingerprint,
     admin_token_matches,
     clear_session_cookie,
@@ -42,10 +56,12 @@ from course_harness_classroom.security import (
     set_session_cookie,
     token_hash,
 )
+from course_harness_classroom.served import ServedLecture, ServedSnapshot
 from course_harness_classroom.store import (
     ROLES,
     Course,
     DuplicateCourse,
+    NewAnswer,
     Role,
     ShareLink,
     Store,
@@ -63,6 +79,13 @@ ASSET_PATH = re.compile(
 )
 FAILED_LOGIN_DELAY_SECONDS = 1.0
 NO_ACCESS = "Open the link you were given to see this course."
+NO_RELEASE = "This course has no Release yet."
+# Printable text only: names and student IDs end up in Instructor tables and CSV files.
+PRINTABLE = r"^[^\x00-\x1f\x7f]+$"
+MAX_ANSWER_BYTES = 4_096
+# Answers per minute: one network address may be a whole classroom behind one router.
+ANSWERS_PER_ADDRESS = 240
+ANSWERS_PER_STUDENT = 30
 
 
 def default_static_dir() -> Path:
@@ -128,7 +151,54 @@ class LectureSummary(BaseModel):
     group: str | None
     slide_count: int
     has_quiz: bool
+    question_count: int
     download_url: str | None
+
+
+class LectureLink(BaseModel):
+    id: str
+    title: str
+
+
+class LearnerSlide(BaseModel):
+    # A canonical Slide without its authoring-only ``purpose``.
+    slide: dict[str, Any]
+    slots: dict[str, PreviewSlot] | None
+    background_url: str | None
+
+
+class LectureResponse(BaseModel):
+    id: str
+    title: str
+    group: str | None
+    number: int
+    lecture_count: int
+    previous: LectureLink | None
+    next: LectureLink | None
+    aspect_ratio: float
+    slides: list[LearnerSlide]
+    download_url: str | None
+    question_count: int
+
+
+class AnswerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    lecture_id: str = Field(min_length=1, max_length=64)
+    question_id: str = Field(min_length=1, max_length=64)
+    option_id: str = Field(min_length=1, max_length=64)
+    learner_name: str = Field(min_length=1, max_length=100, pattern=PRINTABLE)
+    student_id: str = Field(min_length=1, max_length=64, pattern=PRINTABLE)
+
+
+class AnswerResponse(OptionFeedback):
+    # False when the Question was already answered correctly, so nothing was recorded.
+    recorded: bool
+
+
+class ProgressResponse(BaseModel):
+    student_id: str
+    questions: list[QuestionProgress]
 
 
 class CourseResponse(BaseModel):
@@ -153,6 +223,16 @@ def _link_response(link: ShareLink) -> ShareLinkResponse:
     return ShareLinkResponse(role=link.role, created_at=link.created_at, rotated_at=link.rotated_at)
 
 
+def _visible_slides(lecture: ServedLecture) -> list[Any]:
+    if lecture.presentation is None:
+        return []
+    return [slide for slide in lecture.presentation.slides if not slide.archived]
+
+
+def _lecture_link(lecture: ServedLecture) -> LectureLink:
+    return LectureLink(id=lecture.id, title=lecture.title)
+
+
 def default_course_slug(repo_url: str) -> str:
     name = repo_url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git").lower()
     slug = re.sub(r"[^a-z0-9]+", "-", name).strip("-")[:64].strip("-")
@@ -166,6 +246,10 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
     periodic = PeriodicSync(sync_service, settings.fetch_interval_seconds if periodic_sync else 0)
     exchange_limiter = ExchangeLimiter()
     install_access_log_redaction()
+    answer_limits = {
+        "address": RateLimiter(limit=ANSWERS_PER_ADDRESS),
+        "student": RateLimiter(limit=ANSWERS_PER_STUDENT),
+    }
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -184,6 +268,7 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
     )
     app.state.store = store
     app.state.sync = sync_service
+    app.state.answer_limits = answer_limits
     app.middleware("http")(security_middleware(settings))
 
     @app.get("/healthz")
@@ -378,6 +463,18 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
 
     CourseAccess = Annotated[tuple[Course, Role], Depends(course_access)]
 
+    def download_url(course: Course, directory: Path, lecture: ServedLecture) -> str | None:
+        if lecture.artifact is None:
+            return None
+        return f"/api/c/{course.slug}/assets/{directory.name}/artifacts/{lecture.artifact.id}.pptx"
+
+    def served(course: Course) -> tuple[ServedSnapshot, Path]:
+        snapshot = sync_service.snapshot(course)
+        directory = sync_service.snapshot_dir(course)
+        if snapshot is None or directory is None:
+            raise HTTPException(status_code=409, detail=NO_RELEASE)
+        return snapshot, directory
+
     @app.get("/api/c/{slug}")
     def course_summary(access: CourseAccess) -> CourseResponse:
         course, role = access
@@ -386,19 +483,15 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
         lectures = []
         if snapshot is not None and directory is not None:
             for lecture in snapshot.lectures:
-                download = (
-                    f"/api/c/{course.slug}/assets/{directory.name}/artifacts/{lecture.artifact.id}.pptx"
-                    if lecture.artifact
-                    else None
-                )
                 lectures.append(
                     LectureSummary(
                         id=lecture.id,
                         title=lecture.title,
                         group=lecture.group,
-                        slide_count=len(lecture.presentation.slides) if lecture.presentation else 0,
+                        slide_count=len(_visible_slides(lecture)),
                         has_quiz=lecture.quiz is not None,
-                        download_url=download,
+                        question_count=len(lecture.quiz.questions) if lecture.quiz else 0,
+                        download_url=download_url(course, directory, lecture),
                     )
                 )
         return CourseResponse(
@@ -407,6 +500,136 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
             role=role,
             release=_release_response(course) if snapshot else None,
             lectures=lectures,
+        )
+
+    @app.get("/api/c/{slug}/lectures/{lecture_id}")
+    def lecture_detail(lecture_id: str, access: CourseAccess) -> LectureResponse:
+        """A Lecture's Slides with their preview geometry; its Quiz comes from ``/quizzes``."""
+        course, _role = access
+        snapshot, directory = served(course)
+        lectures = snapshot.lectures
+        index = next(
+            (number for number, item in enumerate(lectures) if item.id == lecture_id), None
+        )
+        if index is None:
+            raise HTTPException(status_code=404, detail="This course has no such Lecture.")
+        lecture = lectures[index]
+        previews = (
+            {slide.slide_id: slide for slide in lecture.preview.slides} if lecture.preview else {}
+        )
+        slides = []
+        for slide in _visible_slides(lecture):
+            preview = previews.get(slide.id)
+            slides.append(
+                LearnerSlide(
+                    slide=slide.model_dump(mode="json", exclude={"purpose"}),
+                    slots=preview.slots if preview else None,
+                    background_url=preview.background_url if preview else None,
+                )
+            )
+        return LectureResponse(
+            id=lecture.id,
+            title=lecture.title,
+            group=lecture.group,
+            number=index + 1,
+            lecture_count=len(lectures),
+            previous=_lecture_link(lectures[index - 1]) if index > 0 else None,
+            next=_lecture_link(lectures[index + 1]) if index + 1 < len(lectures) else None,
+            aspect_ratio=(
+                lecture.preview.slide_width / lecture.preview.slide_height
+                if lecture.preview and lecture.preview.slide_height
+                else 16 / 9
+            ),
+            slides=slides,
+            download_url=download_url(course, directory, lecture),
+            question_count=len(lecture.quiz.questions) if lecture.quiz else 0,
+        )
+
+    @app.get("/api/c/{slug}/quizzes")
+    def quizzes(
+        access: CourseAccess,
+        student_id: Annotated[str, Query(max_length=64)] = "",
+    ) -> list[LearnerQuiz]:
+        """Every Quiz without its answer key, its Options shuffled for this student."""
+        course, _role = access
+        snapshot, _directory = served(course)
+        return learner_quizzes(snapshot, student_id=student_id.strip())
+
+    async def answer_body(request: Request) -> AnswerRequest:
+        """The Answer in the request body, refused early when one network address sends too many
+        or the body is too large."""
+        client = request.client.host if request.client else "unknown"
+        if not answer_limits["address"].allow(client):
+            raise HTTPException(status_code=429, detail="Too many answers. Wait a minute.")
+        declared = request.headers.get("content-length")
+        if declared is not None and (not declared.isdigit() or int(declared) > MAX_ANSWER_BYTES):
+            raise HTTPException(status_code=413, detail="That answer is too large.")
+        body = bytearray()
+        async for chunk in request.stream():
+            body += chunk
+            if len(body) > MAX_ANSWER_BYTES:
+                raise HTTPException(status_code=413, detail="That answer is too large.")
+        try:
+            return AnswerRequest.model_validate_json(bytes(body))
+        except ValidationError as error:
+            raise RequestValidationError(
+                error.errors(include_url=False, include_context=False, include_input=False)
+            ) from error
+
+    @app.post("/api/c/{slug}/answers")
+    def answer(
+        body: Annotated[AnswerRequest, Depends(answer_body)], access: CourseAccess
+    ) -> AnswerResponse:
+        """Record a picked Option and tell the student about it.
+
+        The Answer stores the Release tag, the IDs and the attempt number, never whether it was
+        correct (ADR 0018). Once a student has answered a Question correctly, further picks are
+        answered but not recorded.
+        """
+        course, role = access
+        snapshot, _directory = served(course)
+        found = find_question(snapshot, body.lecture_id, body.question_id)
+        if found is None:
+            raise HTTPException(status_code=422, detail="That question is not part of this course.")
+        lecture, question = found
+        option = option_by_id(question, body.option_id)
+        if option is None:
+            raise HTTPException(status_code=422, detail="That option is not part of the question.")
+        if not answer_limits["student"].allow(f"{course.id}:{body.student_id}"):
+            raise HTTPException(status_code=429, detail="Too many answers. Wait a minute.")
+        recorded = store.record_answer(
+            NewAnswer(
+                course_id=course.id,
+                release_tag=snapshot.manifest.tag,
+                lecture_id=lecture.id,
+                question_id=question.id,
+                option_id=option.id,
+                learner_name=body.learner_name,
+                student_id=body.student_id,
+                role=role,
+            ),
+            settled=lambda earlier: any(is_correct(question, picked) for picked in earlier),
+        )
+        return AnswerResponse(
+            option_id=option.id,
+            correct=is_correct(question, option.id),
+            explanation=option.explanation,
+            citations=list(option.citations),
+            recorded=recorded is not None,
+        )
+
+    @app.get("/api/c/{slug}/progress")
+    def student_progress(
+        access: CourseAccess,
+        student_id: Annotated[str, Query(min_length=1, max_length=64)],
+    ) -> ProgressResponse:
+        """A student's state on each Question, from the Answers given with their student ID."""
+        course, _role = access
+        snapshot, _directory = served(course)
+        student = student_id.strip()
+        return ProgressResponse(
+            student_id=student,
+            questions=progress(snapshot, store.answers(course.id, student_id=student)),
         )
 
     @app.get("/api/c/{slug}/assets/{name}/{path:path}")

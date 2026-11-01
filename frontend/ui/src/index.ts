@@ -5,6 +5,7 @@ export {
 	CitationList,
 	type CitationOpening,
 } from "./Citations";
+export { Markdown } from "./Markdown";
 export {
 	ConfirmDialog,
 	Dialog,

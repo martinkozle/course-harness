@@ -140,11 +140,21 @@ def _quiz() -> Quiz:
                 id="question-aaaaaaaaaaaa",
                 prompt="What does randomisation remove?",
                 options=[
-                    QuizOption(id="option-aaaaaaaaaaaa", text="Confounding", correct=True),
+                    QuizOption(
+                        id="option-aaaaaaaaaaaa",
+                        text="Confounding",
+                        correct=True,
+                        explanation="Random assignment balances confounders **on average**.",
+                    ),
                     QuizOption(
                         id="option-bbbbbbbbbbbb",
                         text="Sampling error",
                         explanation="Randomisation does not remove sampling error.",
+                    ),
+                    QuizOption(
+                        id="option-cccccccccccc",
+                        text="Measurement error",
+                        explanation="Randomisation says nothing about how outcomes are measured.",
                     ),
                 ],
             )

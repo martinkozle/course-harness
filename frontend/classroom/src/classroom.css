@@ -12,11 +12,19 @@ body {
 
 .classroom-bar {
 	display: flex;
-	align-items: baseline;
+	align-items: center;
+	justify-content: space-between;
 	gap: 12px;
-	padding: 14px 24px;
+	min-height: 56px;
+	padding: 10px 24px;
 	border-bottom: 1px solid var(--rule);
 	background: var(--surface);
+}
+
+@media (max-width: 640px) {
+	.classroom-bar {
+		padding: 8px 16px;
+	}
 }
 
 .classroom-bar h1 {
@@ -53,16 +61,13 @@ body {
 }
 
 .admin,
-.course,
-.course-list,
-.lecture-list {
+.course-list {
 	display: grid;
 	gap: 16px;
 }
 
 .admin-header,
-.course-card-header,
-.lecture-row {
+.course-card-header {
 	display: flex;
 	align-items: flex-start;
 	justify-content: space-between;
@@ -121,11 +126,6 @@ body {
 	flex: 1;
 	font-family: var(--font-mono);
 	font-size: 0.875rem;
-}
-
-.course-header {
-	display: grid;
-	gap: 6px;
 }
 
 a.btn {

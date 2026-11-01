@@ -1,4 +1,4 @@
-"""The Classroom's SQLite store: attached courses, Share Links and sessions.
+"""The Classroom's SQLite store: attached courses, Share Links, sessions and Answers.
 
 Migrations are numbered SQL scripts applied in order and recorded in ``PRAGMA user_version``; a
 later ticket appends a script, never edits an applied one. Each operation opens its own
@@ -8,7 +8,7 @@ connection, so the store is safe to use from request threads and the sync thread
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -57,6 +57,26 @@ MIGRATIONS: tuple[str, ...] = (
         expires_at TEXT NOT NULL
     );
     CREATE INDEX sessions_by_course ON sessions (course_id, role);
+    """,
+    # Answers: one row per Option a Learner picked. Correctness is never stored; it is derived
+    # against the served Release when read (ADR 0018). ``role`` tells Instructors' own tries
+    # apart from Learners'.
+    """
+    CREATE TABLE answers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        course_id INTEGER NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+        release_tag TEXT NOT NULL,
+        lecture_id TEXT NOT NULL,
+        question_id TEXT NOT NULL,
+        option_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL CHECK (attempt >= 1),
+        learner_name TEXT NOT NULL,
+        student_id TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('learner', 'instructor')),
+        answered_at TEXT NOT NULL
+    );
+    CREATE INDEX answers_by_student ON answers (course_id, student_id, question_id);
+    CREATE INDEX answers_by_question ON answers (course_id, question_id);
     """,
 )
 
@@ -112,6 +132,35 @@ class ServedRelease:
     name: str
     commit: str
     published_at: str
+
+
+@dataclass(frozen=True)
+class NewAnswer:
+    """An Option a Learner picked, before the store numbers the attempt."""
+
+    course_id: int
+    release_tag: str
+    lecture_id: str
+    question_id: str
+    option_id: str
+    learner_name: str
+    student_id: str
+    role: Role
+
+
+@dataclass(frozen=True)
+class Answer:
+    id: int
+    course_id: int
+    release_tag: str
+    lecture_id: str
+    question_id: str
+    option_id: str
+    attempt: int
+    learner_name: str
+    student_id: str
+    role: Role
+    answered_at: str
 
 
 class DuplicateCourse(ValueError):
@@ -307,6 +356,79 @@ class Store:
     def delete_session(self, id_hash: str) -> None:
         with self.connect() as connection:
             connection.execute("DELETE FROM sessions WHERE id_hash = ?", (id_hash,))
+
+    # Answers
+
+    def record_answer(
+        self, answer: NewAnswer, *, settled: Callable[[list[str]], bool]
+    ) -> Answer | None:
+        """Record an Answer as the next attempt of its student on its Question.
+
+        ``settled`` sees the Option IDs the student picked on this Question before, in order; when
+        it says the Question is already answered correctly, nothing is recorded and ``None`` is
+        returned. Counting and inserting happen in one write transaction, so concurrent Answers
+        never share an attempt number.
+        """
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                earlier = [
+                    row["option_id"]
+                    for row in connection.execute(
+                        "SELECT option_id FROM answers "
+                        "WHERE course_id = ? AND student_id = ? AND question_id = ? ORDER BY id",
+                        (answer.course_id, answer.student_id, answer.question_id),
+                    )
+                ]
+                if settled(earlier):
+                    connection.execute("COMMIT")
+                    return None
+                moment = now().isoformat(timespec="milliseconds")
+                cursor = connection.execute(
+                    "INSERT INTO answers (course_id, release_tag, lecture_id, question_id, "
+                    "option_id, attempt, learner_name, student_id, role, answered_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        answer.course_id,
+                        answer.release_tag,
+                        answer.lecture_id,
+                        answer.question_id,
+                        answer.option_id,
+                        len(earlier) + 1,
+                        answer.learner_name,
+                        answer.student_id,
+                        answer.role,
+                        moment,
+                    ),
+                )
+                connection.execute("COMMIT")
+            except BaseException:
+                connection.execute("ROLLBACK")
+                raise
+        return Answer(
+            id=int(cursor.lastrowid or 0),
+            course_id=answer.course_id,
+            release_tag=answer.release_tag,
+            lecture_id=answer.lecture_id,
+            question_id=answer.question_id,
+            option_id=answer.option_id,
+            attempt=len(earlier) + 1,
+            learner_name=answer.learner_name,
+            student_id=answer.student_id,
+            role=answer.role,
+            answered_at=moment,
+        )
+
+    def answers(self, course_id: int, *, student_id: str | None = None) -> list[Answer]:
+        """A course's Answers in the order they were given, optionally of one student."""
+        query = "SELECT * FROM answers WHERE course_id = ?"
+        parameters: tuple[object, ...] = (course_id,)
+        if student_id is not None:
+            query += " AND student_id = ?"
+            parameters += (student_id,)
+        with self.connect() as connection:
+            rows = connection.execute(f"{query} ORDER BY id", parameters).fetchall()
+        return [Answer(**dict(row)) for row in rows]
 
 
 def _insert_session(

@@ -1,20 +1,19 @@
 import "@course-harness/ui/styles.css";
 import "./classroom.css";
+import "./learner.css";
 
 import { Notice } from "@course-harness/ui";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { AdminPage } from "./AdminPage";
-import { CoursePage } from "./CoursePage";
+import { CourseShell } from "./CourseShell";
 import { type Route, useRoute } from "./router";
 
 function Page({ route }: { route: Route }) {
 	switch (route.page) {
 		case "admin":
 			return <AdminPage />;
-		case "course":
-			return <CoursePage slug={route.slug} />;
 		case "link-not-valid":
 			return (
 				<Notice tone="warning">
@@ -33,6 +32,10 @@ function Page({ route }: { route: Route }) {
 
 function Classroom() {
 	const route = useRoute();
+	if (route.page === "course") {
+		const { page: _page, slug, ...view } = route;
+		return <CourseShell key={slug} slug={slug} view={view} />;
+	}
 	return (
 		<div className="classroom">
 			<header className="classroom-bar">

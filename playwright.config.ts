@@ -14,11 +14,21 @@ export default defineConfig({
 		// Axe must never measure a half-faded dialog; the app honours reduced motion.
 		contextOptions: { reducedMotion: "reduce" },
 	},
-	webServer: {
-		command: "uv run python tests/e2e/run_smoke_server.py",
-		url: "http://127.0.0.1:18765/api/health",
-		env: { ...process.env, UV_CACHE_DIR: ".cache/uv" },
-		reuseExistingServer: false,
-		timeout: 60_000,
-	},
+	webServer: [
+		{
+			command: "uv run python tests/e2e/run_smoke_server.py",
+			url: "http://127.0.0.1:18765/api/health",
+			env: { ...process.env, UV_CACHE_DIR: ".cache/uv" },
+			reuseExistingServer: false,
+			timeout: 60_000,
+		},
+		{
+			// A Classroom serving a fixture Course, for classroom-learner.spec.ts.
+			command: "uv run python tests/e2e/run_classroom_server.py",
+			url: "http://127.0.0.1:18766/healthz",
+			env: { ...process.env, UV_CACHE_DIR: ".cache/uv" },
+			reuseExistingServer: false,
+			timeout: 120_000,
+		},
+	],
 });

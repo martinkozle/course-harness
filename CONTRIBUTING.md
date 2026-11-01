@@ -26,7 +26,7 @@ The repository is a uv workspace (one root `uv.lock`) and a Bun workspace (one r
 | `frontend/harness` | The Course Harness interface, built into `packages/harness/src/course_harness/static` |
 | `frontend/classroom` | The Classroom interface, built into `frontend/classroom/dist` |
 | `frontend/ui` | `@course-harness/ui`, code shared by both interfaces |
-| `tests/e2e` | The Playwright smoke journey |
+| `tests/e2e` | The Playwright smoke journey, including the Classroom Learner journey |
 
 The root `pyproject.toml` holds the workspace, the development dependencies, and the Ruff, ty, and
 pytest settings. `packages/harness` links `README.md`, `LICENSE`, and `uv.lock` from the root; a

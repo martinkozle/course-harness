@@ -180,6 +180,34 @@ def install_access_log_redaction() -> None:
         access.addFilter(RedactShareLinks())
 
 
+class RateLimiter:
+    """Allow at most ``limit`` events per key within a sliding window of ``window_seconds``."""
+
+    def __init__(self, *, limit: int, window_seconds: float = 60) -> None:
+        self.limit = limit
+        self.window_seconds = window_seconds
+        self._events: dict[str, deque[float]] = {}
+        self._guard = threading.Lock()
+
+    def allow(self, key: str) -> bool:
+        """Count one event for ``key`` unless that would exceed the limit."""
+        moment = time.monotonic()
+        with self._guard:
+            if len(self._events) > 50_000:
+                self._events = {
+                    name: events
+                    for name, events in self._events.items()
+                    if events and events[-1] >= moment - self.window_seconds
+                }
+            events = self._events.setdefault(key, deque())
+            while events and events[0] < moment - self.window_seconds:
+                events.popleft()
+            if len(events) >= self.limit:
+                return False
+            events.append(moment)
+            return True
+
+
 def _expected_origins(settings: ClassroomSettings, request: Request) -> set[str]:
     origins = {f"{request.url.scheme}://{request.url.netloc}"}
     if settings.public_url is not None:

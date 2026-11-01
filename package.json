@@ -9,7 +9,7 @@
 		"lint": "biome lint frontend playwright.config.ts tests/e2e",
 		"typecheck": "tsc --noEmit && bun run --filter './frontend/*' typecheck",
 		"build": "bun run --filter './frontend/*' build",
-		"test:e2e": "bun run lint && tsc --noEmit && bun run --filter @course-harness/harness build && playwright test"
+		"test:e2e": "bun run lint && tsc --noEmit && bun run --filter @course-harness/harness build && bun run --filter @course-harness/classroom build && playwright test"
 	},
 	"devDependencies": {
 		"@axe-core/playwright": "^4.13.0",

@@ -1,3 +1,5 @@
+import type { PreviewSlot, Slide, SlideCitation } from "@course-harness/ui";
+
 // The Classroom HTTP API. Every request sends the header the server requires on state-changing
 // requests, so a cross-site form or image can never make one.
 
@@ -44,6 +46,7 @@ export type LectureSummary = {
 	group: string | null;
 	slide_count: number;
 	has_quiz: boolean;
+	question_count: number;
 	download_url: string | null;
 };
 
@@ -53,6 +56,71 @@ export type CourseSummary = {
 	role: Role;
 	release: ServedRelease | null;
 	lectures: LectureSummary[];
+};
+
+export type LectureLink = { id: string; title: string };
+
+export type LearnerSlide = {
+	slide: Slide;
+	slots: Record<string, PreviewSlot> | null;
+	background_url: string | null;
+};
+
+export type Lecture = {
+	id: string;
+	title: string;
+	group: string | null;
+	number: number;
+	lecture_count: number;
+	previous: LectureLink | null;
+	next: LectureLink | null;
+	aspect_ratio: number;
+	slides: LearnerSlide[];
+	download_url: string | null;
+	question_count: number;
+};
+
+/** A Question as a Learner sees it before answering: no correctness, no Explanations. */
+export type LearnerQuestion = {
+	id: string;
+	prompt: string;
+	options: { id: string; text: string }[];
+};
+
+export type LearnerQuiz = {
+	lecture_id: string;
+	lecture_title: string;
+	questions: LearnerQuestion[];
+};
+
+/** What a Learner learns about an Option they picked. */
+export type OptionFeedback = {
+	option_id: string;
+	correct: boolean;
+	explanation: string | null;
+	citations: SlideCitation[];
+};
+
+export type AnswerResult = OptionFeedback & { recorded: boolean };
+
+export type QuestionProgress = {
+	lecture_id: string;
+	question_id: string;
+	correct: boolean;
+	tried: OptionFeedback[];
+};
+
+export type Progress = {
+	student_id: string;
+	questions: QuestionProgress[];
+};
+
+export type AnswerRequest = {
+	lecture_id: string;
+	question_id: string;
+	option_id: string;
+	learner_name: string;
+	student_id: string;
 };
 
 export class ApiError extends Error {
@@ -117,4 +185,25 @@ export const api = {
 		),
 	course: (slug: string) =>
 		request<CourseSummary>("GET", `/api/c/${encodeURIComponent(slug)}`),
+	lecture: (slug: string, lectureId: string) =>
+		request<Lecture>(
+			"GET",
+			`/api/c/${encodeURIComponent(slug)}/lectures/${encodeURIComponent(lectureId)}`,
+		),
+	quizzes: (slug: string, studentId: string) =>
+		request<LearnerQuiz[]>(
+			"GET",
+			`/api/c/${encodeURIComponent(slug)}/quizzes?${new URLSearchParams({ student_id: studentId })}`,
+		),
+	progress: (slug: string, studentId: string) =>
+		request<Progress>(
+			"GET",
+			`/api/c/${encodeURIComponent(slug)}/progress?${new URLSearchParams({ student_id: studentId })}`,
+		),
+	answer: (slug: string, answer: AnswerRequest) =>
+		request<AnswerResult>(
+			"POST",
+			`/api/c/${encodeURIComponent(slug)}/answers`,
+			answer,
+		),
 };
