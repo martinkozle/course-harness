@@ -118,6 +118,84 @@
 	max-height: 40cqw;
 }
 
+/* Content the layout has no slot for, in a free area: under the title, or centred. */
+.slide-leftover {
+	position: absolute;
+	display: grid;
+	align-content: start;
+	gap: 0.5em;
+	overflow: hidden;
+	color: var(--slot-color, #1f2933);
+	font-size: 2.6cqw;
+	line-height: 1.3;
+}
+
+.slide-leftover.is-centred {
+	align-content: center;
+	text-align: center;
+}
+
+.slide-leftover :is(h2, h3, h4) {
+	font-size: 4.5cqw;
+	font-weight: 600;
+	line-height: 1.2;
+}
+
+.slide-leftover .slide-statement {
+	font-size: 4cqw;
+}
+
+.slide-leftover blockquote {
+	font-size: 3.6cqw;
+	font-style: italic;
+}
+
+.slide-leftover :is(.slide-subtitle, figcaption) {
+	opacity: 0.8;
+}
+
+.slide-leftover figure {
+	display: grid;
+	gap: 0.3em;
+}
+
+.slide-leftover ul {
+	padding-left: 1.2em;
+	list-style: disc;
+	text-align: left;
+}
+
+.slide-leftover .slide-columns {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 1.5em;
+	text-align: left;
+}
+
+.slide-leftover pre {
+	overflow: hidden;
+	padding: 0.6em 0.8em;
+	border-radius: var(--radius-s);
+	background: rgb(127 127 127 / 15%);
+	font-size: 0.9em;
+	text-align: left;
+	white-space: pre-wrap;
+}
+
+.slide-preview .slide-leftover img {
+	position: static;
+	width: auto;
+	max-width: 100%;
+	height: auto;
+	max-height: 30cqw;
+	justify-self: center;
+}
+
+/* Over an authoritative rendering, it is only there to select, copy and read aloud. */
+.slide-preview.is-rendered .slide-leftover {
+	color: transparent;
+}
+
 .slide-updating {
 	position: absolute;
 	right: 6px;

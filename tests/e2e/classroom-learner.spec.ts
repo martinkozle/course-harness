@@ -288,6 +288,70 @@ test("an Instructor switches between the Instructor and Learner views", async ({
 	await context.close();
 });
 
+test("a Quote Slide shows its quote even when the layout maps only a title", async ({
+	page,
+}) => {
+	const quote = "No causation without manipulation.";
+	await page.goto(LEARNER_LINK);
+	await page.getByLabel("Your name").fill("Ada Lovelace");
+	await page.getByLabel("Student ID").fill(`${STUDENT_ID}-q`);
+	await page.getByRole("button", { name: "Start" }).click();
+	await page
+		.getByRole("link", { name: /From association to intervention/ })
+		.click();
+
+	// With the built-in template's body slot, the attribution follows the quote, as in the PPTX.
+	const quoteSlide = page.locator(".slide-preview").filter({ hasText: quote });
+	await expect(quoteSlide).toContainText("— Holland (1986)");
+
+	// A template profile that maps only `title` for the quote layout, like a real one did.
+	await page.route("**/api/c/causal/lectures/*", async (route) => {
+		const response = await route.fetch();
+		const lecture = await response.json();
+		for (const item of lecture.slides) {
+			if (item.slide.layout !== "quote") continue;
+			const slots = item.slots ?? {};
+			item.slots = {
+				title: slots.title ??
+					Object.values(slots)[0] ?? {
+						left: 0.08,
+						top: 0.08,
+						width: 0.84,
+						height: 0.16,
+						font_family: "Georgia",
+						font_size: 32,
+						bold: true,
+						alignment: null,
+					},
+			};
+		}
+		await route.fulfill({ response, json: lecture });
+	});
+	await page.reload();
+
+	const leftover = quoteSlide.getByTestId("slide-leftover");
+	await expect(leftover).toBeVisible();
+	// The Slide has no title, so the quote is centred instead of hanging under an empty slot.
+	await expect(leftover).toHaveClass(/is-centred/);
+	await expect(leftover.getByText(quote)).toBeVisible();
+	await expect(leftover.getByText("Holland (1986)")).toBeVisible();
+	const inside = await leftover.evaluate((element) => {
+		const box = element.getBoundingClientRect();
+		const slide = element.parentElement?.getBoundingClientRect();
+		return Boolean(
+			slide &&
+				box.width > 0 &&
+				box.left >= slide.left &&
+				box.right <= slide.right + 1 &&
+				box.bottom <= slide.bottom + 1,
+		);
+	});
+	expect(inside, "the leftover content sits on the Slide").toBe(true);
+	await quoteSlide.screenshot({
+		path: "test-results/quote-slide-title-only-layout.png",
+	});
+});
+
 test("Learners cannot open Insights", async ({ page }) => {
 	await page.goto(LEARNER_LINK);
 	await expect(
