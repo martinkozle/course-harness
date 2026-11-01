@@ -1,6 +1,6 @@
 # Course Harness
 
-Course Harness is a local-first environment in which a Course Author collaborates with an agent to create and maintain source-grounded, multi-lecture course material.
+Course Harness is a local-first environment in which a Course Author collaborates with an agent to create and maintain source-grounded, multi-lecture course material, and Learners use its published Course Releases in a Classroom.
 
 ## Language
 
@@ -35,6 +35,26 @@ _Avoid_: Course, lecture
 **Slide**:
 A stable, progressively authored unit within a Presentation that may begin as an outline skeleton and accumulate content, Evidence, Citations, and speaker notes without passing through a mandatory workflow.
 _Avoid_: Slide Plan, PowerPoint page, agent stage
+
+**Quiz**:
+The optional set of Questions that checks understanding of one Lecture, authored by the Course Agent as canonical Course state and published with a Course Release.
+_Avoid_: Test, exam, exercise set
+
+**Question**:
+One single-answer multiple-choice item in a Quiz, with a stable ID and exactly one correct Option.
+_Avoid_: Item, exercise
+
+**Option**:
+One answer choice of a Question, with a stable ID that stays the same when the Quiz is revised.
+_Avoid_: Choice, answer
+
+**Explanation**:
+The text shown with an Option, required for each wrong Option and optional for the correct one, which may carry Citations.
+_Avoid_: Feedback, hint, rationale
+
+**Answer**:
+A recorded Learner pick of one Option, storing the Release tag, Question ID and Option ID but never whether it was correct.
+_Avoid_: Submission, response, grade
 
 **Library**:
 The persistent collection through which Resources and their processing state can be discovered and reused across Courses.
@@ -87,6 +107,26 @@ _Avoid_: Draft, autosave, release
 **Course Release**:
 A named immutable publication of a Course Revision that pins the Source Versions, Template Profile, validation result, and Artifact identities used for delivery.
 _Avoid_: Latest export, branch, autosave
+
+**Classroom**:
+The self-hostable Course Harness Classroom, which serves the latest valid Course Release of each attached Course read-only to Learners and Instructors.
+_Avoid_: LMS, portal, Course Harness
+
+**Administrator**:
+The person who runs a Classroom, attaches Course repositories, and creates or rotates Share Links using a token from the server environment.
+_Avoid_: Admin user, Course Author
+
+**Instructor**:
+A Classroom role, held through a per-Course Share Link, that views a Course with its Quiz statistics and Learner progress; the same person may also be its Course Author.
+_Avoid_: Professor, teacher, Course Author
+
+**Learner**:
+A person who follows a Course in a Classroom through a Learner Share Link and identifies with a self-declared name and student ID.
+_Avoid_: Student, user, participant
+
+**Share Link**:
+A per-Course, per-role URL whose token a Classroom exchanges for an HttpOnly cookie; rotating it invalidates the previous link.
+_Avoid_: Invite, login, access code
 
 **Workspace Drift**:
 Uncommitted external changes to canonical Course Workspace files that have not yet been validated and accepted as a Course Revision.

@@ -1,0 +1,3 @@
+# Derive Quiz correctness and score at read time
+
+Each Answer stores the Release tag, Question ID and chosen Option ID, never whether it was correct. Correctness and score are derived when read, against the latest Release by default, so fixing an answer key in a new Release regrades earlier Answers without a migration; Instructor stats can still break down by Release and flag Answers to Questions that changed or no longer exist. This depends on the Course Agent keeping Question and Option IDs stable when it revises a Quiz. A Learner retries until correct, and attempt k on a Question earns 0.5^(k-1), except that the attempt when only one Option remains untried earns 0 (four Options score 1, 0.5, 0.25, 0); there are no manual overrides.

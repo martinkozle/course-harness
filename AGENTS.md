@@ -17,15 +17,27 @@ publishes on a `v*` tag; never upload from a local machine.
 
 ## Architecture invariants
 
-- A running Course Harness application may be unbound only in the restricted Workspace Launcher;
-  after selection, it is bound to at most one explicit Course Workspace.
-- The Course Harness Python package owns its HTTP boundary and serves the production React bundle.
-- The browser may inspect the selected Workspace identity through `/api/workspace`; do not add a
-  general filesystem browser or accept arbitrary paths through HTTP.
+### Course Harness
+
+- A running Course Harness may be unbound only in the restricted Workspace Launcher; after
+  selection, it is bound to at most one explicit Course Workspace.
+- The Course Harness Python package owns the HTTP boundary and serves the production React bundle.
+- The Course Harness browser may inspect the selected Workspace identity through `/api/workspace`;
+  do not add a general filesystem browser or accept arbitrary paths through HTTP.
 - Keep Course Author-facing copy neutral. Use “you” where possible and `Course Author` when the role
   must be named.
 - Keep canonical Course state human-readable. Runtime caches and secrets never belong in a Course
   Workspace.
+
+### Classroom
+
+- The Classroom serves only validated Course Release tags read from a bare mirror, never mutable
+  working state, and never checks out or executes repository content.
+- The Classroom never hosts Source binaries.
+- The Administrator token never appears in a URL. Learner and Instructor Share Link tokens are
+  exchanged for HttpOnly cookies and a redirect to a clean URL.
+- Keep Learner- and Instructor-facing copy neutral. Use “you” where possible and name the role
+  (`Learner`, `Instructor`, `Administrator`) only when it must be named.
 
 ## Commands
 
