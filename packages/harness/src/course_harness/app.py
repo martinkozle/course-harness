@@ -110,7 +110,14 @@ from course_harness.core.presentation import (
     slide_by_id,
     write_presentation,
 )
-from course_harness.core.quiz import QUIZZES_DIRECTORY, list_quizzes, quiz_path
+from course_harness.core.quiz import (
+    QUIZZES_DIRECTORY,
+    InvalidQuiz,
+    Quiz,
+    list_quizzes,
+    quiz_path,
+    read_quiz,
+)
 from course_harness.core.release_validation import (
     InvalidWaiver,
     ReleaseSelection,
@@ -2448,6 +2455,33 @@ def create_app(
                 detail="No Presentation exists for this lecture",
             )
         return pres
+
+    class QuizSummary(BaseModel):
+        lecture_id: str
+        question_count: int
+
+    @app.get("/api/quizzes", response_model=list[QuizSummary])
+    async def api_list_quizzes() -> list[QuizSummary]:
+        active = require_workspace()
+        return [
+            QuizSummary(lecture_id=quiz.lecture_id, question_count=len(quiz.questions))
+            for quiz in list_quizzes(active)
+        ]
+
+    @app.get("/api/quizzes/{lecture_id}", response_model=Quiz)
+    async def api_get_quiz(lecture_id: str) -> Quiz:
+        active = require_workspace()
+        try:
+            quiz = read_quiz(active, lecture_id)
+        except InvalidQuiz as error:
+            raise HTTPException(status_code=422, detail=f"The Quiz is invalid: {error}") from error
+        except ValueError as error:
+            raise HTTPException(
+                status_code=404, detail="No Quiz exists for this lecture"
+            ) from error
+        if quiz is None:
+            raise HTTPException(status_code=404, detail="No Quiz exists for this lecture")
+        return quiz
 
     def preview_context(lecture_id: str) -> tuple[Presentation, PreviewContext]:
         active, plan = require_course_plan()

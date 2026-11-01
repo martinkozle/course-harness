@@ -37,6 +37,9 @@ export function findingScope(
 		);
 	}
 	if (target.slide_id) parts.push(`Slide ${target.slide_id}`);
+	if (target.scope === "quiz" || target.question_id) parts.push("Quiz");
+	if (target.question_id) parts.push(`Question ${target.question_id}`);
+	if (target.option_id) parts.push(`Option ${target.option_id}`);
 	if (target.content_block)
 		parts.push(target.content_block.replaceAll("_", " "));
 	if (target.citation_index !== null)

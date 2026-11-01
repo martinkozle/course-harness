@@ -3,6 +3,9 @@ import type { PreviewSlot, Slide, SlideLayout } from "@course-harness/ui";
 // The Slide schema is shared with the Classroom; it lives in the shared interface package.
 export type {
 	PreviewSlot,
+	Quiz,
+	QuizOption,
+	QuizQuestion,
 	Slide,
 	SlideCitation,
 	SlideLayout,
@@ -266,6 +269,11 @@ export type PresentationSummary = {
 	slide_count: number;
 };
 
+export type QuizSummary = {
+	lecture_id: string;
+	question_count: number;
+};
+
 export type TemplateLayoutMapping = {
 	semantic_layout: SlideLayout;
 	template_layout_index: number;
@@ -395,7 +403,10 @@ export type ReleaseFindingTarget = {
 		| "artifact"
 		| "slide"
 		| "content_block"
-		| "citation";
+		| "citation"
+		| "quiz"
+		| "question"
+		| "option";
 	lecture_id: string | null;
 	artifact_id: string | null;
 	slide_id: string | null;
@@ -404,6 +415,9 @@ export type ReleaseFindingTarget = {
 	source_id: string | null;
 	line_start: number | null;
 	line_end: number | null;
+	/** Present only on Quiz findings. */
+	question_id?: string | null;
+	option_id?: string | null;
 };
 
 export type EvidenceTarget = {

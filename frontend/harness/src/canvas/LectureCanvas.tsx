@@ -1,5 +1,4 @@
 import {
-	type CitationOpening,
 	CitationList,
 	ConfirmDialog,
 	downloadResponse,
@@ -7,8 +6,8 @@ import {
 	isAbort,
 	Notice,
 	SlidePreview,
-	safeHttpUrl,
 	slideSummary,
+	Tabs,
 } from "@course-harness/ui";
 import {
 	Archive,
@@ -40,12 +39,16 @@ import type {
 	PresentationPreview,
 	ReaderTarget,
 	Slide,
-	SlideCitation,
 	SlidePreviewDescriptor,
 	Source,
 	TemplateProfileSummary,
 } from "../models";
 import type { AgentContext } from "../useCourseAgent";
+import { evidenceOpening } from "./evidenceOpening";
+import { QuizView } from "./QuizView";
+
+/** The part of a Lecture the canvas shows. */
+export type LectureView = "slides" | "quiz";
 
 type Freshness = "checking" | "rendering" | "ready";
 
@@ -183,10 +186,14 @@ export function LectureCanvas({
 	lecture,
 	lectureNumber,
 	presentationVersion,
+	view,
+	quizQuestionCount,
+	quizVersion,
 	templates,
 	sources,
 	imageSources,
 	busy,
+	onViewChange,
 	onPresentationsChange,
 	onCourseChange,
 	onFocusChange,
@@ -199,6 +206,11 @@ export function LectureCanvas({
 	lecture: Lecture;
 	lectureNumber: number;
 	presentationVersion: number;
+	view: LectureView;
+	/** Questions in the Lecture's Quiz; 0 when it has none. */
+	quizQuestionCount: number;
+	quizVersion: number;
+	onViewChange: (view: LectureView) => void;
 	templates: TemplateProfileSummary[];
 	sources: Source[];
 	/** Course Sources that can be shown on an Image Slide. */
@@ -397,9 +409,16 @@ export function LectureCanvas({
 				instruction: `I'm reviewing ${selected.archived ? "an archived Slide" : `Slide ${selectedIndex + 1}`}, "${slideSummary(selected)}", in "${lecture.title}"`,
 			}
 		: null;
-	const focusKey = slideContext?.key ?? lectureContext.key;
-	const focusRef = useRef(slideContext ?? lectureContext);
-	focusRef.current = slideContext ?? lectureContext;
+	const quizContext: AgentContext = {
+		key: `quiz-${lecture.id}`,
+		label: `Quiz · Lecture ${lectureNumber}`,
+		instruction: `I'm reviewing the Quiz for the Lecture "${lecture.title}"`,
+	};
+	const focus =
+		view === "quiz" ? quizContext : (slideContext ?? lectureContext);
+	const focusKey = focus.key;
+	const focusRef = useRef(focus);
+	focusRef.current = focus;
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: focusKey identifies the focus
 	useEffect(() => {
@@ -574,16 +593,32 @@ export function LectureCanvas({
 				<div className="canvas-head-copy">
 					<p className="lecture-kicker">Lecture {lectureNumber}</p>
 					<h1 className="display-title">{lecture.title}</h1>
-					{presentation ? (
-						<p className="meta">
-							{activeSlides.length} Slide{activeSlides.length === 1 ? "" : "s"}
-							{archivedSlides.length > 0
-								? ` · ${archivedSlides.length} archived`
-								: ""}
-						</p>
-					) : null}
+					<div className="lecture-parts">
+						<Tabs<LectureView>
+							label="Lecture parts"
+							value={view}
+							onChange={onViewChange}
+							tabs={[
+								{ id: "slides", label: "Slides" },
+								{
+									id: "quiz",
+									label: "Quiz",
+									count: quizQuestionCount > 0 ? quizQuestionCount : undefined,
+								},
+							]}
+						/>
+						{presentation && view === "slides" ? (
+							<p className="meta">
+								{activeSlides.length} Slide
+								{activeSlides.length === 1 ? "" : "s"}
+								{archivedSlides.length > 0
+									? ` · ${archivedSlides.length} archived`
+									: ""}
+							</p>
+						) : null}
+					</div>
 				</div>
-				{presentation ? (
+				{presentation && view === "slides" ? (
 					<div className="canvas-head-actions">
 						<button
 							type="button"
@@ -623,9 +658,24 @@ export function LectureCanvas({
 				) : null}
 			</header>
 
-			{error ? <Notice tone="error">{error}</Notice> : null}
+			{view === "quiz" ? (
+				<QuizView
+					lecture={lecture}
+					lectureNumber={lectureNumber}
+					context={quizContext}
+					quizVersion={quizVersion}
+					sources={sources}
+					busy={busy}
+					onAskAgent={onAskAgent}
+					onOpenEvidence={onOpenEvidence}
+				/>
+			) : null}
 
-			{loading ? (
+			{view === "slides" && error ? (
+				<Notice tone="error">{error}</Notice>
+			) : null}
+
+			{view !== "slides" ? null : loading ? (
 				<p className="meta" role="status">
 					Loading Slides…
 				</p>
@@ -971,28 +1021,7 @@ function SlideDetails({
 	sources: Source[];
 	onOpenEvidence: (target: ReaderTarget) => void;
 }) {
-	function opening(citation: SlideCitation): CitationOpening {
-		const source = sources.find((item) => item.id === citation.source_id);
-		if (source)
-			return {
-				title: "Open the cited passage",
-				onOpen: () =>
-					onOpenEvidence({
-						sourceId: citation.source_id,
-						resourceId: null,
-						label: source.label,
-						lineStart: citation.line_start ?? null,
-						lineEnd: citation.line_end ?? null,
-					}),
-			};
-		const url = safeHttpUrl(citation.url);
-		return {
-			title: "This Source is no longer in the course",
-			...(url
-				? { onOpen: () => window.open(url, "_blank", "noopener,noreferrer") }
-				: { disabled: true }),
-		};
-	}
+	const opening = evidenceOpening(sources, onOpenEvidence);
 	return (
 		<div className="slide-details">
 			{slide.purpose ? (

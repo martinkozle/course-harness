@@ -41,8 +41,8 @@ import type {
 	Source,
 } from "../models";
 import {
-	ATTACHABLE_TYPES,
 	type AgentContext,
+	ATTACHABLE_TYPES,
 	type CourseAgent,
 	messageParts,
 	type RunResult,
@@ -508,6 +508,24 @@ function RunResults({
 					</li>
 				) : null,
 			)}
+			{result.quizLectureIds.map((lectureId) => {
+				const lecture = course?.lectures.find((item) => item.id === lectureId);
+				return lecture ? (
+					<li key={`quiz-${lectureId}`}>
+						<button
+							type="button"
+							onClick={() =>
+								onOpen({ kind: "lecture", lectureId, view: "quiz" })
+							}
+						>
+							<span className="result-kind">
+								Lecture {lectureNumber.get(lectureId)} · {lecture.title}
+							</span>
+							<span className="result-copy">Quiz · Open</span>
+						</button>
+					</li>
+				) : null;
+			})}
 			{result.deletedPresentationIds.length > 0 ? (
 				<li className="is-static">
 					<span className="result-kind">

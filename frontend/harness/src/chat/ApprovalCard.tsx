@@ -22,6 +22,12 @@ type PresentationProposal = {
 	}[];
 };
 
+type QuizProposal = {
+	lecture_id?: string;
+	replace_all_questions?: boolean;
+	questions?: { id?: string | null; prompt?: string | null }[];
+};
+
 type ReconciliationProposal = {
 	summary: string;
 	entries: { path: string; content: string | null }[];
@@ -31,6 +37,8 @@ type Parsed =
 	| { tool: "course_plan"; preview: CoursePlanProposal | null }
 	| { tool: "presentation"; preview: PresentationProposal | null }
 	| { tool: "presentation_delete"; lectureId: string | null }
+	| { tool: "quiz"; preview: QuizProposal | null }
+	| { tool: "quiz_delete"; lectureId: string | null }
 	| { tool: "reconciliation"; preview: ReconciliationProposal | null }
 	| { tool: "unknown" };
 
@@ -79,6 +87,16 @@ export function parseApproval(interrupt: AgentInterrupt): Parsed {
 		return {
 			tool: "presentation_delete",
 			lectureId: payload?.lecture_id ?? null,
+		};
+	}
+	if (message.includes("delete_quiz(")) {
+		const payload = parseCall<{ lecture_id?: string }>(message, "delete_quiz");
+		return { tool: "quiz_delete", lectureId: payload?.lecture_id ?? null };
+	}
+	if (message.includes("save_quiz(")) {
+		return {
+			tool: "quiz",
+			preview: parseCall<QuizProposal>(message, "save_quiz"),
 		};
 	}
 	if (message.includes("replace_presentation(")) {
@@ -175,6 +193,42 @@ export function ApprovalCard({
 			</p>
 		);
 		accept = "Delete Presentation";
+		reject = "Keep it";
+		danger = true;
+	} else if (parsed.tool === "quiz") {
+		const preview = parsed.preview;
+		const questions = preview?.questions ?? [];
+		heading = preview
+			? `${preview.replace_all_questions ? "Replace" : "Save"} the Quiz for ${lectureTitle(preview.lecture_id)}?`
+			: "Save this Quiz?";
+		accept = "Save Quiz";
+		reject = "Don't save";
+		scope =
+			"Questions and Options you already have keep their IDs, so earlier Answers stay linked.";
+		body =
+			questions.length > 0 ? (
+				<ol className="proposal-list">
+					{questions.map((question, index) => (
+						<li key={question.id ?? `new-${index}`}>
+							<span className="proposal-index">{index + 1}</span>
+							<span>
+								{question.prompt ??
+									(question.id ? "Unchanged Question" : "New Question")}
+							</span>
+						</li>
+					))}
+				</ol>
+			) : (
+				<p>The proposed Quiz could not be previewed.</p>
+			);
+	} else if (parsed.tool === "quiz_delete") {
+		heading = `Delete the Quiz for ${lectureTitle(parsed.lectureId)}?`;
+		body = (
+			<p>
+				The Lecture and its Slides stay. You can restore the Quiz from History.
+			</p>
+		);
+		accept = "Delete Quiz";
 		reject = "Keep it";
 		danger = true;
 	} else if (parsed.tool === "reconciliation") {

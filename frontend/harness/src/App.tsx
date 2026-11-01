@@ -3,16 +3,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { responseError } from "./api";
 import { CoursePlanCanvas } from "./canvas/CoursePlanCanvas";
+import { ExercisesCanvas } from "./canvas/ExercisesCanvas";
 import { HistoryCanvas, type HistoryTab } from "./canvas/HistoryCanvas";
-import { LectureCanvas } from "./canvas/LectureCanvas";
+import { LectureCanvas, type LectureView } from "./canvas/LectureCanvas";
 import { ReleaseCanvas } from "./canvas/ReleaseCanvas";
 import { SourceReader } from "./canvas/SourceReader";
 import { SourcesCanvas, type SourcesTab } from "./canvas/SourcesCanvas";
-import { ConversationPane } from "./chat/ConversationPane";
 import {
-	ConversationDialogs,
 	type ConversationDialog,
+	ConversationDialogs,
 } from "./chat/ConversationDialogs";
+import { ConversationPane } from "./chat/ConversationPane";
 import { ModelDownloadDialog } from "./dialogs/ModelDownloadDialog";
 import { ModelSetupDialog } from "./dialogs/ModelSetupDialog";
 import { ProcessorConsentDialog } from "./dialogs/ProcessorConsentDialog";
@@ -23,15 +24,16 @@ import type {
 	CurrentState,
 	ModelCatalog,
 	PresentationSummary,
+	QuizSummary,
 	ReaderTarget,
 	ResourceState,
 	Source,
 	TemplateProfileSummary,
 	Workspace,
 } from "./models";
-import { Navigator } from "./shell/Navigator";
 import { CanvasFrame, type LayoutMode } from "./shell/CanvasFrame";
 import { DriftBanner } from "./shell/DriftBanner";
+import { Navigator } from "./shell/Navigator";
 import {
 	type AgentContext,
 	type RunResult,
@@ -42,7 +44,8 @@ import { useLibrary } from "./useLibrary";
 export type CanvasTarget =
 	| { kind: "plan" }
 	| { kind: "sources"; tab?: SourcesTab }
-	| { kind: "lecture"; lectureId: string }
+	| { kind: "lecture"; lectureId: string; view?: LectureView }
+	| { kind: "exercises" }
 	| { kind: "reader"; target: ReaderTarget; returnTo: CanvasTarget | null }
 	| { kind: "history"; tab?: HistoryTab }
 	| { kind: "release" };
@@ -190,6 +193,8 @@ function CourseWorkspace({
 	const [sources, setSources] = useState<Source[]>([]);
 	const [presentations, setPresentations] = useState<PresentationSummary[]>([]);
 	const [presentationVersion, setPresentationVersion] = useState(0);
+	const [quizzes, setQuizzes] = useState<QuizSummary[]>([]);
+	const [quizVersion, setQuizVersion] = useState(0);
 	const [templates, setTemplates] = useState<TemplateProfileSummary[]>([]);
 	const [currentState, setCurrentState] = useState<CurrentState | null>(null);
 	const [canvas, setCanvas] = useState<CanvasTarget | null>(null);
@@ -247,6 +252,14 @@ function CourseWorkspace({
 		}
 	}, []);
 
+	const refreshQuizzes = useCallback(async () => {
+		const response = await fetch("/api/quizzes");
+		if (response.ok) {
+			setQuizzes((await response.json()) as QuizSummary[]);
+			setQuizVersion((version) => version + 1);
+		}
+	}, []);
+
 	const refreshSources = useCallback(async () => {
 		// Attached images reach the Library outside the Sources canvas, so an
 		// admitted attachment also needs the Resources it came from.
@@ -276,6 +289,12 @@ function CourseWorkspace({
 					fetch("/api/sources", { signal }),
 					fetch("/api/presentations", { signal }),
 					fetch("/api/templates", { signal }),
+					fetch("/api/quizzes", { signal })
+						.then(async (response) => {
+							if (response.ok)
+								setQuizzes((await response.json()) as QuizSummary[]);
+						})
+						.catch(() => undefined),
 					loadCourse(signal).catch((caught: unknown) => {
 						if (!isAbort(caught))
 							setCourseError(
@@ -324,7 +343,10 @@ function CourseWorkspace({
 		onCourseChange: (updated) => {
 			setCourse(updated);
 		},
-		onPresentationsChange: refreshPresentations,
+		// Every Course state change from the agent may touch Slides or a Quiz.
+		onPresentationsChange: async () => {
+			await Promise.all([refreshPresentations(), refreshQuizzes()]);
+		},
 		onSourcesChange: refreshSources,
 		onRunSettled: (result: RunResult) => {
 			void refreshCurrentState();
@@ -465,7 +487,9 @@ function CourseWorkspace({
 						}}
 						returnLabel={
 							target.returnTo?.kind === "lecture"
-								? "Back to Slides"
+								? target.returnTo.view === "quiz"
+									? "Back to Quiz"
+									: "Back to Slides"
 								: target.returnTo
 									? "Back to Sources"
 									: null
@@ -487,6 +511,15 @@ function CourseWorkspace({
 						lecture={lecture}
 						lectureNumber={lectureNumber.get(lecture.id) ?? 1}
 						presentationVersion={presentationVersion}
+						view={target.view ?? "slides"}
+						quizQuestionCount={
+							quizzes.find((quiz) => quiz.lecture_id === lecture.id)
+								?.question_count ?? 0
+						}
+						quizVersion={quizVersion}
+						onViewChange={(view) =>
+							setCanvas({ kind: "lecture", lectureId: lecture.id, view })
+						}
 						templates={templates}
 						sources={sources}
 						imageSources={imageSources}
@@ -514,6 +547,18 @@ function CourseWorkspace({
 					/>
 				);
 			}
+			case "exercises":
+				return (
+					<ExercisesCanvas
+						course={course ?? null}
+						quizzes={quizzes}
+						busy={agent.running}
+						onOpenQuiz={(lectureId) =>
+							openCanvas({ kind: "lecture", lectureId, view: "quiz" })
+						}
+						onAskAgent={askAgent}
+					/>
+				);
 			case "history":
 				return (
 					<HistoryCanvas
@@ -581,6 +626,7 @@ function CourseWorkspace({
 				course={course ?? null}
 				sources={sources}
 				presentations={presentations}
+				quizzes={quizzes}
 				canvas={canvas}
 				agent={agent}
 				changesCount={changesCount}

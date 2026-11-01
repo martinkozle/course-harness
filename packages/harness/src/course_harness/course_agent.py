@@ -2,6 +2,7 @@ import dataclasses
 import enum
 import json
 import logging
+import re
 import subprocess
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
@@ -61,7 +62,16 @@ from course_harness.core.presentation import (
     slide_by_id,
     write_presentation,
 )
-from course_harness.core.quiz import quiz_path
+from course_harness.core.quiz import (
+    InvalidQuiz,
+    Quiz,
+    delete_quiz_file,
+    list_quizzes,
+    quiz_path,
+    read_quiz,
+    serialize_quiz,
+    write_quiz,
+)
 from course_harness.core.sources import (
     Source,
     SourceImageResolver,
@@ -69,6 +79,12 @@ from course_harness.core.sources import (
     serialize_sources_index,
 )
 from course_harness.core.template_profiles import BUILTIN_DEFAULT_ID, TemplateProfile
+from course_harness.quiz_authoring import (
+    QuizQuestionCommand,
+    build_quiz,
+    quiz_notes,
+    quiz_outline,
+)
 from course_harness.resources import Candidate, ResourceState
 from course_harness.slide_lint import CONTENT_LIMITS_GUIDE, format_findings, lint_slides
 from course_harness.sources import pinned_image_resolver
@@ -113,6 +129,30 @@ RESEARCH_GUIDANCE = (
     "when the request is narrow or you are unsure what the Course Author wants, list the most "
     "promising Candidates and ask which to add. Prefer primary sources and peer-reviewed "
     "papers for claims, and a Candidate's open_access_url for full text."
+)
+
+
+QUIZ_GUIDANCE = (
+    "Quizzes: each Lecture can have one Quiz of single-answer multiple-choice Questions that "
+    "Learners take after the Lecture. Use read_quiz to see a Quiz with its IDs, save_quiz to "
+    "create or revise one, and delete_quiz only when the Course Author asks to remove it. "
+    "Write each Question from what the Lecture teaches and its Sources: a Markdown prompt that "
+    "tests understanding rather than recall of wording, three or four Options, and exactly one "
+    "correct Option. Good distractors are plausible: each reflects a real misconception or a "
+    "common mistake, is about as long and specific as the correct Option, and is clearly wrong "
+    "to someone who understood the material; avoid 'all of the above', 'none of the above', "
+    "jokes, and absolute words that give the answer away. Vary the position of the correct "
+    "Option across Questions. Every wrong Option needs an Explanation in Markdown that says "
+    "why it is wrong and what is true instead, not just that it is wrong; the correct Option "
+    "may have one too. Ground Questions and Explanations in Course Sources and cite them as "
+    "on Slides, with the source_id and the cited lines. Answers Learners have given are "
+    "stored by Question and Option ID, so IDs must stay stable: when revising, give the id of "
+    "every Question and Option you keep, and leave the id out only for new ones; the tool "
+    "creates their IDs, so never invent one. Keep an Option's id when you fix its wording, its "
+    "Explanation, or which Option is correct, so earlier Answers are regraded; leave the id "
+    "out when an Option comes to say something different. Fields you leave out keep their "
+    "current values, so to revise one Question give only the ids of the others. Fix every "
+    "problem save_quiz reports before moving on."
 )
 
 
@@ -714,7 +754,7 @@ def _source_for_location(deps: CourseAgentDeps, location: str) -> Source | None:
     return next((s for s in deps.course_state.sources if s.resource_id in resource_ids), None)
 
 
-def course_state_snapshot(state: CourseAgentState) -> str:
+def course_state_snapshot(state: CourseAgentState, quizzes: list[Quiz] | None = None) -> str:
     """Describe the Course state the Course Agent works from, as one stable text."""
     if state.course is None:
         plan = "This Workspace does not have a Course Plan yet."
@@ -750,9 +790,17 @@ def course_state_snapshot(state: CourseAgentState) -> str:
                 arch_mark = " [ARCHIVED]" if s.archived else ""
                 lines.append(f"  {s.id} [{s.layout}] {title}{arch_mark}")
         presentations = "\n".join(lines)
+    if quizzes:
+        quiz_lines = ["Current Quizzes (use read_quiz for their Question and Option IDs):"]
+        quiz_lines.extend(
+            f"Lecture {quiz.lecture_id}: {len(quiz.questions)} Question(s)" for quiz in quizzes
+        )
+        quiz_summary = "\n".join(quiz_lines)
+    else:
+        quiz_summary = "No Quizzes have been authored yet."
     return (
         f"{COURSE_STATE_HEADING}\nThis describes the Course as this turn began; tool results "
-        f"since then are newer.\n\n{plan}\n\n{sources}\n\n{presentations}"
+        f"since then are newer.\n\n{plan}\n\n{sources}\n\n{presentations}\n\n{quiz_summary}"
     )
 
 
@@ -774,7 +822,7 @@ def record_course_state(
         for part in latest.parts
     ):
         return messages
-    snapshot = course_state_snapshot(ctx.deps.course_state)
+    snapshot = course_state_snapshot(ctx.deps.course_state, list_quizzes(ctx.deps.workspace))
     previous = next(
         (
             part.content
@@ -881,10 +929,12 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
             "Use delete_presentation only when the Course Author explicitly asks to remove a "
             "Presentation. Archived Slides are preserved at the end and survive replanning; "
             "only replace_all_slides removes them.\n\n"
+            f"{QUIZ_GUIDANCE}\n\n"
             "Authoring workflow: 1) Create the Lecture spine with replace_course_plan, "
             "2) Gather and admit relevant Sources, 3) Create skeleton slide outlines with "
             "replace_presentation, 4) Progressively fill content, speaker notes, and citations "
-            "as the Course Author reviews each iteration."
+            "as the Course Author reviews each iteration, 5) Write a Quiz for a Lecture when "
+            "the Course Author asks for one or its Slides are settled."
         ),
     )
 
@@ -1769,6 +1819,141 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
                         "title": "Presentation deleted",
                         "detail": f"Removed {pres.id} for lecture {lecture_id}",
                     },
+                ),
+                StateSnapshotEvent(
+                    type=EventType.STATE_SNAPSHOT,
+                    snapshot=ctx.deps.course_state.model_dump(mode="json"),
+                ),
+            ],
+        )
+
+    def lecture_problem(ctx: RunContext[CourseAgentDeps], lecture_id: str) -> str | None:
+        course = ctx.deps.course_state.course
+        if course is None:
+            return "This Workspace has no Course Plan yet. Create it with replace_course_plan."
+        if any(lecture.id == lecture_id for lecture in course.lectures):
+            return None
+        lecture_ids = ", ".join(f"{lecture.id} ({lecture.title})" for lecture in course.lectures)
+        return f"Lecture {lecture_id} is not in this Course Plan. Use one of {lecture_ids}."
+
+    def current_quiz(ctx: RunContext[CourseAgentDeps], lecture_id: str) -> Quiz | None:
+        try:
+            return read_quiz(ctx.deps.workspace, lecture_id)
+        except InvalidQuiz as error:
+            raise ValueError(
+                f"The Quiz file for Lecture {lecture_id} cannot be read: {error}. Ask the "
+                "Course Author to repair it from History."
+            ) from error
+
+    def quiz_changed(
+        ctx: RunContext[CourseAgentDeps], lecture_id: str, title: str, detail: str
+    ) -> list[Any]:
+        return [
+            ActivitySnapshotEvent(
+                type=EventType.ACTIVITY_SNAPSHOT,
+                message_id=f"quiz-{lecture_id}",
+                activity_type="quiz-change",
+                content={"title": title, "detail": detail},
+            ),
+            StateSnapshotEvent(
+                type=EventType.STATE_SNAPSHOT,
+                snapshot=ctx.deps.course_state.model_dump(mode="json"),
+            ),
+        ]
+
+    @agent.tool(name="read_quiz")
+    async def read_quiz_tool(ctx: RunContext[CourseAgentDeps], lecture_id: str) -> ToolReturn:
+        """Read a Lecture's Quiz: every Question and Option with its ID, which Option is
+        correct, the Explanations and the Citations."""
+        if (problem := lecture_problem(ctx, lecture_id)) is not None:
+            return ToolReturn(return_value=problem)
+        try:
+            quiz = current_quiz(ctx, lecture_id)
+        except ValueError as error:
+            return ToolReturn(return_value=str(error))
+        if quiz is None:
+            return ToolReturn(
+                return_value=f"Lecture {lecture_id} has no Quiz yet. Use save_quiz to write one."
+            )
+        return ToolReturn(
+            return_value=f"Quiz for Lecture {lecture_id}:\n{json_str(quiz.model_dump(mode='json'))}"
+        )
+
+    @agent.tool(requires_approval=requires_approval)
+    async def save_quiz(
+        ctx: RunContext[CourseAgentDeps],
+        lecture_id: str,
+        questions: list[QuizQuestionCommand],
+        replace_all_questions: bool = False,
+    ) -> ToolReturn:
+        """Create a Lecture's Quiz, or revise it by giving its full Question order.
+
+        Give the id of each existing Question and Option you keep and leave the id out for new
+        ones; their IDs are created for you. For a kept Question or Option, fields you leave out
+        or give as null keep their current values. Existing Questions you leave out are
+        removed. Returns the saved Quiz with every ID."""
+        if (problem := lecture_problem(ctx, lecture_id)) is not None:
+            return ToolReturn(return_value=f"The Quiz was not saved: {problem}")
+        try:
+            existing = current_quiz(ctx, lecture_id)
+            revision = build_quiz(
+                lecture_id,
+                questions,
+                existing,
+                replace_all_questions=replace_all_questions,
+                source_ids={source.id for source in ctx.deps.course_state.sources},
+            )
+        except ValueError as error:
+            return ToolReturn(return_value=f"The Quiz was not saved: {error}")
+        path = quiz_path(lecture_id)
+        protect_mutation(ctx)
+        write_quiz(ctx.deps.workspace, revision.quiz, expected=_agent_precondition(ctx.deps, path))
+        confirm_mutation(ctx, {path: serialize_quiz(revision.quiz)})
+        lines = [
+            f"Saved the Quiz for Lecture {lecture_id} with {len(revision.quiz.questions)} "
+            "Question(s):",
+            quiz_outline(revision.quiz),
+        ]
+        if revision.removed_question_ids:
+            lines.append(f"Removed Questions: {', '.join(revision.removed_question_ids)}.")
+        if revision.removed_option_ids:
+            lines.append(f"Removed Options: {', '.join(revision.removed_option_ids)}.")
+        notes = quiz_notes(revision.quiz)
+        lines.append(
+            "Before a Release, fix these:\n" + "\n".join(f"- {note}" for note in notes)
+            if notes
+            else "Every wrong Option is explained and every Question cites a Source."
+        )
+        count = len(revision.quiz.questions)
+        return ToolReturn(
+            return_value="\n\n".join(lines),
+            metadata=quiz_changed(
+                ctx,
+                lecture_id,
+                "Quiz saved" if existing is None else "Quiz updated",
+                f"Saved {count} Question{'' if count == 1 else 's'} for Lecture {lecture_id}",
+            ),
+        )
+
+    @agent.tool(requires_approval=requires_approval)
+    async def delete_quiz(ctx: RunContext[CourseAgentDeps], lecture_id: str) -> ToolReturn:
+        """Delete a Lecture's Quiz. Use this only when the Course Author asks to remove it."""
+        path = quiz_path(lecture_id) if re.fullmatch(LECTURE_ID_PATTERN, lecture_id) else None
+        if path is None or not (ctx.deps.workspace / path).exists():
+            return ToolReturn(return_value=f"Lecture {lecture_id} has no Quiz.")
+        protect_mutation(ctx)
+        delete_quiz_file(
+            ctx.deps.workspace, lecture_id, expected=_agent_precondition(ctx.deps, path)
+        )
+        confirm_mutation(ctx, {path: None})
+        return ToolReturn(
+            return_value=f"Deleted the Quiz for Lecture {lecture_id}.",
+            metadata=[
+                ActivitySnapshotEvent(
+                    type=EventType.ACTIVITY_SNAPSHOT,
+                    message_id=f"quiz-delete-{lecture_id}",
+                    activity_type="quiz-delete",
+                    content={"title": "Quiz deleted", "detail": f"Removed {path}"},
                 ),
                 StateSnapshotEvent(
                     type=EventType.STATE_SNAPSHOT,

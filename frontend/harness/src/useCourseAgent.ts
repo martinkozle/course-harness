@@ -48,6 +48,8 @@ export type RunResult = {
 	planChanged: boolean;
 	presentationIds: string[];
 	deletedPresentationIds: string[];
+	/** Lectures whose Quiz was saved. */
+	quizLectureIds: string[];
 	sourcesAdded: number;
 	stopped: boolean;
 };
@@ -320,7 +322,10 @@ export function useCourseAgent({
 					onInterrupt: (interrupt) => {
 						setApproval((current) =>
 							current
-								? { ...current, ids: [...(current.ids ?? [current.id]), interrupt.id] }
+								? {
+										...current,
+										ids: [...(current.ids ?? [current.id]), interrupt.id],
+									}
 								: interrupt,
 						);
 					},
@@ -710,6 +715,7 @@ export type CourseAgent = ReturnType<typeof useCourseAgent>;
 function summarize(activities: Activity[], stopped: boolean): RunResult {
 	const presentationIds = new Set<string>();
 	const deletedPresentationIds = new Set<string>();
+	const quizLectureIds = new Set<string>();
 	let planChanged = false;
 	let sourcesAdded = 0;
 	for (const activity of activities) {
@@ -721,11 +727,16 @@ function summarize(activities: Activity[], stopped: boolean): RunResult {
 		else if (activity.id.startsWith("presentation-"))
 			presentationIds.add(activity.id.slice("presentation-".length));
 		else if (activity.id.startsWith("sources-admit-")) sourcesAdded += 1;
+		else if (activity.id.startsWith("quiz-delete-"))
+			quizLectureIds.delete(activity.id.slice("quiz-delete-".length));
+		else if (activity.id.startsWith("quiz-"))
+			quizLectureIds.add(activity.id.slice("quiz-".length));
 	}
 	return {
 		planChanged,
 		presentationIds: [...presentationIds],
 		deletedPresentationIds: [...deletedPresentationIds],
+		quizLectureIds: [...quizLectureIds],
 		sourcesAdded,
 		stopped,
 	};
@@ -736,6 +747,7 @@ function hasChanges(result: RunResult): boolean {
 		result.planChanged ||
 		result.presentationIds.length > 0 ||
 		result.deletedPresentationIds.length > 0 ||
+		result.quizLectureIds.length > 0 ||
 		result.sourcesAdded > 0
 	);
 }

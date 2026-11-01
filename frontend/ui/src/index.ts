@@ -16,6 +16,7 @@ export {
 	Notice,
 	Tabs,
 } from "./primitives";
+export type { Quiz, QuizOption, QuizQuestion } from "./quiz";
 export { SlidePreview } from "./SlidePreview";
 export {
 	lineRangeLabel,

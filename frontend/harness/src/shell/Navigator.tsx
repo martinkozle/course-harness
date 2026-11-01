@@ -6,6 +6,7 @@ import {
 	FolderCog,
 	History,
 	LibraryBig,
+	ListChecks,
 	ListTree,
 	LogOut,
 	MessageSquarePlus,
@@ -22,6 +23,7 @@ import type { ConversationDialog } from "../chat/ConversationDialogs";
 import type {
 	CoursePlan,
 	PresentationSummary,
+	QuizSummary,
 	Source,
 	Workspace,
 } from "../models";
@@ -32,6 +34,7 @@ export function Navigator({
 	course,
 	sources,
 	presentations,
+	quizzes,
 	canvas,
 	agent,
 	changesCount,
@@ -47,6 +50,7 @@ export function Navigator({
 	course: CoursePlan | null;
 	sources: Source[];
 	presentations: PresentationSummary[];
+	quizzes: QuizSummary[];
 	canvas: CanvasTarget | null;
 	agent: CourseAgent;
 	changesCount: number;
@@ -152,6 +156,27 @@ export function Navigator({
 							) : null}
 						</button>
 					</li>
+					{course ? (
+						<li>
+							<button
+								type="button"
+								className="nav-item"
+								aria-current={current("exercises")}
+								onClick={() => onOpen({ kind: "exercises" })}
+							>
+								<ListChecks aria-hidden="true" />
+								<span className="nav-label">Exercises</span>
+								{quizzes.length > 0 ? (
+									<span
+										className="nav-count"
+										title={`${quizzes.length} Quiz${quizzes.length === 1 ? "" : "zes"}`}
+									>
+										{quizzes.length}
+									</span>
+								) : null}
+							</button>
+						</li>
+					) : null}
 				</ul>
 
 				{course ? (

@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
-import { expect, test } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+import { expect, type Page, test } from "@playwright/test";
 
 import { clearSmokeModelCatalog } from "./smokeState";
 
@@ -31,6 +32,16 @@ type PresentationPayload = {
 		>;
 	}>;
 };
+
+async function expectNoAccessibilityViolations(page: Page, surface: string) {
+	const results = await new AxeBuilder({ page })
+		.withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+		.analyze();
+	expect(
+		results.violations,
+		`${surface} has no WCAG A or AA accessibility violations`,
+	).toEqual([]);
+}
 
 function previewFor(
 	presentation: { slides: Array<{ id: string; layout: string }> },
@@ -73,6 +84,8 @@ function previewFor(
 test("Course Author completes a deterministic Course-to-Release journey", async ({
 	page,
 }) => {
+	// The journey covers every authoring surface, with two accessibility scans.
+	test.setTimeout(90_000);
 	const navigator = page.getByRole("navigation", { name: "Course" });
 	await page.request.post("/api/workspace/close");
 	await page.goto("/");
@@ -344,6 +357,78 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	).toHaveCount(2);
 	await expect(page.locator(".slide-preview.is-approximate")).toHaveCount(3);
 
+	// The fake agent writes a cited Quiz; the Lecture canvas shows its answer key read-only.
+	await composer.fill(
+		`Write a Quiz for lecture ${firstLecture.id} from source ${source.id}`,
+	);
+	await page.getByRole("button", { name: "Send message" }).click();
+	await expect(
+		page.getByText(
+			"I wrote a cited Quiz with an Explanation for every wrong Option.",
+		),
+	).toBeVisible();
+	await page
+		.getByRole("list", { name: "Changes from this reply" })
+		.last()
+		.getByRole("button", { name: /Quiz · Open/ })
+		.click();
+	await expect(
+		page.getByRole("tab", { name: /Quiz/, selected: true }),
+	).toBeVisible();
+	const quizView = page.getByRole("region", { name: "Quiz" });
+	await expect(
+		quizView.getByRole("heading", { name: "Question 1" }),
+	).toBeVisible();
+	// Markdown renders as formatting, not as asterisks.
+	await expect(quizView.locator(".quiz-prompt strong").first()).toHaveText(
+		"single person's",
+	);
+	const firstOptions = quizView.getByRole("list", {
+		name: "Options for Question 1",
+	});
+	await expect(firstOptions.locator(".quiz-option")).toHaveCount(3);
+	await expect(firstOptions.locator(".quiz-option.is-correct")).toContainText(
+		"Only one potential outcome is ever observed for each person",
+	);
+	await expect(
+		firstOptions.getByText(/Noise is not the obstacle/),
+	).toBeVisible();
+	await expect(
+		quizView
+			.getByRole("list", { name: "Options for Question 2" })
+			.locator(".quiz-option.is-correct"),
+	).toContainText("The assumptions about what causes what");
+	await expectNoAccessibilityViolations(page, "Quiz view"); // A Quiz Citation opens its Evidence and returns to the Quiz.
+	await firstOptions.locator(".citation-chip").first().click();
+	await expect(page.getByRole("heading", { name: source.label })).toBeVisible();
+	await page.getByRole("button", { name: "Back to Quiz" }).click();
+	await expect(
+		page.getByRole("tab", { name: /Quiz/, selected: true }),
+	).toBeVisible();
+
+	// Exercises lists the Lectures with Quizzes and opens one.
+	await navigator.getByRole("button", { name: /Exercises/ }).click();
+	await expect(
+		page.getByRole("heading", { name: "Exercises", level: 1 }),
+	).toBeVisible();
+	const quizList = page.getByRole("list", { name: "Quizzes" });
+	await expect(quizList.getByRole("listitem")).toHaveCount(1);
+	await expect(quizList).toContainText(firstLecture.title);
+	await expect(quizList).toContainText("2 Questions");
+	await expect(
+		page.getByRole("list", { name: "Lectures without a Quiz" }),
+	).toContainText(secondLecture.title);
+	await expectNoAccessibilityViolations(page, "Exercises");
+	await quizList
+		.getByRole("button", { name: `Open the Quiz for ${firstLecture.title}` })
+		.click();
+	await expect(
+		quizView.getByRole("heading", { name: "Question 2" }),
+	).toBeVisible();
+	await page.getByRole("tab", { name: /Slides/ }).click();
+	await expect(
+		filmstrip.getByRole("button", { name: /^Slide \d+:/ }),
+	).toHaveCount(2);
 	// Onboard and inspect the checked-in template in Settings.
 	await page.getByRole("button", { name: "Settings" }).click();
 	await settings
@@ -356,7 +441,11 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 		),
 		settings
 			.locator("#template-upload")
-			.setInputFiles(resolve("packages/harness/tests/fixtures/templates/python-pptx-test.pptx")),
+			.setInputFiles(
+				resolve(
+					"packages/harness/tests/fixtures/templates/python-pptx-test.pptx",
+				),
+			),
 	]);
 	expect(templateResponse.ok()).toBe(true);
 	const templateBody = (await templateResponse.json()) as {

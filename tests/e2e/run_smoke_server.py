@@ -139,6 +139,61 @@ def place_attached_image(resource_id: str, returned: set[str]) -> str | dict[int
     }
 
 
+def quiz_step(returned: set[str]) -> str | dict[int, DeltaToolCall]:
+    """Write a cited two-Question Quiz for the first Lecture, then report it."""
+    if "save_quiz" in returned:
+        return "I wrote a cited Quiz with an Explanation for every wrong Option."
+    assert active_workspace is not None
+    plan = read_course_plan(active_workspace)
+    sources = read_sources_index(active_workspace)
+    assert plan is not None and sources is not None
+    source = sources.sources[0]
+    citation = {"source_id": source.id, "label": source.label, "line_start": 0, "line_end": 4}
+    questions = [
+        {
+            "prompt": "Why can't a **single person's** causal effect be observed directly?",
+            "citations": [citation],
+            "options": [
+                {
+                    "text": "Only one potential outcome is ever observed for each person",
+                    "correct": True,
+                    "explanation": "Each person receives one treatment, so the other outcome "
+                    "stays counterfactual.",
+                },
+                {
+                    "text": "Outcome measurements are too noisy",
+                    "explanation": "Noise is not the obstacle: even a perfect measurement "
+                    "records only the outcome under the treatment received.",
+                    "citations": [citation],
+                },
+                {
+                    "text": "Individual effects are always zero",
+                    "explanation": "Individual effects can differ from zero; they are "
+                    "*unobserved*, not absent.",
+                },
+            ],
+        },
+        {
+            "prompt": "What does a causal graph make visible?",
+            "citations": [citation],
+            "options": [
+                {
+                    "text": "The estimated size of each effect",
+                    "explanation": "A causal graph holds no numbers; estimation comes later.",
+                },
+                {"text": "The assumptions about what causes what", "correct": True},
+            ],
+        },
+    ]
+    return {
+        0: DeltaToolCall(
+            name="save_quiz",
+            json_args=json.dumps({"lecture_id": plan.lectures[0].id, "questions": questions}),
+            tool_call_id="playwright-quiz",
+        )
+    }
+
+
 async def course_planning_model(
     messages: list[ModelMessage], _info: AgentInfo
 ) -> AsyncIterator[str | dict[int, DeltaToolCall]]:
@@ -174,6 +229,16 @@ async def course_planning_model(
         for part in message.parts
         if isinstance(part, ToolReturnPart)
     }
+    if any(
+        isinstance(part, UserPromptPart)
+        and isinstance(part.content, str)
+        and "Write a Quiz for lecture" in part.content
+        for message in messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+    ):
+        yield quiz_step(returned_tools)
+        return
     if "replace_course_plan" not in returned_tools:
         command = {
             "title": "Causal Inference in Practice",
