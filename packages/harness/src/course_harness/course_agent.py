@@ -38,6 +38,7 @@ from course_harness.core.canonical_mutation import (
     capture_canonical_file,
 )
 from course_harness.core.course_plan import (
+    LECTURE_ID_PATTERN,
     CoursePlan,
     CoursePlanInput,
     Lecture,
@@ -47,7 +48,6 @@ from course_harness.core.course_plan import (
     initialize_workspace_history,
     read_course_plan,
     serialize_course_plan,
-    write_course_plan,
 )
 from course_harness.core.presentation import (
     SLIDE_CLASSES_BY_LAYOUT,
@@ -61,6 +61,7 @@ from course_harness.core.presentation import (
     slide_by_id,
     write_presentation,
 )
+from course_harness.core.quiz import quiz_path
 from course_harness.core.sources import (
     Source,
     SourceImageResolver,
@@ -158,7 +159,7 @@ def candidate_digest(candidate: Candidate) -> dict[str, object]:
 class CoursePlanLectureCommand(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    id: str | None = Field(default=None, pattern=r"^lecture-[0-9a-f]{12}$")
+    id: str | None = Field(default=None, pattern=LECTURE_ID_PATTERN)
     title: str = Field(min_length=1, max_length=200)
     group: str | None = Field(default=None, min_length=1, max_length=100)
     source_focus: list[str] | None = Field(default=None)
@@ -400,7 +401,22 @@ def apply_course_plan_command(
     *,
     expected: CanonicalFile | None = None,
 ) -> CoursePlan:
-    expected = expected or capture_canonical_file(workspace, "course.yaml")
+    return apply_course_plan_mutation(workspace, command, expected=expected)[0]
+
+
+def apply_course_plan_mutation(
+    workspace: Path,
+    command: ReplaceCoursePlanCommand,
+    *,
+    expected: CanonicalFile | None = None,
+    precondition: Callable[[str], CanonicalFile] | None = None,
+) -> tuple[CoursePlan, dict[str, bytes | None]]:
+    """Save a Course Plan and remove the Quizzes of Lectures it drops, in one mutation.
+
+    Returns the saved plan and every canonical path written, with ``None`` for removals.
+    """
+    capture = precondition or (lambda path: capture_canonical_file(workspace, path))
+    expected = expected or capture("course.yaml")
     existing = read_course_plan(workspace)
     draft = create_course_plan(
         CoursePlanInput(
@@ -424,7 +440,7 @@ def apply_course_plan_command(
             create_course_plan_file(workspace, draft, expected=expected)
         except subprocess.CalledProcessError:
             raise RuntimeError("Course history could not be initialized") from None
-        return draft
+        return draft, {"course.yaml": serialize_course_plan(draft)}
 
     existing_by_id = {lecture.id: lecture for lecture in existing.lectures}
     # A Lecture sent back without its ID but with its exact current title is the
@@ -511,8 +527,21 @@ def apply_course_plan_command(
         template_profile_id=existing.template_profile_id,
         template_profile_version=existing.template_profile_version,
     )
-    write_course_plan(workspace, updated, expected=expected)
-    return updated
+    # A Quiz without its Lecture would leave Current State invalid, so it goes with it.
+    expected_entries: dict[str, CanonicalFile] = {"course.yaml": expected}
+    for lecture in existing.lectures:
+        if lecture.id in used_ids:
+            continue
+        path = quiz_path(lecture.id)
+        current = capture(path)
+        if current.content is not None:
+            expected_entries[path] = current
+    updates: dict[str, bytes | None] = {
+        path: None for path in expected_entries if path != "course.yaml"
+    }
+    updates["course.yaml"] = serialize_course_plan(updated)
+    apply_canonical_mutation(workspace, expected=expected_entries, updates=updates)
+    return updated, updates
 
 
 def apply_presentation_command(
@@ -866,14 +895,15 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         """Replace the Course Plan through one validated application command."""
         protect_mutation(ctx)
         try:
-            plan = apply_course_plan_command(
+            plan, written = apply_course_plan_mutation(
                 ctx.deps.workspace,
                 command,
                 expected=_agent_precondition(ctx.deps, "course.yaml"),
+                precondition=lambda path: _agent_precondition(ctx.deps, path),
             )
         except ValueError as error:
             raise ModelRetry(f"The Course Plan was not saved: {error}") from error
-        confirm_mutation(ctx, {"course.yaml": serialize_course_plan(plan)})
+        confirm_mutation(ctx, written)
         ctx.deps.course_state = CourseAgentState(
             course=plan,
             sources=ctx.deps.course_state.sources,

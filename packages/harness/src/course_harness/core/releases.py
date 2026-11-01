@@ -34,7 +34,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from course_harness.core.canonical_yaml import load_canonical_yaml
-from course_harness.core.course_plan import CoursePlan
+from course_harness.core.course_plan import LECTURE_ID_PATTERN, CoursePlan
 from course_harness.core.presentation import Presentation
 from course_harness.core.quiz import InvalidQuiz, Quiz, parse_quiz, quiz_path
 from course_harness.core.release_validation import (
@@ -90,7 +90,7 @@ class ReleaseArtifact(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(pattern=r"^presentation-[0-9a-f]{12}$")
-    lecture_id: str = Field(pattern=r"^lecture-[0-9a-f]{12}$")
+    lecture_id: str = Field(pattern=LECTURE_ID_PATTERN)
     media_type: Literal[
         "application/vnd.openxmlformats-officedocument.presentationml.presentation"
     ] = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
@@ -104,7 +104,7 @@ class ReleaseQuiz(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    lecture_id: str = Field(pattern=r"^lecture-[0-9a-f]{12}$")
+    lecture_id: str = Field(pattern=LECTURE_ID_PATTERN)
     path: str = Field(pattern=r"^quizzes/lecture-[0-9a-f]{12}\.yaml$", max_length=40)
 
 
@@ -563,10 +563,20 @@ def tagged_quiz(repository: Path, commit_oid: str, lecture_id: str) -> Quiz:
         path = quiz_path(lecture_id)
     except ValueError as error:
         raise ReleaseError("Release Quiz identity is invalid") from error
+    return cached_tagged_file(
+        repository,
+        commit_oid,
+        path,
+        lambda: parse_tagged_quiz(repository, commit_oid, lecture_id, path),
+    )
+
+
+def parse_tagged_quiz(repository: Path, commit_oid: str, lecture_id: str, path: str) -> Quiz:
     try:
         quiz = parse_quiz(read_commit_blob(repository, commit_oid, path))
     except InvalidQuiz as error:
         raise ReleaseError("Tagged Quiz is invalid") from error
+    check_read_deadline()
     if quiz.lecture_id != lecture_id:
         raise ReleaseError("Tagged Quiz identity is inconsistent")
     return quiz

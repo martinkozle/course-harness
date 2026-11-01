@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from course_harness.core.canonical_mutation import CanonicalFile, apply_canonical_mutation
 from course_harness.core.canonical_yaml import load_canonical_yaml
 
+LECTURE_ID_PATTERN = r"^lecture-[0-9a-f]{12}$"
 Goal = Annotated[str, Field(min_length=1, max_length=500)]
 Outcome = Annotated[str, Field(min_length=1, max_length=500)]
 
@@ -35,7 +36,7 @@ class CoursePlanInput(BaseModel):
 class Lecture(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    id: str = Field(pattern=r"^lecture-[0-9a-f]{12}$")
+    id: str = Field(pattern=LECTURE_ID_PATTERN)
     title: str = Field(min_length=1, max_length=200)
     group: str | None = Field(default=None, min_length=1, max_length=100)
     source_focus: list[str] | None = Field(default=None)

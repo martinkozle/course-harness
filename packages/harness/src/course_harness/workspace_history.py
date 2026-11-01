@@ -26,10 +26,14 @@ from course_harness.core.canonical_mutation import (
     apply_canonical_mutation,
     restore_canonical_mutation,
 )
-from course_harness.core.course_plan import CoursePlan, InvalidCoursePlan, read_course_plan
+from course_harness.core.course_plan import (
+    LECTURE_ID_PATTERN,
+    CoursePlan,
+    InvalidCoursePlan,
+    read_course_plan,
+)
 from course_harness.core.presentation import InvalidPresentation, Presentation, read_presentation
 from course_harness.core.quiz import (
-    LECTURE_ID_PATTERN,
     QUIZZES_DIRECTORY,
     InvalidQuiz,
     Quiz,
@@ -40,7 +44,7 @@ from course_harness.core.sources import InvalidSourcesIndex, SourcesIndex, read_
 
 GIT_TIMEOUT_SECONDS = 5
 MAX_GIT_METADATA_ENTRIES = 10_000
-MAX_PRESENTATIONS_DIRECTORY_ENTRIES = 10_000
+MAX_CANONICAL_DIRECTORY_ENTRIES = 10_000
 MAX_CANONICAL_ENTRIES = 2_000
 MAX_REVISION_SUMMARY_CHARACTERS = 240
 MAX_REVISION_METADATA_BYTES = 1_024
@@ -500,7 +504,7 @@ def _current_canonical_paths(workspace: Path) -> set[str]:
     return paths
 
 
-def _canonical_yaml_paths(workspace: Path, directory_name: str = "presentations") -> list[Path]:
+def _canonical_yaml_paths(workspace: Path, directory_name: str) -> list[Path]:
     """List candidates in one canonical directory without allowing arbitrary scans."""
     directory = workspace / directory_name
     candidates: list[Path] = []
@@ -509,7 +513,7 @@ def _canonical_yaml_paths(workspace: Path, directory_name: str = "presentations"
         with os.scandir(directory) as entries:
             for entry in entries:
                 entries_seen += 1
-                if entries_seen > MAX_PRESENTATIONS_DIRECTORY_ENTRIES:
+                if entries_seen > MAX_CANONICAL_DIRECTORY_ENTRIES:
                     raise WorkspaceHistoryError(f"Course {directory_name} directory is too large")
                 if entry.name.endswith(".yaml"):
                     candidates.append(Path(entry.path))

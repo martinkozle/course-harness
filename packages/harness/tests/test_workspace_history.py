@@ -1239,7 +1239,7 @@ def test_current_state_bounds_noncanonical_presentation_directory_entries(
     presentations.mkdir()
     for index in range(3):
         (presentations / f"noise-{index}.txt").write_text("ignored", encoding="utf-8")
-    monkeypatch.setattr(history, "MAX_PRESENTATIONS_DIRECTORY_ENTRIES", 2)
+    monkeypatch.setattr(history, "MAX_CANONICAL_DIRECTORY_ENTRIES", 2)
 
     with pytest.raises(WorkspaceHistoryError, match="presentations directory is too large"):
         read_current_state(workspace)

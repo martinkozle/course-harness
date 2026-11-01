@@ -10,16 +10,24 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import uuid4
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+)
 
 from course_harness.core.canonical_mutation import CanonicalFile, apply_canonical_mutation
+from course_harness.core.canonical_yaml import load_canonical_yaml
+from course_harness.core.course_plan import LECTURE_ID_PATTERN
 from course_harness.core.presentation import SlideCitation
 
-LECTURE_ID_PATTERN = r"^lecture-[0-9a-f]{12}$"
 QUESTION_ID_PATTERN = r"^question-[0-9a-f]{12}$"
 OPTION_ID_PATTERN = r"^option-[0-9a-f]{12}$"
 QUIZZES_DIRECTORY = "quizzes"
@@ -30,26 +38,46 @@ MAX_OPTIONS = 10
 QuizCitation = SlideCitation
 
 
+def _not_blank(value: str) -> str:
+    if not value.strip():
+        raise ValueError("must not be blank")
+    return value
+
+
+# Markdown is kept verbatim: leading whitespace can be an indented code block.
+Markdown = Annotated[str, AfterValidator(_not_blank)]
+PlainText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
 class QuizOption(BaseModel):
-    """One answer choice of a Question."""
+    """One answer choice of a Question.
 
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    ``text`` is plain text. ``explanation`` is Markdown, rendered without raw HTML; it is
+    expected for a wrong Option (its absence is a Release warning) and optional for the correct
+    one.
+    """
 
-    id: str = Field(pattern=OPTION_ID_PATTERN)
-    text: str = Field(min_length=1, max_length=1_000)
+    model_config = ConfigDict(extra="forbid")
+
+    id: Annotated[str, StringConstraints(strip_whitespace=True)] = Field(pattern=OPTION_ID_PATTERN)
+    text: PlainText = Field(max_length=1_000)
     correct: bool = False
-    # Required in substance for a wrong Option (a Release warning), optional for the correct one.
-    explanation: str | None = Field(default=None, min_length=1, max_length=4_000)
+    explanation: Markdown | None = Field(default=None, max_length=4_000)
     citations: list[QuizCitation] = Field(default_factory=list, max_length=50)
 
 
 class QuizQuestion(BaseModel):
-    """One single-answer multiple-choice item."""
+    """One single-answer multiple-choice item.
 
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    ``prompt`` is Markdown, rendered without raw HTML. Options keep their authored order.
+    """
 
-    id: str = Field(pattern=QUESTION_ID_PATTERN)
-    prompt: str = Field(min_length=1, max_length=2_000)
+    model_config = ConfigDict(extra="forbid")
+
+    id: Annotated[str, StringConstraints(strip_whitespace=True)] = Field(
+        pattern=QUESTION_ID_PATTERN
+    )
+    prompt: Markdown = Field(max_length=2_000)
     options: list[QuizOption] = Field(min_length=2, max_length=MAX_OPTIONS)
     citations: list[QuizCitation] = Field(default_factory=list, max_length=50)
 
@@ -104,22 +132,31 @@ def correct_option(question: QuizQuestion) -> QuizOption | None:
 
 
 def quiz_problems(quiz: Quiz) -> list[QuizProblem]:
-    """Report duplicate IDs and Questions without exactly one correct Option."""
+    """Report duplicate IDs and Questions without exactly one correct Option.
+
+    Each duplicated ID is reported once, and a repeated Question is not checked again.
+    """
     problems: list[QuizProblem] = []
     seen_questions: set[str] = set()
+    reported_questions: set[str] = set()
     for question in quiz.questions:
         if question.id in seen_questions:
-            problems.append(
-                QuizProblem(
-                    code="quiz.duplicate-question-id",
-                    message=f"Question ID {question.id} appears more than once.",
-                    question_id=question.id,
+            if question.id not in reported_questions:
+                reported_questions.add(question.id)
+                problems.append(
+                    QuizProblem(
+                        code="quiz.duplicate-question-id",
+                        message=f"Question ID {question.id} appears more than once.",
+                        question_id=question.id,
+                    )
                 )
-            )
+            continue
         seen_questions.add(question.id)
         seen_options: set[str] = set()
+        reported_options: set[str] = set()
         for option in question.options:
-            if option.id in seen_options:
+            if option.id in seen_options and option.id not in reported_options:
+                reported_options.add(option.id)
                 problems.append(
                     QuizProblem(
                         code="quiz.duplicate-option-id",
@@ -149,7 +186,7 @@ def quiz_problems(quiz: Quiz) -> list[QuizProblem]:
 
 def parse_quiz(content: bytes) -> Quiz:
     try:
-        return Quiz.model_validate(yaml.safe_load(content.decode("utf-8")))
+        return Quiz.model_validate(load_canonical_yaml(content.decode("utf-8")))
     except (UnicodeError, yaml.YAMLError, ValidationError, ValueError) as error:
         raise InvalidQuiz(str(error)) from error
 
@@ -233,3 +270,7 @@ def delete_quiz_file(
 
 def question_by_id(quiz: Quiz, question_id: str) -> QuizQuestion | None:
     return next((question for question in quiz.questions if question.id == question_id), None)
+
+
+def option_by_id(question: QuizQuestion, option_id: str) -> QuizOption | None:
+    return next((option for option in question.options if option.id == option_id), None)

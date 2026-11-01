@@ -110,7 +110,7 @@ from course_harness.core.presentation import (
     slide_by_id,
     write_presentation,
 )
-from course_harness.core.quiz import list_quizzes
+from course_harness.core.quiz import QUIZZES_DIRECTORY, list_quizzes, quiz_path
 from course_harness.core.release_validation import (
     InvalidWaiver,
     ReleaseSelection,
@@ -1888,12 +1888,14 @@ def create_app(
                 sources_index = None
             else:
                 initial_paths = {"course.yaml", "sources.yaml"}
-                presentations_directory = active / "presentations"
-                if presentations_directory.is_dir() and not presentations_directory.is_symlink():
-                    for candidate in presentations_directory.glob("*.yaml"):
+                for directory_name in ("presentations", QUIZZES_DIRECTORY):
+                    directory = active / directory_name
+                    if not directory.is_dir() or directory.is_symlink():
+                        continue
+                    for candidate in directory.glob("*.yaml"):
                         if candidate.is_symlink() or not candidate.is_file():
                             continue
-                        initial_paths.add(f"presentations/{candidate.name}")
+                        initial_paths.add(f"{directory_name}/{candidate.name}")
                         if len(initial_paths) > MAX_CANONICAL_FILES:
                             raise CanonicalMutationConflict(
                                 "Too many canonical Course files to inspect"
@@ -2309,10 +2311,15 @@ def create_app(
                     "lectures": [lecture for lecture in plan.lectures if lecture.id != lecture_id]
                 }
             )
-            write_course_plan(active, updated, expected=expected_course)
-            record_canonical_mutation(
-                active, provenance_permitted, {"course.yaml": serialize_course_plan(updated)}
-            )
+            # The Lecture's Quiz goes with it; an orphaned Quiz would block every Revision.
+            expected_entries = {"course.yaml": expected_course}
+            updates: dict[str, bytes | None] = {"course.yaml": serialize_course_plan(updated)}
+            expected_quiz = capture_canonical_file(active, quiz_path(lecture_id))
+            if expected_quiz.content is not None:
+                expected_entries[quiz_path(lecture_id)] = expected_quiz
+                updates[quiz_path(lecture_id)] = None
+            apply_canonical_mutation(active, expected=expected_entries, updates=updates)
+            record_canonical_mutation(active, provenance_permitted, updates)
             return updated
 
     @app.patch("/api/course/profile", response_model=CoursePlan)

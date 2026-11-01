@@ -3,13 +3,15 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
+import httpx2
 import pytest
 from pydantic import ValidationError
 
+from course_harness.app import create_app
 from course_harness.core import releases
 from course_harness.core.canonical_mutation import capture_canonical_file
-from course_harness.core.course_plan import CoursePlan, Lecture, write_course_plan
-from course_harness.core.presentation import SlideCitation
+from course_harness.core.course_plan import CoursePlan, Lecture, read_course_plan, write_course_plan
+from course_harness.core.presentation import BulletsSlide, Presentation, SlideCitation
 from course_harness.core.quiz import (
     InvalidQuiz,
     Quiz,
@@ -20,7 +22,9 @@ from course_harness.core.quiz import (
     list_quizzes,
     new_option_id,
     new_question_id,
+    option_by_id,
     parse_quiz,
+    question_by_id,
     quiz_path,
     quiz_problems,
     read_quiz,
@@ -34,6 +38,11 @@ from course_harness.core.release_validation import (
 )
 from course_harness.core.releases import ReleaseError
 from course_harness.core.sources import Source, SourcesIndex, write_sources_index
+from course_harness.course_agent import (
+    CoursePlanLectureCommand,
+    ReplaceCoursePlanCommand,
+    apply_course_plan_mutation,
+)
 from course_harness.release_service import (
     PublishReleaseRequest,
     ReleaseValidationError,
@@ -121,6 +130,10 @@ def test_a_quiz_round_trips_through_its_human_readable_lecture_file(tmp_path: Pa
     assert list_quizzes(tmp_path) == [quiz]
     assert quiz_problems(quiz) == []
     assert correct_option(quiz.questions[0]) == quiz.questions[0].options[0]
+    question = question_by_id(quiz, "question-aaaaaaaaaaaa")
+    assert question is not None
+    assert option_by_id(question, "option-bbbbbbbbbbbb") == question.options[1]
+    assert option_by_id(question, "option-ffffffffffff") is None
 
 
 def test_conditional_quiz_writes_and_deletes_use_canonical_mutation(tmp_path: Path) -> None:
@@ -154,7 +167,8 @@ def test_generated_ids_follow_the_codebase_convention() -> None:
         lambda data: data.update(questions=[]),
         lambda data: data.update(unexpected=True),
         lambda data: data["questions"][0].update(id="q1"),
-        lambda data: data["questions"][0].update(prompt="  "),
+        lambda data: data["questions"][0].update(prompt="  \n "),
+        lambda data: data["questions"][0]["options"][1].update(explanation="   "),
         lambda data: data["questions"][0].update(options=data["questions"][0]["options"][:1]),
         lambda data: data["questions"][0]["options"][0].update(id="option-1"),
         lambda data: data["questions"][0]["options"][0].update(text=""),
@@ -173,6 +187,12 @@ def test_malformed_quizzes_are_rejected_by_the_schema(mutate: Callable[[dict], N
 def test_unreadable_or_mismatched_quiz_files_are_invalid(tmp_path: Path) -> None:
     with pytest.raises(InvalidQuiz):
         parse_quiz(b"questions: [unclosed")
+    # Canonical YAML never shares nodes, so anchors and aliases are rejected.
+    aliased = serialize_quiz(_quiz()).replace(
+        b"lecture_id: lecture-aaaaaaaaaaaa", b"lecture_id: &id lecture-aaaaaaaaaaaa\nx: *id"
+    )
+    with pytest.raises(InvalidQuiz, match="anchors or aliases"):
+        parse_quiz(aliased)
     directory = tmp_path / "quizzes"
     directory.mkdir()
     (directory / f"{SECOND_LECTURE_ID}.yaml").write_bytes(serialize_quiz(_quiz()))
@@ -205,10 +225,14 @@ def test_answer_key_problems_name_the_question_and_option() -> None:
             "options": [
                 question.options[0],
                 question.options[0].model_copy(update={"correct": False}),
+                question.options[0].model_copy(update={"correct": False}),
             ],
         }
     )
-    quiz = _quiz(LECTURE_ID, question, question, no_correct, two_correct, duplicate_option)
+    # Each duplicated ID is reported once, however often it repeats.
+    quiz = _quiz(
+        LECTURE_ID, question, question, question, no_correct, two_correct, duplicate_option
+    )
 
     assert [(p.code, p.question_id, p.option_id) for p in quiz_problems(quiz)] == [
         ("quiz.duplicate-question-id", "question-aaaaaaaaaaaa", None),
@@ -542,3 +566,130 @@ def test_publishing_a_quiz_with_warnings_requires_waivers(tmp_path: Path) -> Non
     )
     assert read_release(workspace, "fall-2026") == release
     assert [finding.waived for finding in release.validation.findings] == [True, True]
+
+
+def test_markdown_prompts_and_explanations_keep_their_leading_whitespace() -> None:
+    prompt = "    x = 1  # an indented code block\n\nWhat does this print?\n"
+    explanation = "    print(x)\n\nIt prints `1`."
+    data = _quiz().model_dump(mode="json")
+    data["questions"][0]["prompt"] = prompt
+    data["questions"][0]["options"][1]["explanation"] = explanation
+    data["questions"][0]["options"][1]["text"] = "  Exchangeability  "
+
+    quiz = parse_quiz(serialize_quiz(Quiz.model_validate(data)))
+
+    assert quiz.questions[0].prompt == prompt
+    assert quiz.questions[0].options[1].explanation == explanation
+    assert quiz.questions[0].options[1].text == "Exchangeability"
+
+
+def test_repeated_ids_are_checked_once_so_finding_ids_stay_unique() -> None:
+    question = _question(citations=[], wrong_explanation=None)
+    repeated_option = question.model_copy(
+        update={
+            "id": "question-bbbbbbbbbbbb",
+            "options": [question.options[0], question.options[1], question.options[1]],
+        }
+    )
+
+    result = _validate(_quiz(LECTURE_ID, question, question, question, repeated_option))
+
+    finding_ids = [finding.id for finding in result.findings]
+    assert len(finding_ids) == len(set(finding_ids))
+    assert [finding.code for finding in result.findings] == [
+        "quiz.duplicate-question-id",
+        "quiz.duplicate-option-id",
+        "quiz.unexplained-option",
+        "grounding.uncited-question",
+        "quiz.unexplained-option",
+        "grounding.uncited-question",
+    ]
+
+
+def test_slide_and_quiz_citations_share_one_rule_set() -> None:
+    citation = SlideCitation(source_id="source-ffffffffffff", label="Gone")
+    lecture = (
+        _plan().lectures[0].model_copy(update={"presentation_id": "presentation-aaaaaaaaaaaa"})
+    )
+    result = validate_release(
+        plan=_plan().model_copy(update={"lectures": [lecture]}),
+        presentations=[
+            Presentation(
+                id="presentation-aaaaaaaaaaaa",
+                lecture_id=LECTURE_ID,
+                slides=[BulletsSlide(id="slide-aaaaaaaaaaaa", bullets=["A"], citations=[citation])],
+            )
+        ],
+        sources=_sources(),
+        selection=ReleaseSelection(
+            lecture_ids=[LECTURE_ID], artifact_ids=["presentation-aaaaaaaaaaaa"]
+        ),
+        quizzes=[_quiz(LECTURE_ID, _question(citations=[citation]))],
+    )
+
+    assert [(finding.id, finding.message) for finding in result.findings] == [
+        (
+            "citation.missing-source:presentation-aaaaaaaaaaaa:slide-aaaaaaaaaaaa:0"
+            ":source-ffffffffffff",
+            "Citation 1 on Slide slide-aaaaaaaaaaaa references missing Source source-ffffffffffff.",
+        ),
+        (
+            "citation.missing-source:lecture-aaaaaaaaaaaa:question-aaaaaaaaaaaa:0"
+            ":source-ffffffffffff",
+            "Citation 1 on Question question-aaaaaaaaaaaa references missing Source "
+            "source-ffffffffffff.",
+        ),
+    ]
+
+
+def test_dropping_a_lecture_from_the_course_plan_removes_its_quiz(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    _initialize(workspace)
+    write_quiz(workspace, _quiz())
+    write_quiz(workspace, _quiz(SECOND_LECTURE_ID, _question("question-bbbbbbbbbbbb")))
+
+    plan, written = apply_course_plan_mutation(
+        workspace,
+        ReplaceCoursePlanCommand(
+            title="Causal inference",
+            audience="Graduate students",
+            lectures=[CoursePlanLectureCommand(id=SECOND_LECTURE_ID, title="Applications")],
+        ),
+    )
+
+    assert [lecture.id for lecture in plan.lectures] == [SECOND_LECTURE_ID]
+    assert set(written) == {"course.yaml", quiz_path(LECTURE_ID)}
+    assert written[quiz_path(LECTURE_ID)] is None
+    assert read_quiz(workspace, LECTURE_ID) is None
+    assert read_quiz(workspace, SECOND_LECTURE_ID) is not None
+    assert read_current_state(workspace).validation.valid is True
+
+
+@pytest.mark.anyio
+async def test_removing_a_lecture_through_the_api_removes_its_quiz(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    workspace.mkdir()
+    transport = httpx2.ASGITransport(app=create_app(workspace))
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/api/course",
+            json={
+                "title": "Field Methods",
+                "audience": "New researchers",
+                "lectures": [{"title": "Questions"}, {"title": "Sampling"}],
+            },
+        )
+        first_id, second_id = [lecture["id"] for lecture in created.json()["lectures"]]
+        write_quiz(workspace, _quiz(second_id, _question(citations=[])))
+        record_app_authored_state(workspace)
+
+        removed = await client.delete(f"/api/course/lectures/{second_id}")
+
+    assert removed.status_code == 200
+    assert read_quiz(workspace, second_id) is None
+    plan = read_course_plan(workspace)
+    assert plan is not None
+    assert [lecture.id for lecture in plan.lectures] == [first_id]
+    state = read_current_state(workspace)
+    assert state.validation.valid is True
+    assert state.drift == "clean"
