@@ -51,6 +51,8 @@ MIGRATIONS: tuple[str, ...] = (
         kind TEXT NOT NULL CHECK (kind IN ('admin', 'course')),
         course_id INTEGER REFERENCES courses (id) ON DELETE CASCADE,
         role TEXT CHECK (role IN ('learner', 'instructor')),
+        -- For an Administrator session, a fingerprint of the token it was opened with.
+        admin_fingerprint TEXT,
         created_at TEXT NOT NULL,
         expires_at TEXT NOT NULL
     );
@@ -97,6 +99,7 @@ class Session:
     kind: SessionKind
     course_id: int | None
     role: Role | None
+    admin_fingerprint: str | None
     expires_at: str
 
 
@@ -251,20 +254,51 @@ class Store:
         lifetime: timedelta,
         course_id: int | None = None,
         role: Role | None = None,
+        admin_fingerprint: str | None = None,
     ) -> None:
-        moment = now()
         with self.connect() as connection:
-            connection.execute("DELETE FROM sessions WHERE expires_at < ?", (timestamp(moment),))
-            connection.execute(
-                "INSERT INTO sessions (id_hash, kind, course_id, role, created_at, expires_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (id_hash, kind, course_id, role, timestamp(moment), timestamp(moment + lifetime)),
+            _insert_session(
+                connection,
+                id_hash,
+                kind=kind,
+                lifetime=lifetime,
+                course_id=course_id,
+                role=role,
+                admin_fingerprint=admin_fingerprint,
             )
+
+    def exchange_share_link(
+        self, token_hash: str, role: Role, *, session_hash: str, lifetime: timedelta
+    ) -> Course | None:
+        """Open a course session for a Share Link token, in one transaction with the check that
+        the link still exists, so a concurrent rotation can never leave a session behind."""
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT courses.* FROM share_links"
+                " JOIN courses ON courses.id = share_links.course_id"
+                " WHERE share_links.token_hash = ? AND share_links.role = ?",
+                (token_hash, role),
+            ).fetchone()
+            if row is None:
+                connection.execute("ROLLBACK")
+                return None
+            course = Course(**dict(row))
+            _insert_session(
+                connection,
+                session_hash,
+                kind="course",
+                lifetime=lifetime,
+                course_id=course.id,
+                role=role,
+            )
+            connection.execute("COMMIT")
+        return course
 
     def session(self, id_hash: str) -> Session | None:
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT kind, course_id, role, expires_at FROM sessions "
+                "SELECT kind, course_id, role, admin_fingerprint, expires_at FROM sessions "
                 "WHERE id_hash = ? AND expires_at >= ?",
                 (id_hash, timestamp()),
             ).fetchone()
@@ -273,3 +307,31 @@ class Store:
     def delete_session(self, id_hash: str) -> None:
         with self.connect() as connection:
             connection.execute("DELETE FROM sessions WHERE id_hash = ?", (id_hash,))
+
+
+def _insert_session(
+    connection: sqlite3.Connection,
+    id_hash: str,
+    *,
+    kind: SessionKind,
+    lifetime: timedelta,
+    course_id: int | None,
+    role: Role | None,
+    admin_fingerprint: str | None = None,
+) -> None:
+    moment = now()
+    connection.execute("DELETE FROM sessions WHERE expires_at < ?", (timestamp(moment),))
+    connection.execute(
+        "INSERT INTO sessions "
+        "(id_hash, kind, course_id, role, admin_fingerprint, created_at, expires_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            id_hash,
+            kind,
+            course_id,
+            role,
+            admin_fingerprint,
+            timestamp(moment),
+            timestamp(moment + lifetime),
+        ),
+    )

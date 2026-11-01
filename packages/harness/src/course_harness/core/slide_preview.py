@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
+import zipfile
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -79,6 +83,30 @@ class PresentationPreview(BaseModel):
     renderer: RendererCapability
     render_key: str
     slides: list[SlidePreview]
+
+
+# A PowerPoint file is a zip archive; these bound what opening one may inflate.
+MAX_PPTX_UNCOMPRESSED_BYTES = 512_000_000
+MAX_PPTX_ENTRIES = 10_000
+LIBREOFFICE_TIMEOUT_SECONDS = 30
+
+
+class UnsafePresentationArchive(ValueError):
+    """A template is not a zip archive within the size and entry limits."""
+
+
+def check_pptx_archive(path: Path) -> None:
+    """Refuse a template whose zip would inflate too far, before python-pptx or LibreOffice
+    opens it."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            entries = archive.infolist()
+    except (OSError, zipfile.BadZipFile) as error:
+        raise UnsafePresentationArchive("The template is not a valid PowerPoint file") from error
+    if len(entries) > MAX_PPTX_ENTRIES:
+        raise UnsafePresentationArchive("The template holds too many files")
+    if sum(entry.file_size for entry in entries) > MAX_PPTX_UNCOMPRESSED_BYTES:
+        raise UnsafePresentationArchive("The template is too large when unpacked")
 
 
 def _libreoffice_executable() -> str | None:
@@ -197,6 +225,8 @@ def build_preview(
     profile = context.profile
     template_path = context.template_path
     cache_dir = context.cache_dir
+    if template_path is not None:
+        check_pptx_archive(template_path)
     inspection = (
         inspect_template(template_path) if template_path is not None else _builtin_inspection()
     )
@@ -274,6 +304,8 @@ def render_layout_backgrounds(
     template_path = context.template_path
     cache_dir = context.cache_dir
     background_dir = cache_dir / profile.id / "backgrounds" / f"v{profile.version}"
+    if template_path is not None:
+        check_pptx_archive(template_path)
     rendered_layouts: dict[int, Path] = {}
     for mapping in profile.layouts:
         target = background_dir / f"{mapping.semantic_layout}.png"
@@ -316,6 +348,12 @@ def _delete_all_slides(presentation) -> None:
 
 
 def _render_pptx_png(pptx_bytes: bytes, target: Path) -> None:
+    """Convert a one-slide PowerPoint file to a PNG with headless LibreOffice.
+
+    Each run gets its own throwaway LibreOffice profile, so concurrent or crashed runs never
+    share or lock one, and the whole process group is killed when it overruns its time. The
+    Classroom container also runs it without network access (ticket 10).
+    """
     executable = _libreoffice_executable()
     if executable is None:
         raise RuntimeError("LibreOffice was not found")
@@ -323,25 +361,37 @@ def _render_pptx_png(pptx_bytes: bytes, target: Path) -> None:
         temporary_dir = Path(directory)
         source = temporary_dir / "slide.pptx"
         source.write_bytes(pptx_bytes)
-        result = subprocess.run(
+        output_dir = temporary_dir / "out"
+        output_dir.mkdir()
+        process = subprocess.Popen(
             [
                 executable,
+                f"-env:UserInstallation={(temporary_dir / 'profile').as_uri()}",
                 "--headless",
+                "--norestore",
                 "--convert-to",
                 "png",
                 "--outdir",
-                str(temporary_dir),
+                str(output_dir),
                 str(source),
             ],
-            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=30,
-            check=False,
+            start_new_session=True,
         )
-        if result.returncode != 0:
-            detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        try:
+            stdout, stderr = process.communicate(timeout=LIBREOFFICE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as error:
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+            raise RuntimeError("LibreOffice preview render timed out") from error
+        if process.returncode != 0:
+            detail = stderr.strip() or stdout.strip() or "unknown error"
             raise RuntimeError(f"LibreOffice preview render failed: {detail}")
-        rendered = next(temporary_dir.glob("*.png"), None)
+        rendered = next(output_dir.glob("*.png"), None)
         if rendered is None:
             raise RuntimeError("LibreOffice did not produce a preview image")
         target.parent.mkdir(parents=True, exist_ok=True)

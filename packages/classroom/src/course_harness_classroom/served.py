@@ -41,7 +41,9 @@ from course_harness.core.releases import (
 from course_harness.core.slide_preview import (
     PresentationPreview,
     PreviewContext,
+    UnsafePresentationArchive,
     build_preview,
+    check_pptx_archive,
     render_layout_backgrounds,
     renderer_capability,
 )
@@ -129,6 +131,12 @@ def prepare_release(
         profile = release.template_profile.definition
         custom_template = release.template_profile.template_storage_path is not None
         can_preview = not custom_template or template_path is not None
+        if template_path is not None:
+            try:
+                check_pptx_archive(template_path)
+            except UnsafePresentationArchive as error:
+                can_preview = False
+                warnings.append(f"Slide previews are unavailable: {error}.")
         prefix = asset_url_prefix(course_slug, name)
         context = PreviewContext(
             profile=profile,
@@ -219,7 +227,8 @@ def load_snapshot(directory: Path) -> ServedSnapshot:
     return ServedSnapshot.model_validate_json((directory / SNAPSHOT_FILE).read_bytes())
 
 
-def remove_other_snapshots(served_dir: Path, keep: str) -> None:
+def remove_other_snapshots(served_dir: Path, keep: set[str]) -> None:
+    """Remove every snapshot but those named, such as the served and the previous one."""
     for entry in served_dir.iterdir():
-        if entry.name != keep and entry.is_dir():
+        if entry.name not in keep and entry.is_dir():
             shutil.rmtree(entry, ignore_errors=True)

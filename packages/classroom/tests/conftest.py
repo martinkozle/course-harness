@@ -209,6 +209,8 @@ def settings(tmp_path: Path) -> ClassroomSettings:
     return ClassroomSettings(
         data_dir=tmp_path / "classroom",
         admin_token=ADMIN_TOKEN,
+        # Plain HTTP on loopback keeps cookies non-Secure, so the HTTP test client sends them.
+        public_url="http://localhost",
         fetch_interval_seconds=0,
         fetch_timeout_seconds=60,
         allow_local_repos=True,

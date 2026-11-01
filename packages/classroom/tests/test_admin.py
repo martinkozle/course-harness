@@ -3,6 +3,7 @@
 from dataclasses import replace
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from course_harness_classroom.config import ClassroomSettings
@@ -19,14 +20,46 @@ def test_admin_endpoints_require_a_session(make_client: Any) -> None:
     assert client.post("/api/admin/courses", json={"repo_url": "/x"}).status_code == 401
 
 
-def test_a_wrong_token_is_refused_and_repeated_failures_are_limited(make_client: Any) -> None:
+def test_a_wrong_token_is_refused_after_a_fixed_delay(
+    make_client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    delays: list[float] = []
+    monkeypatch.setattr("course_harness_classroom.app.time.sleep", delays.append)
     client = make_client()
 
-    for _ in range(10):
+    for _ in range(3):
         response = client.post("/api/admin/session", json={"token": "wrong"})
         assert response.status_code == 401
         assert ADMIN_COOKIE not in response.cookies
-    assert client.post("/api/admin/session", json={"token": ADMIN_TOKEN}).status_code == 429
+    # No lockout: the right token still works at once.
+    assert client.post("/api/admin/session", json={"token": ADMIN_TOKEN}).status_code == 200
+    assert delays == [1.0, 1.0, 1.0]
+
+
+def test_changing_the_admin_token_ends_existing_sessions(
+    make_client: Any, settings: ClassroomSettings
+) -> None:
+    client = make_client()
+    client.post("/api/admin/session", json={"token": ADMIN_TOKEN})
+    session = client.cookies[ADMIN_COOKIE]
+    assert client.get("/api/admin/courses").status_code == 200
+
+    restarted = make_client(replace(settings, admin_token="a-brand-new-administrator-token-42"))
+    restarted.cookies.set(ADMIN_COOKIE, session)
+
+    assert restarted.get("/api/admin/courses").status_code == 401
+    assert restarted.get("/api/admin/session").json()["authenticated"] is False
+
+
+def test_cookies_are_secure_by_default(make_client: Any, settings: ClassroomSettings) -> None:
+    for public_url in [None, "http://classroom.example.org", "https://classroom.example.org"]:
+        client = make_client(replace(settings, public_url=public_url))
+        response = client.post("/api/admin/session", json={"token": ADMIN_TOKEN})
+        assert "Secure" in response.headers["set-cookie"], public_url
+    for public_url in ["http://localhost:8000", "http://127.0.0.1:8000"]:
+        client = make_client(replace(settings, public_url=public_url))
+        response = client.post("/api/admin/session", json={"token": ADMIN_TOKEN})
+        assert "Secure" not in response.headers["set-cookie"], public_url
 
 
 def test_the_token_is_exchanged_for_an_http_only_strict_cookie(make_client: Any) -> None:

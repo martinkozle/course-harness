@@ -56,6 +56,8 @@ def validate_repo_url(url: str, *, allow_local: bool = False) -> str:
     if not hostname or parts.path in {"", "/"}:
         raise InvalidRepoUrl("Use an https:// address with a repository path.")
     if not allow_local:
+        if parts.port not in {None, 443}:
+            raise InvalidRepoUrl("Use the standard HTTPS port.")
         check_public_host(hostname)
     return url
 
@@ -75,23 +77,59 @@ def check_public_host(hostname: str) -> None:
         raise InvalidRepoUrl("The Classroom fetches only from public hosts.")
 
 
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+_IPV4_COMPATIBLE = ipaddress.ip_network("::/96")
+
+
+def embedded_ipv4(address: ipaddress.IPv6Address) -> list[ipaddress.IPv4Address]:
+    """The IPv4 addresses an IPv6 address carries: mapped, NAT64, compatible, 6to4 or Teredo."""
+    embedded: list[ipaddress.IPv4Address] = []
+    if address.ipv4_mapped is not None:
+        embedded.append(address.ipv4_mapped)
+    if address in _NAT64 or (address in _IPV4_COMPATIBLE and int(address) > 1):
+        embedded.append(ipaddress.IPv4Address(int(address) & 0xFFFFFFFF))
+    if address.sixtofour is not None:
+        embedded.append(address.sixtofour)
+    if address.teredo is not None:
+        embedded.extend(address.teredo)
+    return embedded
+
+
 def is_public_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
-        address = address.ipv4_mapped
+    """A globally routable unicast address, also for every IPv4 address an IPv6 one wraps."""
+    if isinstance(address, ipaddress.IPv6Address):
+        embedded = embedded_ipv4(address)
+        if embedded:
+            return all(is_public_address(inner) for inner in embedded)
     return address.is_global and not address.is_multicast
+
+
+def resolve_public_address(url: str) -> tuple[str, int, str]:
+    """Resolve the host once, refuse any non-public answer, and return the address to pin.
+
+    The fetch then connects to exactly this address (``http.curloptResolve``), so a second DNS
+    answer cannot redirect it to an internal service.
+    """
+    parts = urlsplit(url)
+    hostname = parts.hostname
+    if not hostname:
+        raise InvalidRepoUrl("The repository address has no host.")
+    port = parts.port or 443
+    if port != 443:
+        raise InvalidRepoUrl("Use the standard HTTPS port.")
+    check_public_host(hostname)
+    try:
+        infos = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
+    except OSError as error:
+        raise InvalidRepoUrl(f"The host {hostname} could not be resolved.") from error
+    addresses = [ipaddress.ip_address(str(info[4][0]).split("%", 1)[0]) for info in infos]
+    if not addresses:
+        raise InvalidRepoUrl(f"The host {hostname} could not be resolved.")
+    if not all(is_public_address(address) for address in addresses):
+        raise InvalidRepoUrl("The repository host resolves to a non-public address.")
+    return hostname, port, str(addresses[0])
 
 
 def check_resolves_publicly(url: str) -> None:
     """Before a fetch, refuse a host that currently resolves to a non-public address."""
-    hostname = urlsplit(url).hostname
-    if not hostname:
-        raise InvalidRepoUrl("The repository address has no host.")
-    check_public_host(hostname)
-    try:
-        infos = socket.getaddrinfo(hostname, 443, proto=socket.IPPROTO_TCP)
-    except OSError as error:
-        raise InvalidRepoUrl(f"The host {hostname} could not be resolved.") from error
-    for info in infos:
-        address = ipaddress.ip_address(str(info[4][0]).split("%", 1)[0])
-        if not is_public_address(address):
-            raise InvalidRepoUrl("The repository host resolves to a non-public address.")
+    resolve_public_address(url)

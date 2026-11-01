@@ -8,6 +8,7 @@ at a time per course; the periodic loop and "Sync now" share that lock.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import threading
 from collections import defaultdict
@@ -27,6 +28,7 @@ from course_harness_classroom.served import (
 from course_harness_classroom.store import Course, ServedRelease, Store, SyncStatus
 
 logger = logging.getLogger(__name__)
+SNAPSHOT_NAME = re.compile(r"[a-z0-9-]{1,64}-[0-9a-f]{12}\Z")
 MAX_MESSAGE_LENGTH = 4_000
 
 
@@ -61,8 +63,19 @@ class SyncService:
 
     def snapshot(self, course: Course) -> ServedSnapshot | None:
         directory = self.snapshot_dir(course)
-        if directory is None:
+        return None if directory is None else self._load(directory)
+
+    def snapshot_named(self, course: Course, name: str) -> tuple[Path, ServedSnapshot] | None:
+        """A snapshot still on disk: the served one or, so open pages keep working after a
+        switch, the one served before it."""
+        if not SNAPSHOT_NAME.fullmatch(name):
             return None
+        directory = self.served_dir(course) / name
+        if not (directory / "release.json").is_file():
+            return None
+        return directory, self._load(directory)
+
+    def _load(self, directory: Path) -> ServedSnapshot:
         cached = self._snapshots.get(directory)
         if cached is None:
             cached = load_snapshot(directory)
@@ -115,6 +128,7 @@ class SyncService:
             self._record(course, "warning" if warnings else "ok", "\n".join(warnings) or None)
             return
         served_dir = self.served_dir(course)
+        previous = self.snapshot_dir(course)
         try:
             prepared = prepare_release(
                 mirror, release, served_dir=served_dir, course_slug=course.slug
@@ -125,7 +139,8 @@ class SyncService:
             self._record(course, "error", "\n".join(warnings))
             return
         warnings += prepared.warnings
-        self._snapshots.pop(prepared.directory, None)
+        for directory in [path for path in self._snapshots if path.parent == served_dir]:
+            self._snapshots.pop(directory, None)
         self.store.record_sync(
             course.id,
             status="warning" if warnings else "ok",
@@ -138,7 +153,8 @@ class SyncService:
                 published_at=release.published_at,
             ),
         )
-        remove_other_snapshots(served_dir, keep=snapshot_name(release))
+        keep = {snapshot_name(release)} | ({previous.name} if previous else set())
+        remove_other_snapshots(served_dir, keep=keep)
         logger.info("Course %s now serves %s", course.slug, release.tag)
 
     def _record(self, course: Course, status: SyncStatus, message: str | None) -> None:

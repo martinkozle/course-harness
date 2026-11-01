@@ -1,13 +1,15 @@
 """Share Links: creation, the token-for-cookie exchange, rotation and course access."""
 
+import logging
 from dataclasses import replace
+from datetime import timedelta
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
 from course_harness_classroom.config import ClassroomSettings
-from course_harness_classroom.security import token_hash
+from course_harness_classroom.security import ExchangeLimiter, RedactShareLinks, token_hash
 from course_harness_classroom.store import Store
 
 PRESENTATION_ID = "presentation-aaaaaaaaaaaa"
@@ -31,7 +33,7 @@ def _link(admin: TestClient, role: str) -> str:
 
 
 def _path(url: str) -> str:
-    return url.removeprefix("http://testserver")
+    return url.removeprefix("http://localhost")
 
 
 def test_a_share_link_is_shown_once_and_only_its_hash_is_stored(
@@ -39,7 +41,7 @@ def test_a_share_link_is_shown_once_and_only_its_hash_is_stored(
 ) -> None:
     url = _link(admin, "learner")
 
-    assert url.startswith("http://testserver/l/")
+    assert url.startswith("http://localhost/l/")
     token = url.rsplit("/", 1)[1]
     assert len(token) >= 40
     course = admin.get("/api/admin/courses").json()[0]
@@ -164,3 +166,55 @@ def test_the_release_pptx_and_backgrounds_need_the_course_cookie(
         f"/api/c/causal/assets/{name}/previews/_builtin-default/backgrounds/v1/title.png",
     ]:
         assert learner.get(path).status_code == 404, path
+
+
+def test_share_link_exchanges_are_capped_per_address(
+    make_client: Any, admin: TestClient, attached: Any
+) -> None:
+    url = _path(_link(admin, "learner"))
+    visitor = make_client()
+
+    statuses = [visitor.get("/l/guess").status_code for _ in range(30)]
+    assert set(statuses) == {303}
+    capped = visitor.get(url)
+    assert capped.status_code == 429
+    assert "set-cookie" not in capped.headers
+
+
+def test_the_exchange_limiter_keeps_addresses_apart() -> None:
+    limiter = ExchangeLimiter(attempts=2, window_seconds=60)
+
+    assert limiter.allow("192.0.2.1") and limiter.allow("192.0.2.1")
+    assert not limiter.allow("192.0.2.1")
+    assert limiter.allow("192.0.2.2")
+
+
+def test_share_link_tokens_are_redacted_from_the_access_log() -> None:
+    record = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("192.0.2.1:5000", "GET", "/l/secret-token-value?x=1", "1.1", 303),
+        None,
+    )
+
+    assert RedactShareLinks().filter(record)
+    assert "secret-token-value" not in record.getMessage()
+    assert "/l/[redacted]?x=1" in record.getMessage()
+
+
+def test_a_session_is_only_opened_while_the_link_exists(
+    admin: TestClient, attached: Any, settings: ClassroomSettings
+) -> None:
+    token = _link(admin, "learner").rsplit("/", 1)[1]
+    store = Store(settings.database_path)
+    _link(admin, "learner")  # rotated before the exchange commits
+
+    opened = store.exchange_share_link(
+        token_hash(token), "learner", session_hash="s" * 64, lifetime=timedelta(days=1)
+    )
+
+    assert opened is None
+    assert store.session("s" * 64) is None

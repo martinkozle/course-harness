@@ -14,6 +14,7 @@ import pytest
 from pptx import Presentation as PPTXPresentation
 
 from course_harness.app import create_app
+from course_harness.core import slide_preview
 from course_harness.core.course_plan import (
     CoursePlanInput,
     LectureInput,
@@ -24,7 +25,9 @@ from course_harness.core.course_plan import (
 from course_harness.core.presentation import BulletsSlide, Presentation, Slide
 from course_harness.core.slide_preview import (
     PreviewContext,
+    UnsafePresentationArchive,
     build_preview,
+    check_pptx_archive,
     normalized_layout_slots,
     render_presentation_preview,
     renderer_capability,
@@ -393,3 +396,73 @@ async def test_preview_api_exposes_semantic_fallback_and_renderer_state(
     assert response.json()["renderer"]["available"] is False
     assert render.status_code == 422
     assert "Semantic previews remain available" in render.json()["detail"]
+
+
+def test_a_template_that_inflates_too_far_is_refused_before_it_is_opened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    template = tmp_path / "template.pptx"
+    PPTXPresentation().save(str(template))
+    check_pptx_archive(template)
+
+    monkeypatch.setattr(slide_preview, "MAX_PPTX_UNCOMPRESSED_BYTES", 1_000)
+    with pytest.raises(UnsafePresentationArchive, match="too large"):
+        check_pptx_archive(template)
+    monkeypatch.undo()
+    monkeypatch.setattr(slide_preview, "MAX_PPTX_ENTRIES", 3)
+    with pytest.raises(UnsafePresentationArchive, match="too many"):
+        check_pptx_archive(template)
+    (tmp_path / "plain.pptx").write_bytes(b"not a zip")
+    with pytest.raises(UnsafePresentationArchive):
+        check_pptx_archive(tmp_path / "plain.pptx")
+
+
+def _fake_libreoffice(tmp_path: Path, body: str) -> Path:
+    script = tmp_path / "fake-libreoffice"
+    script.write_text(f"#!/bin/sh\n{body}\n")
+    script.chmod(0o755)
+    return script
+
+
+def test_each_libreoffice_run_gets_its_own_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    arguments = tmp_path / "arguments"
+    script = _fake_libreoffice(
+        tmp_path,
+        f'printf "%s\\n" "$@" >> {arguments}\n'
+        'while [ "$1" != "--outdir" ]; do shift; done\n'
+        'printf PNG > "$2/slide.png"',
+    )
+    monkeypatch.setattr(slide_preview, "_libreoffice_executable", lambda: str(script))
+
+    slide_preview._render_pptx_png(b"pptx", tmp_path / "one.png")
+    slide_preview._render_pptx_png(b"pptx", tmp_path / "two.png")
+
+    assert (tmp_path / "one.png").read_bytes() == b"PNG"
+    profiles = [line for line in arguments.read_text().splitlines() if line.startswith("-env:")]
+    assert len(profiles) == 2 and profiles[0] != profiles[1]
+    assert all(line.startswith("-env:UserInstallation=file://") for line in profiles)
+
+
+def test_a_libreoffice_run_that_overruns_is_killed_with_its_children(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    child = tmp_path / "child.pid"
+    script = _fake_libreoffice(tmp_path, f"sleep 30 & echo $! > {child}\nwait")
+    monkeypatch.setattr(slide_preview, "_libreoffice_executable", lambda: str(script))
+    monkeypatch.setattr(slide_preview, "LIBREOFFICE_TIMEOUT_SECONDS", 1)
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        slide_preview._render_pptx_png(b"pptx", tmp_path / "slide.png")
+
+    pid = int(child.read_text())
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("The renderer's child process survived")

@@ -9,15 +9,17 @@ Routes:
 - Everything else that is a ``GET``: the built Classroom interface, a single-page app.
 """
 
+import hmac
 import logging
 import re
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.staticfiles import StaticFiles
 
@@ -27,16 +29,18 @@ from course_harness_classroom.security import (
     ADMIN_COOKIE,
     ADMIN_SESSION_LIFETIME,
     COURSE_SESSION_LIFETIME,
-    FailedLoginLimiter,
+    ExchangeLimiter,
+    admin_fingerprint,
     admin_token_matches,
     clear_session_cookie,
     course_cookie,
+    install_access_log_redaction,
     new_token,
     public_base_url,
+    secure_cookies,
     security_middleware,
     set_session_cookie,
     token_hash,
-    uses_https,
 )
 from course_harness_classroom.store import (
     ROLES,
@@ -57,7 +61,7 @@ ASSET_PATH = re.compile(
     r"(?:previews/[A-Za-z0-9_-]{1,64}/backgrounds/v[0-9]{1,6}/[a-z_]{1,32}\.png"
     r"|artifacts/presentation-[0-9a-f]{12}\.pptx)\Z"
 )
-SNAPSHOT_NAME = re.compile(r"[a-z0-9-]{1,64}-[0-9a-f]{12}\Z")
+FAILED_LOGIN_DELAY_SECONDS = 1.0
 NO_ACCESS = "Open the link you were given to see this course."
 
 
@@ -160,7 +164,8 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
     store = Store(settings.database_path)
     sync_service = SyncService(store, settings)
     periodic = PeriodicSync(sync_service, settings.fetch_interval_seconds if periodic_sync else 0)
-    login_limiter = FailedLoginLimiter()
+    exchange_limiter = ExchangeLimiter()
+    install_access_log_redaction()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -190,7 +195,13 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
     def require_admin(request: Request) -> None:
         session_id = request.cookies.get(ADMIN_COOKIE)
         session = store.session(token_hash(session_id)) if session_id else None
-        if settings.admin_token is None or session is None or session.kind != "admin":
+        expected = admin_fingerprint(settings)
+        if (
+            expected is None
+            or session is None
+            or session.kind != "admin"
+            or not hmac.compare_digest(session.admin_fingerprint or "", expected)
+        ):
             raise HTTPException(status_code=401, detail="Sign in as the Administrator.")
 
     Admin = Annotated[None, Depends(require_admin)]
@@ -233,20 +244,23 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
                 status_code=503,
                 detail="This Classroom has no Administrator token. Set CLASSROOM_ADMIN_TOKEN.",
             )
-        client = request.client.host if request.client else "unknown"
-        if login_limiter.blocked(client):
-            raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
         if not admin_token_matches(settings, body.token):
-            login_limiter.record_failure(client)
+            # A sync route runs in a worker thread, so the delay slows guessing, not the server.
+            time.sleep(FAILED_LOGIN_DELAY_SECONDS)
             raise HTTPException(status_code=401, detail="That token is not correct.")
         session_id = new_token()
-        store.add_session(token_hash(session_id), kind="admin", lifetime=ADMIN_SESSION_LIFETIME)
+        store.add_session(
+            token_hash(session_id),
+            kind="admin",
+            lifetime=ADMIN_SESSION_LIFETIME,
+            admin_fingerprint=admin_fingerprint(settings),
+        )
         set_session_cookie(
             response,
             name=ADMIN_COOKIE,
             value=session_id,
             lifetime=ADMIN_SESSION_LIFETIME,
-            secure=uses_https(settings, request),
+            secure=secure_cookies(settings),
         )
         return AdminSessionResponse(configured=True, authenticated=True)
 
@@ -256,7 +270,7 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
         if session_id:
             store.delete_session(token_hash(session_id))
         response = Response(status_code=204)
-        clear_session_cookie(response, name=ADMIN_COOKIE, secure=uses_https(settings, request))
+        clear_session_cookie(response, name=ADMIN_COOKIE, secure=secure_cookies(settings))
         return response
 
     @app.get("/api/admin/courses")
@@ -306,26 +320,34 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
     # Share Links
 
     def exchange(token: str, role: Role, request: Request) -> Response:
-        link = store.share_link_by_hash(token_hash(token)) if len(token) <= 200 else None
-        course = store.course_by_id(link.course_id) if link and link.role == role else None
+        client = request.client.host if request.client else "unknown"
+        if not exchange_limiter.allow(client):
+            return PlainTextResponse(
+                "Too many links were opened from your address. Try again in a minute.",
+                status_code=429,
+                headers={"Cache-Control": "no-store", "Retry-After": "60"},
+            )
+        session_id = new_token()
+        course = (
+            store.exchange_share_link(
+                token_hash(token),
+                role,
+                session_hash=token_hash(session_id),
+                lifetime=COURSE_SESSION_LIFETIME,
+            )
+            if len(token) <= 200
+            else None
+        )
         if course is None:
             response: Response = RedirectResponse("/link-not-valid", status_code=303)
         else:
-            session_id = new_token()
-            store.add_session(
-                token_hash(session_id),
-                kind="course",
-                lifetime=COURSE_SESSION_LIFETIME,
-                course_id=course.id,
-                role=role,
-            )
             response = RedirectResponse(f"/c/{course.slug}", status_code=303)
             set_session_cookie(
                 response,
                 name=course_cookie(course.slug),
                 value=session_id,
                 lifetime=COURSE_SESSION_LIFETIME,
-                secure=uses_https(settings, request),
+                secure=secure_cookies(settings),
             )
         response.headers["Cache-Control"] = "no-store"
         return response
@@ -389,18 +411,13 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
 
     @app.get("/api/c/{slug}/assets/{name}/{path:path}")
     def course_asset(name: str, path: str, access: CourseAccess) -> FileResponse:
-        """A rendered background or the Release PPTX of the Release the course serves now."""
+        """A rendered background or the Release PPTX of the Release the course serves now, or of
+        the one it served before, so a page opened before a switch keeps working."""
         course, _role = access
-        directory = sync_service.snapshot_dir(course)
-        snapshot = sync_service.snapshot(course)
-        if (
-            directory is None
-            or snapshot is None
-            or name != directory.name
-            or not SNAPSHOT_NAME.fullmatch(name)
-            or not ASSET_PATH.fullmatch(path)
-        ):
+        found = sync_service.snapshot_named(course, name) if ASSET_PATH.fullmatch(path) else None
+        if found is None:
             raise HTTPException(status_code=404, detail="Not found")
+        directory, snapshot = found
         target = (directory / path).resolve()
         if directory.resolve() not in target.parents or not target.is_file():
             raise HTTPException(status_code=404, detail="Not found")

@@ -5,7 +5,11 @@
 - ``CLASSROOM_ADMIN_TOKEN``: the Administrator token, at least 24 characters. Unset disables
   ``/admin``.
 - ``CLASSROOM_PUBLIC_URL``: the external base URL, such as ``https://classroom.example.org``,
-  used in Share Links and to decide the ``Secure`` cookie flag. Default: the request's own URL.
+  used in Share Links. Required when serving on a non-loopback address. Cookies are ``Secure``
+  unless it is plain ``http://`` on localhost or 127.0.0.1. Default: the request's own URL.
+- ``CLASSROOM_TRUSTED_PROXIES``: comma-separated addresses of reverse proxies whose
+  ``X-Forwarded-For``/``X-Forwarded-Proto`` headers are trusted (uvicorn's
+  ``forwarded_allow_ips``). Unset: forwarded headers are ignored.
 - ``CLASSROOM_FETCH_INTERVAL``: seconds between background syncs of every course; ``0`` turns
   them off. Default 900.
 - ``CLASSROOM_FETCH_TIMEOUT``: seconds one ``git fetch`` may take. Default 300.
@@ -42,6 +46,7 @@ class ClassroomSettings:
     max_mirror_bytes: int = 1_000_000_000
     allow_local_repos: bool = False
     static_dir: Path | None = None
+    trusted_proxies: str | None = None
 
     def __post_init__(self) -> None:
         if self.admin_token is not None and len(self.admin_token) < MIN_ADMIN_TOKEN_LENGTH:
@@ -89,6 +94,7 @@ class ClassroomSettings:
             static_dir=Path(raw_static)
             if (raw_static := environ.get("CLASSROOM_STATIC_DIR", "").strip())
             else None,
+            trusted_proxies=environ.get("CLASSROOM_TRUSTED_PROXIES", "").strip() or None,
             allow_local_repos=environ.get("CLASSROOM_ALLOW_LOCAL_REPOS", "").strip().lower()
             in {"1", "true", "yes"},
         )

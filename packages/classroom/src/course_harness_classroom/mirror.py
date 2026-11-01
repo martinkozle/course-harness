@@ -19,7 +19,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from course_harness.core.releases import git_environment
-from course_harness_classroom.repo_urls import check_resolves_publicly
+from course_harness_classroom.repo_urls import resolve_public_address
 
 REFSPECS = (
     "+refs/heads/main:refs/heads/main",
@@ -27,6 +27,16 @@ REFSPECS = (
     "+refs/course-harness/release-files/*:refs/course-harness/release-files/*",
 )
 SIZE_CHECK_SECONDS = 0.5
+PROXY_VARIABLES = (
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+)
 MAX_REPORTED_OUTPUT = 2_000
 
 
@@ -47,6 +57,7 @@ def _hardened_config(*, allow_local: bool) -> list[str]:
         "http.followRedirects=false",
         "http.lowSpeedLimit=1000",
         "http.lowSpeedTime=60",
+        "http.proxy=",
         "gc.auto=0",
         "maintenance.auto=false",
         "submodule.recurse=false",
@@ -57,7 +68,9 @@ def _hardened_config(*, allow_local: bool) -> list[str]:
 
 
 def _environment() -> dict[str, str]:
-    environment = git_environment()
+    environment = {
+        key: value for key, value in git_environment().items() if key not in PROXY_VARIABLES
+    }
     environment.update({"GIT_ASKPASS": "", "SSH_ASKPASS": "", "GIT_PROTOCOL_FROM_USER": "0"})
     return environment
 
@@ -98,16 +111,23 @@ def fetch(
 ) -> None:
     """Fetch the Release refspecs into the mirror, within time and disk-size limits.
 
-    On failure the mirror may hold part of the new objects, but its refs are only updated by a
-    completed fetch, so Releases already read from it stay readable.
+    The host is resolved once and checked, and Git connects to exactly that address. The caller
+    holds the course's sync lock, so any ``*.lock`` file left in the mirror is from a fetch that
+    was killed and is removed first. A completed fetch that leaves the mirror over the size limit
+    discards the mirror, so the next sync starts clean.
     """
+    pinned: list[str] = []
     if not allow_local:
-        check_resolves_publicly(url)
+        host, port, address = resolve_public_address(url)
+        literal = f"[{address}]" if ":" in address else address
+        pinned = ["-c", f"http.curloptResolve={host}:{port}:{literal}"]
     ensure_mirror(mirror)
+    remove_stale_locks(mirror)
     command = [
         "git",
         f"--git-dir={mirror}",
         *_hardened_config(allow_local=allow_local),
+        *pinned,
         "fetch",
         "--quiet",
         "--no-tags",
@@ -140,7 +160,15 @@ def fetch(
             detail = errors.read(MAX_REPORTED_OUTPUT).decode("utf-8", errors="replace").strip()
             raise MirrorError(f"Fetching the repository failed: {detail or 'git fetch failed'}")
     if directory_size(mirror) > max_bytes:
+        remove_mirror(mirror)
+        ensure_mirror(mirror)
         raise MirrorError("The repository is larger than this Classroom allows")
+
+
+def remove_stale_locks(mirror: Path) -> None:
+    for lock in mirror.rglob("*.lock"):
+        with suppress(OSError):
+            lock.unlink()
 
 
 def _wait(
@@ -171,7 +199,6 @@ def _remove_partial_packs(mirror: Path) -> None:
     for leftover in [
         *objects.glob("pack/tmp_*"),
         *objects.glob("tmp_*"),
-        *objects.glob("incoming-*"),
     ]:
         if leftover.is_dir():
             shutil.rmtree(leftover, ignore_errors=True)

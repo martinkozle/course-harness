@@ -8,6 +8,7 @@ import uvicorn
 
 from course_harness_classroom.app import create_app
 from course_harness_classroom.config import ClassroomSettings, ConfigurationError
+from course_harness_classroom.security import LOOPBACK_HOSTS
 
 cli = typer.Typer(no_args_is_help=True, help="Course Harness Classroom.")
 
@@ -28,12 +29,26 @@ def serve(
     except ConfigurationError as error:
         typer.echo(f"Error: {error}", err=True)
         raise typer.Exit(2) from error
+    if host not in LOOPBACK_HOSTS and settings.public_url is None:
+        typer.echo(
+            "Error: set CLASSROOM_PUBLIC_URL to the address people use to reach this Classroom"
+            " when serving on a non-loopback host.",
+            err=True,
+        )
+        raise typer.Exit(2)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     if settings.admin_token is None:
         logging.getLogger(__name__).warning(
             "CLASSROOM_ADMIN_TOKEN is not set, so /admin cannot be used"
         )
-    uvicorn.run(create_app(settings), host=host, port=port)
+    uvicorn.run(
+        create_app(settings),
+        host=host,
+        port=port,
+        # Trust forwarded client addresses and schemes only from configured proxies.
+        proxy_headers=settings.trusted_proxies is not None,
+        forwarded_allow_ips=settings.trusted_proxies,
+    )
 
 
 def main() -> None:

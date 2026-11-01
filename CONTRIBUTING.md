@@ -74,7 +74,8 @@ Classroom reads its settings from the environment:
 | --- | --- | --- |
 | `CLASSROOM_DATA_DIR` | Mirrors, served Releases, rendered backgrounds and the SQLite store | `./classroom-data` |
 | `CLASSROOM_ADMIN_TOKEN` | The Administrator token for `/admin`, at least 24 characters | unset: `/admin` is off |
-| `CLASSROOM_PUBLIC_URL` | External base URL, used in Share Links and for the `Secure` cookie flag | the request URL |
+| `CLASSROOM_PUBLIC_URL` | External base URL, used in Share Links; required when serving on a non-loopback host. Cookies are `Secure` unless it is `http://localhost` or `http://127.0.0.1` | the request URL |
+| `CLASSROOM_TRUSTED_PROXIES` | Comma-separated reverse proxy addresses whose `X-Forwarded-*` headers are trusted (uvicorn `forwarded_allow_ips`) | unset: ignored |
 | `CLASSROOM_FETCH_INTERVAL` | Seconds between background syncs; `0` turns them off | `900` |
 | `CLASSROOM_FETCH_TIMEOUT` | Seconds one `git fetch` may take | `300` |
 | `CLASSROOM_MAX_MIRROR_BYTES` | Largest a course's mirror may grow on disk | `1000000000` |
@@ -83,13 +84,15 @@ Classroom reads its settings from the environment:
 
 ```bash
 bun run build
-CLASSROOM_ADMIN_TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') CLASSROOM_ALLOW_LOCAL_REPOS=1 \
+CLASSROOM_ADMIN_TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') \
+  CLASSROOM_PUBLIC_URL=http://127.0.0.1:8000 CLASSROOM_ALLOW_LOCAL_REPOS=1 \
   uv run course-classroom serve
 ```
 
 Open `/admin`, paste the token, and attach a repository a Course Author pushed to. Behind a
-TLS-terminating proxy, set `CLASSROOM_PUBLIC_URL` to the `https://` address so cookies are marked
-`Secure` and Share Links use the public host.
+TLS-terminating proxy, set `CLASSROOM_PUBLIC_URL` to the public `https://` address and
+`CLASSROOM_TRUSTED_PROXIES` to the proxy's address, so per-client limits see real client
+addresses.
 
 For frontend hot reload, run the API and Vite side by side; Vite serves `http://127.0.0.1:5173`
 and proxies `/api`:

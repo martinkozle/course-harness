@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from course_harness_classroom import mirror as mirror_module
 from course_harness_classroom.config import ClassroomSettings
 from course_harness_classroom.store import Store
 from course_harness_classroom.sync import PeriodicSync, SyncService
@@ -128,9 +129,28 @@ def test_a_newer_release_replaces_the_served_one(
     assert course["sync_status"] == "ok"
     assert course["release"]["tag"] == "course-release/spring-2027"
     assert course["title"] == "Causal inference II"
-    served = sorted(path.name for path in (settings.courses_dir / "1" / "served").iterdir())
-    assert served == [f"spring-2027-{second.commit_oid[:12]}"]
-    assert first.commit_oid != second.commit_oid
+    served_dir = settings.courses_dir / "1" / "served"
+    # The previous Release stays on disk, so pages opened before the switch keep working.
+    assert sorted(path.name for path in served_dir.iterdir()) == [
+        f"fall-2026-{first.commit_oid[:12]}",
+        f"spring-2027-{second.commit_oid[:12]}",
+    ]
+    learner = admin.post("/api/admin/courses/causal/links/learner").json()["url"]
+    admin.get(learner.removeprefix("http://localhost"))
+    previous = (
+        f"/api/c/causal/assets/fall-2026-{first.commit_oid[:12]}/artifacts/{PRESENTATION_ID}.pptx"
+    )
+    assert admin.get(previous).status_code == 200
+
+    time.sleep(1.1)
+    third = course_repository.publish("summer-2027", "Summer 2027", title="Causal inference III")
+    _sync(admin)
+
+    assert sorted(path.name for path in served_dir.iterdir()) == [
+        f"spring-2027-{second.commit_oid[:12]}",
+        f"summer-2027-{third.commit_oid[:12]}",
+    ]
+    assert admin.get(previous).status_code == 404
 
 
 def test_an_invalid_newer_release_is_skipped_and_the_previous_one_stays(
@@ -296,3 +316,73 @@ def test_periodic_sync_syncs_every_course_until_stopped(
         periodic.stop()
 
     assert store.courses()[0].sync_status == "ok"
+
+
+def test_stale_lock_files_from_a_killed_fetch_are_removed(
+    admin: TestClient, course_repository: CourseRepository, settings: ClassroomSettings
+) -> None:
+    course_repository.publish("fall-2026", "Fall 2026")
+    _attach(admin, course_repository)
+    stale = _mirror(settings) / "refs" / "heads" / "main.lock"
+    stale.write_text("left by a killed fetch")
+    (_mirror(settings) / "packed-refs.lock").write_text("")
+
+    course = _sync(admin)
+
+    assert course["sync_status"] == "ok", course["sync_message"]
+    assert not list(_mirror(settings).rglob("*.lock"))
+
+
+def test_a_completed_fetch_over_the_limit_discards_the_mirror(
+    course_repository: CourseRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    course_repository.publish("fall-2026", "Fall 2026")
+    monkeypatch.setattr(mirror_module, "SIZE_CHECK_SECONDS", 60)  # only the final check runs
+    mirror = tmp_path / "mirror.git"
+
+    with pytest.raises(mirror_module.MirrorError, match="larger than"):
+        mirror_module.fetch(
+            mirror,
+            str(course_repository.remote),
+            timeout_seconds=60,
+            max_bytes=2_000,
+            allow_local=True,
+        )
+
+    assert (mirror / "HEAD").is_file()
+    assert _git(mirror, "for-each-ref") == b""
+
+
+def test_a_fetch_connects_only_to_the_checked_address_without_proxies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def resolve(*_arguments: object, **_keywords: object) -> list[tuple]:
+        return [(10, 1, 6, "", ("2606:4700::6810:84e5", 443, 0, 0))]
+
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    class Refused(Exception):
+        pass
+
+    def popen(command: list[str], **keywords: Any) -> None:
+        calls.append((command, keywords["env"]))
+        raise Refused
+
+    mirror_module.ensure_mirror(tmp_path / "mirror.git")
+    monkeypatch.setattr("course_harness_classroom.repo_urls.socket.getaddrinfo", resolve)
+    monkeypatch.setattr(mirror_module.subprocess, "Popen", popen)
+    monkeypatch.setenv("https_proxy", "http://proxy.internal:3128")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.internal:3128")
+
+    with pytest.raises(Refused):
+        mirror_module.fetch(
+            tmp_path / "mirror.git",
+            "https://git.example.org/course.git",
+            timeout_seconds=10,
+            max_bytes=10_000_000,
+        )
+
+    command, environment = calls[0]
+    assert "http.curloptResolve=git.example.org:443:[2606:4700::6810:84e5]" in command
+    assert "protocol.allow=never" in command and "protocol.https.allow=always" in command
+    assert "https_proxy" not in environment and "HTTPS_PROXY" not in environment
