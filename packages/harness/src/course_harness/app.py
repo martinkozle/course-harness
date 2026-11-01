@@ -3416,7 +3416,12 @@ def create_app(
                 s.label,
             )
 
-        hits = search_module.search_raw(cache_dir, request.query, limit=request.limit or 10)
+        hits = search_module.search_raw(
+            cache_dir,
+            request.query,
+            limit=request.limit or 10,
+            content_hashes=sources_by_version,
+        )
         logger.info(
             "Search '%s': %d FTS5 hits, %d sources (version keys: %s)",
             request.query,

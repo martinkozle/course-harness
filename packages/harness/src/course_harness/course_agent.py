@@ -1064,7 +1064,10 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
     async def search_sources(
         ctx: RunContext[CourseAgentDeps], query: str, limit: int = 5
     ) -> ToolReturn:
-        """Search the full text of Course Sources for relevant content."""
+        """Search the full text of Course Sources for relevant content.
+
+        Give a few plain keywords. Lines that contain all of them come first, then lines that
+        contain some of them."""
         from course_harness.search import enrich_search_results, search_raw  # noqa: PLC0415
         from course_harness.sources import evidence_key  # noqa: PLC0415
 
@@ -1072,7 +1075,7 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         for s in ctx.deps.course_state.sources:
             sources_by_version[evidence_key(ctx.deps.cache_dir, s)] = (s.id, s.resource_id, s.label)
 
-        hits = search_raw(ctx.deps.cache_dir, query, limit=limit)
+        hits = search_raw(ctx.deps.cache_dir, query, limit=limit, content_hashes=sources_by_version)
         results = enrich_search_results(hits, sources_by_version)
 
         if not results:
