@@ -1,6 +1,13 @@
 import { errorMessage, Notice } from "@course-harness/ui";
 import { Download, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useId,
+	useRef,
+	useState,
+} from "react";
 
 import {
 	answersCsvUrl,
@@ -82,16 +89,23 @@ function changeNotes(question: QuestionInsight) {
 	return notes;
 }
 
+/** Why a Question has no rate or score: no single correct Option, or nobody answered. */
+function noValue(question: QuestionInsight) {
+	if (!question.gradable) return "Not graded";
+	if (!question.learners) return "No answers";
+	return null;
+}
+
 /** A first-try correct rate as a thin bar on a 0–100% track, with its value as text. */
-function RateBar({ value }: { value: number | null }) {
-	if (value === null) return <span className="meta">No answers</span>;
+function RateBar({ question }: { question: QuestionInsight }) {
+	const value = question.first_try_correct_rate;
+	const missing = noValue(question);
+	if (missing !== null || value === null)
+		return <span className="meta">{missing ?? "–"}</span>;
 	return (
 		<span className="rate">
 			<span className="rate-track" aria-hidden="true">
-				<span
-					className="rate-fill"
-					style={{ width: `${value * 100}%` }}
-				/>
+				<span className="rate-fill" style={{ width: `${value * 100}%` }} />
 			</span>
 			<span className="rate-value">{percent(value)}</span>
 		</span>
@@ -176,17 +190,26 @@ function SyncStatusLine({ sync }: { sync: CourseSync | null }) {
 
 function Overview({ insights }: { insights: Insights }) {
 	const { overview } = insights;
-	const tiles = [
+	const tiles: {
+		label: string;
+		value: string;
+		detail?: string;
+		secondary?: string | null;
+	}[] = [
 		{ label: "Learners", value: String(overview.learners) },
 		{ label: "Questions", value: String(overview.questions) },
 		{ label: "Answers", value: String(overview.answers) },
 		{
 			label: "Average score",
-			value: percent(overview.mean_score),
+			value: percent(overview.average_score),
 			detail:
 				overview.average_total_score === null
-					? "per answered question"
+					? "No answers yet"
 					: `${decimal(overview.average_total_score)} of ${overview.questions} points per Learner`,
+			secondary:
+				overview.mean_answered_score === null
+					? null
+					: `${percent(overview.mean_answered_score)} on answered questions`,
 		},
 	];
 	return (
@@ -199,10 +222,39 @@ function Overview({ insights }: { insights: Insights }) {
 						{tile.detail ? (
 							<span className="stat-detail">{tile.detail}</span>
 						) : null}
+						{tile.secondary ? (
+							<span className="stat-detail">{tile.secondary}</span>
+						) : null}
 					</dd>
 				</div>
 			))}
 		</dl>
+	);
+}
+
+/** A table that may scroll sideways: keyboard users can focus and scroll it, and narrow screens
+ * show a hint and a shadow at the edge that has more columns. */
+function ScrollTable({
+	label,
+	children,
+}: {
+	label: string;
+	children: ReactNode;
+}) {
+	return (
+		<>
+			<p className="scroll-hint meta" aria-hidden="true">
+				Scroll sideways to see every column.
+			</p>
+			<section
+				className="table-scroll"
+				aria-label={`${label} table`}
+				// biome-ignore lint/a11y/noNoninteractiveTabindex: a region that scrolls must take focus so the keyboard can scroll it
+				tabIndex={0}
+			>
+				{children}
+			</section>
+		</>
 	);
 }
 
@@ -211,7 +263,7 @@ function QuestionsTable({ insights }: { insights: Insights }) {
 	if (!questions.length)
 		return <p className="meta">This Release has no questions.</p>;
 	return (
-		<div className="table-scroll">
+		<ScrollTable label="Questions">
 			<table className="insights-table">
 				<thead>
 					<tr>
@@ -249,9 +301,15 @@ function QuestionsTable({ insights }: { insights: Insights }) {
 								</th>
 								<td className="numeric">{question.learners}</td>
 								<td>
-									<RateBar value={question.first_try_correct_rate} />
+									<RateBar question={question} />
 								</td>
-								<td className="numeric">{percent(question.mean_score)}</td>
+								<td className="numeric">
+									{noValue(question) === null ? (
+										percent(question.mean_score)
+									) : (
+										<span className="meta">–</span>
+									)}
+								</td>
 								<td>
 									{question.most_chosen_wrong ? (
 										<span className="wrong-option">
@@ -273,7 +331,7 @@ function QuestionsTable({ insights }: { insights: Insights }) {
 					})}
 				</tbody>
 			</table>
-		</div>
+		</ScrollTable>
 	);
 }
 
@@ -281,7 +339,7 @@ function StudentsTable({ insights }: { insights: Insights }) {
 	if (!insights.students.length)
 		return <p className="meta">No Learner has answered yet.</p>;
 	return (
-		<div className="table-scroll">
+		<ScrollTable label="Learners">
 			<table className="insights-table">
 				<thead>
 					<tr>
@@ -324,13 +382,13 @@ function StudentsTable({ insights }: { insights: Insights }) {
 					))}
 				</tbody>
 			</table>
-		</div>
+		</ScrollTable>
 	);
 }
 
 function ReleasesTable({ insights }: { insights: Insights }) {
 	return (
-		<div className="table-scroll">
+		<ScrollTable label="Answers by Release">
 			<table className="insights-table">
 				<thead>
 					<tr>
@@ -367,12 +425,19 @@ function ReleasesTable({ insights }: { insights: Insights }) {
 					))}
 				</tbody>
 			</table>
-		</div>
+		</ScrollTable>
 	);
 }
 
 /** An Instructor's view of where Learners get stuck, graded against one Release. */
-export function InsightsPage({ course }: { course: CourseSummary }) {
+export function InsightsPage({
+	course,
+	onSynced,
+}: {
+	course: CourseSummary;
+	/** Called when a sync finishes, so the course summary can be loaded again. */
+	onSynced: () => void;
+}) {
 	const [release, setRelease] = useState<string | null>(null);
 	const [includeInstructors, setIncludeInstructors] = useState(false);
 	const [insights, setInsights] = useState<Insights | null>(null);
@@ -400,7 +465,10 @@ export function InsightsPage({ course }: { course: CourseSummary }) {
 		};
 	}, [course.slug, course.release, release, includeInstructors, reload]);
 
-	const reloadInsights = useCallback(() => setReload((count) => count + 1), []);
+	const reloadInsights = useCallback(() => {
+		setReload((count) => count + 1);
+		onSynced();
+	}, [onSynced]);
 	const sync = useSync(course.slug, reloadInsights);
 
 	const options = { release, includeInstructors };
@@ -485,6 +553,25 @@ export function InsightsPage({ course }: { course: CourseSummary }) {
 			) : (
 				<>
 					<Overview insights={insights} />
+					<details className="score-help">
+						<summary>How scores work</summary>
+						<p>
+							Learners retry a question until they pick the correct option. The
+							first try earns 1 point, and each different wrong option halves
+							it: 1, 0.5, 0.25… The try on which only one option was left earns
+							0, so with two options a second try earns nothing. Picking the
+							same wrong option again costs nothing more. The average score
+							counts questions a Learner has not answered as 0.
+						</p>
+						<p>
+							Scores are worked out when you look, against the Release you
+							choose under “Grade against” (the served one unless you change
+							it). If a newer Release fixes an answer key, earlier answers are
+							graded again under the fix. Adding or removing options changes
+							scores too: a removed option no longer counts as a wrong try, and
+							the number of options decides which try earns 0.
+						</p>
+					</details>
 					{hidden ? (
 						<p className="meta">
 							{plural(hidden, "answer", "answers")} given with the Instructor

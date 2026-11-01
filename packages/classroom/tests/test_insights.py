@@ -116,8 +116,9 @@ def test_insights_show_where_learners_get_stuck(classroom: dict[str, Any]) -> No
         "learners": 3,
         "questions": 1,
         "answers": 4,
-        "mean_score": pytest.approx(0.5),
+        "average_score": pytest.approx(0.5),
         "average_total_score": pytest.approx(0.5),
+        "mean_answered_score": pytest.approx(0.5),
         "hidden_instructor_answers": 1,
     }
     question = insights["questions"][0]
@@ -232,12 +233,67 @@ def test_background_sync_does_not_start_twice(classroom: dict[str, Any]) -> None
     release = service._lock(course.id)
     release.acquire()
     try:
-        assert service.start_background_sync(course.id)
+        assert service.start_background_sync(course.id).outcome == "started"
         assert service.is_syncing(course.id)
-        assert not service.start_background_sync(course.id)
+        assert service.start_background_sync(course.id).outcome == "running"
     finally:
         release.release()
     deadline = time.monotonic() + 30
     while service.is_syncing(course.id):
         assert time.monotonic() < deadline
         time.sleep(0.05)
+    cooling = service.start_background_sync(course.id)
+    assert cooling.outcome == "cooling-down"
+    assert 1 <= cooling.retry_after_seconds <= 30
+
+
+def test_sync_now_has_a_cooldown_per_course(classroom: dict[str, Any]) -> None:
+    instructor = classroom["instructor"]
+    assert instructor.post("/api/c/causal/sync").status_code == 202
+    deadline = time.monotonic() + 30
+    while instructor.get("/api/c/causal/sync").json()["syncing"]:
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+
+    again = instructor.post("/api/c/causal/sync")
+    assert again.status_code == 429
+    assert "synced moments ago" in again.json()["detail"]
+    assert 1 <= int(again.headers["retry-after"]) <= 30
+
+    instructor.app.state.sync.sync_now_cooldown_seconds = 0
+    assert instructor.post("/api/c/causal/sync").status_code == 202
+
+
+def test_an_instructor_using_a_learners_student_id_never_touches_their_record(
+    classroom: dict[str, Any],
+) -> None:
+    learner, instructor = classroom["learner"], classroom["instructor"]
+    # The Instructor answers correctly first with the Learner's student ID ...
+    _answer(instructor, CONFOUNDING, "s-1", "Instructor")
+    # ... which neither settles the Question nor numbers the Learner's attempts.
+    _answer(learner, SAMPLING, "s-1", "Ada")
+    _answer(learner, CONFOUNDING, "s-1", "Ada")
+
+    store = instructor.app.state.store
+    rows = store.answers(store.course_by_slug("causal").id)
+    assert [(row.role, row.option_id, row.attempt) for row in rows] == [
+        ("instructor", CONFOUNDING, 1),
+        ("learner", SAMPLING, 1),
+        ("learner", CONFOUNDING, 2),
+    ]
+    progress = learner.get("/api/c/causal/progress", headers={"X-Classroom-Student": "s-1"})
+    assert [item["option_id"] for item in progress.json()["questions"][0]["tried"]] == [
+        SAMPLING,
+        CONFOUNDING,
+    ]
+    own = instructor.get("/api/c/causal/progress", headers={"X-Classroom-Student": "s-1"})
+    assert [item["option_id"] for item in own.json()["questions"][0]["tried"]] == [CONFOUNDING]
+
+    both = instructor.get("/api/c/causal/insights", params={"include_instructors": "true"}).json()
+    rows_by_role = {(row["role"], row["student_id"]): row for row in both["students"]}
+    assert rows_by_role[("learner", "s-1")]["total_score"] == 0.5
+    assert rows_by_role[("instructor", "s-1")]["total_score"] == 1
+    assert both["overview"]["learners"] == 2
+    learners_only = instructor.get("/api/c/causal/insights").json()
+    assert [row["role"] for row in learners_only["students"]] == ["learner"]
+    assert learners_only["questions"][0]["first_try_correct_rate"] == 0

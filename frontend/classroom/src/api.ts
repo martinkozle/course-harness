@@ -186,8 +186,11 @@ export type Insights = {
 		learners: number;
 		questions: number;
 		answers: number;
-		mean_score: number | null;
+		/** Mean total score per Learner over all Questions, unanswered ones counting 0. */
+		average_score: number | null;
 		average_total_score: number | null;
+		/** Mean score over answered Questions only. */
+		mean_answered_score: number | null;
 		hidden_instructor_answers: number;
 	};
 	questions: QuestionInsight[];

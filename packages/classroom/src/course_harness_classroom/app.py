@@ -667,8 +667,9 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
 
     @app.get("/api/c/{slug}/progress")
     def student_progress(access: CourseAccess, student: StudentHeader) -> ProgressResponse:
-        """A student's state on each Question, from the Answers given with their student ID."""
-        course, _role = access
+        """A student's state on each Question, from the Answers given with their student ID
+        under the same role: an Instructor's tries never show up as a Learner's progress."""
+        course, role = access
         if student is None:
             raise HTTPException(
                 status_code=422, detail=f"Send your student ID in {STUDENT_HEADER}."
@@ -676,7 +677,7 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
         snapshot, _directory = served(course)
         return ProgressResponse(
             student_id=student,
-            questions=progress(snapshot, store.answers(course.id, student_id=student)),
+            questions=progress(snapshot, store.answers(course.id, student=(role, student))),
         )
 
     # Instructor Insights
@@ -696,7 +697,10 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
         served_tag = snapshot.manifest.tag
         quizzes = sync_service.release_quizzes(course, release or served_tag)
         if quizzes is None:
-            raise HTTPException(status_code=404, detail="That Release cannot be read.")
+            raise HTTPException(
+                status_code=404,
+                detail="That Release is not in this course's repository or cannot be read.",
+            )
         return quizzes, served_tag
 
     @app.get("/api/c/{slug}/insights")
@@ -754,8 +758,19 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
 
     @app.post("/api/c/{slug}/sync", status_code=202)
     def course_sync_now(course: InstructorCourse) -> CourseSyncResponse:
-        """Start syncing the course in the background; poll ``GET`` for the outcome."""
-        sync_service.start_background_sync(course.id)
+        """Start syncing the course in the background; poll ``GET`` for the outcome. A sync that
+        started less than the cooldown ago is refused with 429."""
+        started = sync_service.start_background_sync(course.id)
+        if started.outcome == "cooling-down":
+            seconds = started.retry_after_seconds
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "This course was synced moments ago. "
+                    f"Try again in {seconds} second{'s' if seconds != 1 else ''}."
+                ),
+                headers={"Retry-After": str(seconds)},
+            )
         return sync_state(course)
 
     @app.get("/api/c/{slug}/assets/{name}/{path:path}")

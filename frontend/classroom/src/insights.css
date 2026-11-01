@@ -112,6 +112,16 @@
 	box-shadow: var(--shadow-card);
 }
 
+.table-scroll:focus-visible {
+	outline: none;
+	box-shadow: var(--focus-ring);
+}
+
+.scroll-hint {
+	display: none;
+	font-size: 0.8125rem;
+}
+
 .insights-table {
 	width: 100%;
 	border-collapse: collapse;
@@ -216,6 +226,29 @@
 }
 
 @media (max-width: 640px) {
+	.scroll-hint {
+		display: block;
+		margin-bottom: -4px;
+	}
+
+	/* Shadows at an edge with more columns beyond it; they scroll away at either end. */
+	.table-scroll {
+		background:
+			linear-gradient(to right, var(--surface) 30%, rgb(255 255 255 / 0%)) left
+			/ 32px 100% no-repeat local,
+			linear-gradient(to left, var(--surface) 30%, rgb(255 255 255 / 0%)) right
+			/ 32px 100% no-repeat local,
+			radial-gradient(farthest-side at 0 50%, rgb(29 39 51 / 18%), transparent)
+			left / 12px 100% no-repeat scroll,
+			radial-gradient(
+				farthest-side at 100% 50%,
+				rgb(29 39 51 / 18%),
+				transparent
+			)
+			right / 12px 100% no-repeat scroll,
+			var(--surface);
+	}
+
 	/* Keep the first-try rate within reach of a sideways scroll on a phone. */
 	.question-cell {
 		min-width: 11rem;
@@ -225,4 +258,24 @@
 	.insights-table td {
 		padding: 10px;
 	}
+}
+
+/* ---------- How scores work ---------- */
+
+.score-help {
+	padding: 12px 16px;
+	border: 1px solid var(--rule);
+	border-radius: var(--radius-m);
+	background: var(--surface);
+	font-size: 0.9375rem;
+}
+
+.score-help summary {
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.score-help p {
+	margin-top: 8px;
+	color: var(--ink-muted);
 }

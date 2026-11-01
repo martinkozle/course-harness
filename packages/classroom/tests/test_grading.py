@@ -293,3 +293,40 @@ def test_the_csv_never_starts_a_cell_with_a_formula() -> None:
     assert "'=HYPERLINK(1)" in content
     assert "'+cmd" in content
     assert ",=" not in content and ",+" not in content
+
+
+def test_the_most_chosen_wrong_option_counts_only_picks_before_the_first_correct_one() -> None:
+    # Under the old key "a" was correct, so these students moved on to other Options after "b".
+    rows = answers(
+        ("s1", "b", OLD.tag, "learner"),
+        ("s1", "c", OLD.tag, "learner"),
+        ("s2", "b", OLD.tag, "learner"),
+        ("s2", "c", OLD.tag, "learner"),
+        ("s3", "d", OLD.tag, "learner"),
+    )
+    insights = build_insights(
+        rows, FIXED, {OLD.tag: OLD}, served_tag=FIXED.tag, include_instructors=False
+    )
+
+    wrong = insights.questions[0].most_chosen_wrong
+    assert wrong is not None
+    assert (wrong.text, wrong.learners, wrong.picks) == ("Option D", 1, 1)
+
+
+def test_the_average_score_counts_unanswered_questions_as_zero() -> None:
+    other = question("b").model_copy(update={"id": "question-bbbbbbbbbbbb"})
+    two = ReleaseQuizzes(
+        tag=FIXED.tag,
+        name="Fixed",
+        published_at="",
+        questions={
+            **FIXED.questions,
+            (LECTURE, other.id): ReleaseQuestion(LECTURE, "Foundations", other),
+        },
+    )
+    rows = answers(("s1", "b", FIXED.tag, "learner"))
+    overview = build_insights(rows, two, {}, served_tag=two.tag, include_instructors=False).overview
+
+    assert overview.mean_answered_score == 1
+    assert overview.average_total_score == 1
+    assert overview.average_score == 0.5

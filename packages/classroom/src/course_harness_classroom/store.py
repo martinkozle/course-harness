@@ -365,12 +365,13 @@ class Store:
     ) -> Answer | None:
         """Record an Answer as the next attempt of its student on its Question.
 
-        A Question is keyed by its Lecture and Question IDs. ``settled`` sees the Option IDs the
-        student picked on it before, in order; when it says the Question is already answered
-        correctly, or the student picked this Option before, nothing is recorded and ``None`` is
-        returned, so an attempt number is the count of distinct Options tried. Reading and
-        inserting happen in one write transaction, so concurrent Answers never share an attempt
-        number.
+        A Question is keyed by its Lecture and Question IDs, and a student by their role and
+        student ID, so an Instructor who types a Learner's student ID never touches that
+        Learner's record. ``settled`` sees the Option IDs the student picked on it before, in
+        order; when it says the Question is already answered correctly, or the student picked
+        this Option before, nothing is recorded and ``None`` is returned, so an attempt number is
+        the count of distinct Options tried. Reading and inserting happen in one write
+        transaction, so concurrent Answers never share an attempt number.
         """
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -378,10 +379,11 @@ class Store:
                 earlier = [
                     row["option_id"]
                     for row in connection.execute(
-                        "SELECT option_id FROM answers WHERE course_id = ? AND student_id = ? "
-                        "AND lecture_id = ? AND question_id = ? ORDER BY id",
+                        "SELECT option_id FROM answers WHERE course_id = ? AND role = ? "
+                        "AND student_id = ? AND lecture_id = ? AND question_id = ? ORDER BY id",
                         (
                             answer.course_id,
+                            answer.role,
                             answer.student_id,
                             answer.lecture_id,
                             answer.question_id,
@@ -427,13 +429,14 @@ class Store:
             answered_at=moment,
         )
 
-    def answers(self, course_id: int, *, student_id: str | None = None) -> list[Answer]:
-        """A course's Answers in the order they were given, optionally of one student."""
+    def answers(self, course_id: int, *, student: tuple[Role, str] | None = None) -> list[Answer]:
+        """A course's Answers in the order they were given, optionally of one student, named by
+        role and student ID."""
         query = "SELECT * FROM answers WHERE course_id = ?"
         parameters: tuple[object, ...] = (course_id,)
-        if student_id is not None:
-            query += " AND student_id = ?"
-            parameters += (student_id,)
+        if student is not None:
+            query += " AND role = ? AND student_id = ?"
+            parameters += student
         with self.connect() as connection:
             rows = connection.execute(f"{query} ORDER BY id", parameters).fetchall()
         return [Answer(**dict(row)) for row in rows]

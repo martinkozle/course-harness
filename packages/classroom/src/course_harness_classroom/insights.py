@@ -129,10 +129,13 @@ class Overview(BaseModel):
     learners: int
     questions: int
     answers: int
-    # The mean over every answered (student, Question) pair, from 0 to 1.
-    mean_score: float | None
+    # The mean over students of their total score divided by ``questions``, from 0 to 1:
+    # Questions a student has not answered count as 0.
+    average_score: float | None
     # The mean over students of the sum of their Question scores, out of ``questions``.
     average_total_score: float | None
+    # The mean over every answered (student, Question) pair only, from 0 to 1.
+    mean_answered_score: float | None
     # Answers given with an Instructor link that these numbers leave out.
     hidden_instructor_answers: int
 
@@ -158,13 +161,20 @@ def question_key(answer: Answer) -> QuestionKey:
     return (answer.lecture_id, answer.question_id)
 
 
-StudentQuestion = tuple[str, QuestionKey]
+# A student is their role and student ID: an Instructor who types a Learner's student ID is
+# another student, so their tries never change that Learner's grades.
+Student = tuple[Role, str]
+StudentQuestion = tuple[Student, QuestionKey]
+
+
+def student_key(answer: Answer) -> Student:
+    return (answer.role, answer.student_id)
 
 
 def _picks(answers: Sequence[Answer]) -> dict[StudentQuestion, list[Answer]]:
     grouped: dict[StudentQuestion, list[Answer]] = {}
     for answer in answers:
-        grouped.setdefault((answer.student_id, question_key(answer)), []).append(answer)
+        grouped.setdefault((student_key(answer), question_key(answer)), []).append(answer)
     return grouped
 
 
@@ -229,7 +239,7 @@ def _release_insight(
         name=release.name if release else None,
         published_at=release.published_at if release else None,
         answers=len(answers),
-        learners=len({answer.student_id for answer in answers}),
+        learners=len({student_key(answer) for answer in answers}),
         first_answer_at=min(times) if times else None,
         last_answer_at=max(times) if times else None,
         served=tag == served_tag,
@@ -254,14 +264,21 @@ def build_insights(
     releases = {**releases, grading.tag: grading}
     answers = visible_answers(all_answers, include_instructors=include_instructors)
     graded = grades(answers, grading)
+    picks = _picks(answers)
     by_question: dict[QuestionKey, list[Answer]] = {}
     for answer in answers:
         by_question.setdefault(question_key(answer), []).append(answer)
     grades_by_question: dict[QuestionKey, list[QuestionGrade]] = {}
-    grades_by_student: dict[str, list[QuestionGrade]] = {}
-    for (student_id, key), grade in graded.items():
+    grades_by_student: dict[Student, list[QuestionGrade]] = {}
+    # The picks each student made on a Question before answering it correctly.
+    picks_before_correct: dict[QuestionKey, list[Answer]] = {}
+    for (student, key), grade in graded.items():
         grades_by_question.setdefault(key, []).append(grade)
-        grades_by_student.setdefault(student_id, []).append(grade)
+        grades_by_student.setdefault(student, []).append(grade)
+        own = picks[(student, key)]
+        picks_before_correct.setdefault(key, []).extend(
+            own if grade.solved_at is None else own[: grade.solved_at]
+        )
 
     questions: list[QuestionInsight] = []
     for number, (pair, item) in enumerate(grading.questions.items(), start=1):
@@ -270,11 +287,11 @@ def build_insights(
         question_grades = grades_by_question.get(pair, [])
         key = correct_option(question)
         texts = {option.id: option.text for option in question.options}
-        wrong_learners: dict[str, set[str]] = {}
+        wrong_learners: dict[str, set[Student]] = {}
         wrong_picks: Counter[str] = Counter()
-        for answer in question_answers:
+        for answer in picks_before_correct.get(pair, []):
             if answer.option_id in texts and (key is None or answer.option_id != key.id):
-                wrong_learners.setdefault(answer.option_id, set()).add(answer.student_id)
+                wrong_learners.setdefault(answer.option_id, set()).add(student_key(answer))
                 wrong_picks[answer.option_id] += 1
         most_chosen = (
             max(
@@ -346,22 +363,22 @@ def build_insights(
                 lecture_id=pair[0],
                 prompt=prompt,
                 answers=len(question_answers),
-                learners=len({answer.student_id for answer in question_answers}),
+                learners=len({student_key(answer) for answer in question_answers}),
             )
         )
 
-    students: dict[str, list[Answer]] = {}
+    students: dict[Student, list[Answer]] = {}
     for answer in answers:
-        students.setdefault(answer.student_id, []).append(answer)
+        students.setdefault(student_key(answer), []).append(answer)
     student_rows: list[StudentInsight] = []
-    for student_id, student_answers in students.items():
-        own = grades_by_student.get(student_id, [])
+    for (role, student_id), student_answers in students.items():
+        own = grades_by_student.get((role, student_id), [])
         latest = student_answers[-1]
         student_rows.append(
             StudentInsight(
                 student_id=student_id,
                 name=latest.learner_name,
-                role=latest.role,
+                role=role,
                 attempts=len(student_answers),
                 questions_answered=len(own),
                 correct=sum(grade.correct for grade in own),
@@ -369,7 +386,7 @@ def build_insights(
                 last_activity=max(answer.answered_at for answer in student_answers),
             )
         )
-    student_rows.sort(key=lambda row: (row.name.casefold(), row.student_id))
+    student_rows.sort(key=lambda row: (row.name.casefold(), row.student_id, row.role))
 
     by_release: dict[str, list[Answer]] = {}
     for answer in answers:
@@ -388,21 +405,26 @@ def build_insights(
     release_rows.sort(key=lambda row: row.published_at or "", reverse=True)
 
     gradable_grades = [grade for grade in graded.values() if grade.gradable]
+    question_count = len(grading.questions)
+    average_total = (
+        sum(row.total_score for row in student_rows) / len(student_rows) if student_rows else None
+    )
     return Insights(
         graded_release=next(row for row in release_rows if row.graded),
         include_instructors=include_instructors,
         overview=Overview(
             learners=len(students),
-            questions=len(grading.questions),
+            questions=question_count,
             answers=len(answers),
-            mean_score=(
-                sum(grade.score for grade in gradable_grades) / len(gradable_grades)
-                if gradable_grades
+            average_score=(
+                average_total / question_count
+                if average_total is not None and question_count
                 else None
             ),
-            average_total_score=(
-                sum(row.total_score for row in student_rows) / len(student_rows)
-                if student_rows
+            average_total_score=average_total,
+            mean_answered_score=(
+                sum(grade.score for grade in gradable_grades) / len(gradable_grades)
+                if gradable_grades
                 else None
             ),
             hidden_instructor_answers=(

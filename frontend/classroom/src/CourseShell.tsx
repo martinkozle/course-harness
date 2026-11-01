@@ -67,7 +67,16 @@ function useCourse(slug: string) {
 			active = false;
 		};
 	}, [slug]);
-	return { course, error };
+	/** Load the summary again in place, for instance after a sync switched Releases. */
+	const refresh = useCallback(() => {
+		api
+			.course(slug)
+			.then(setCourse)
+			.catch(() => {
+				// Keep showing the summary already loaded.
+			});
+	}, [slug]);
+	return { course, error, refresh };
 }
 
 /** The student's Quizzes and progress, loaded again whenever their student ID changes. */
@@ -130,7 +139,7 @@ export function CourseShell({
 	slug: string;
 	view: CourseView;
 }) {
-	const { course, error } = useCourse(slug);
+	const { course, error, refresh: refreshCourse } = useCourse(slug);
 	const [identity, setIdentity] = useIdentity();
 	const [editing, setEditing] = useState(false);
 	const learning = useLearning(slug, course, identity?.studentId ?? null);
@@ -156,7 +165,7 @@ export function CourseShell({
 		// Insights need no student identity: they are about everyone's answers.
 		content =
 			course.role === "instructor" ? (
-				<InsightsPage course={course} />
+				<InsightsPage course={course} onSynced={refreshCourse} />
 			) : (
 				<Notice tone="info">
 					Insights are for the course’s Instructors. Your Lectures and Exercises
