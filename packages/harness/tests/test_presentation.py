@@ -4,17 +4,17 @@ import httpx2
 import pytest
 
 from course_harness.app import create_app
-from course_harness.course_plan import (
+from course_harness.core.course_plan import (
     CoursePlan,
     CoursePlanInput,
     LectureInput,
     create_course_plan,
     initialize_workspace_history,
 )
-from course_harness.course_plan import (
+from course_harness.core.course_plan import (
     create_course_plan_file as _create_course_plan_file,
 )
-from course_harness.presentation import (
+from course_harness.core.presentation import (
     BulletsSlide,
     Presentation,
     TitleSlide,
@@ -309,7 +309,7 @@ async def test_list_slides_endpoint(tmp_path: Path) -> None:
     initialize_workspace_history(workspace)
     create_course_plan_file(workspace, plan)
 
-    from course_harness.presentation import BulletsSlide, TitleSlide, write_presentation
+    from course_harness.core.presentation import BulletsSlide, TitleSlide, write_presentation
 
     pres = Presentation(
         id="presentation-abc123def456",
@@ -491,7 +491,7 @@ async def test_archived_survives_replan(tmp_path: Path) -> None:
     initialize_workspace_history(workspace)
     create_course_plan_file(workspace, plan)
 
-    from course_harness.presentation import (
+    from course_harness.core.presentation import (
         BulletsSlide,
         TitleSlide,
         write_presentation,

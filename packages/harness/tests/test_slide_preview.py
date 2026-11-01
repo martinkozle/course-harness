@@ -14,28 +14,24 @@ import pytest
 from pptx import Presentation as PPTXPresentation
 
 from course_harness.app import create_app
-from course_harness.course_plan import (
+from course_harness.core.course_plan import (
     CoursePlanInput,
     LectureInput,
     create_course_plan,
     create_course_plan_file,
     initialize_workspace_history,
 )
-from course_harness.presentation import BulletsSlide, Presentation, Slide
-from course_harness.slide_preview import (
+from course_harness.core.presentation import BulletsSlide, Presentation, Slide
+from course_harness.core.slide_preview import (
     PreviewContext,
     build_preview,
     normalized_layout_slots,
     render_presentation_preview,
     renderer_capability,
 )
-from course_harness.template_inspect import inspect_template
-from course_harness.template_profiles import (
-    TemplateLayoutMapping,
-    TemplateProfile,
-    profile_dir,
-    write_profile_version,
-)
+from course_harness.core.template_inspect import inspect_template
+from course_harness.core.template_profiles import TemplateLayoutMapping, TemplateProfile
+from course_harness.template_profiles import profile_dir, write_profile_version
 
 
 def _profile(template_path: Path) -> TemplateProfile:
@@ -93,7 +89,7 @@ def test_preview_keeps_semantic_fallback_when_renderer_is_unavailable(
             )
         ],
     )
-    monkeypatch.setattr("course_harness.slide_preview.shutil.which", lambda _name: None)
+    monkeypatch.setattr("course_harness.core.slide_preview.shutil.which", lambda _name: None)
 
     preview = build_preview(
         presentation, PreviewContext(profile, template_path, tmp_path / "cache")
@@ -107,7 +103,7 @@ def test_preview_keeps_semantic_fallback_when_renderer_is_unavailable(
 
 def test_renderer_capability_reports_detected_binary(monkeypatch) -> None:
     monkeypatch.setattr(
-        "course_harness.slide_preview.shutil.which",
+        "course_harness.core.slide_preview.shutil.which",
         lambda _name: "/nix/store/libreoffice/bin/libreoffice",
     )
 
@@ -119,7 +115,7 @@ def test_renderer_capability_reports_detected_binary(monkeypatch) -> None:
 
 def test_renderer_capability_accepts_soffice_binary(monkeypatch) -> None:
     monkeypatch.setattr(
-        "course_harness.slide_preview.shutil.which",
+        "course_harness.core.slide_preview.shutil.which",
         lambda name: "/opt/libreoffice/program/soffice" if name == "soffice" else None,
     )
 
@@ -150,14 +146,14 @@ def test_render_populates_cached_background_and_authoritative_thumbnail(
         ],
     )
     monkeypatch.setattr(
-        "course_harness.slide_preview.shutil.which", lambda _name: "/bin/libreoffice"
+        "course_harness.core.slide_preview.shutil.which", lambda _name: "/bin/libreoffice"
     )
 
     def fake_render(_pptx_bytes: bytes, target: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"png")
 
-    monkeypatch.setattr("course_harness.slide_preview._render_pptx_png", fake_render)
+    monkeypatch.setattr("course_harness.core.slide_preview._render_pptx_png", fake_render)
 
     rendered = render_presentation_preview(
         presentation, PreviewContext(profile, template_path, tmp_path / "cache")
@@ -195,10 +191,12 @@ def test_editing_one_slide_only_renders_that_slide_again(tmp_path: Path, monkeyp
         target.write_bytes(b"png")
 
     monkeypatch.setattr(
-        "course_harness.slide_preview.shutil.which", lambda _name: "/bin/libreoffice"
+        "course_harness.core.slide_preview.shutil.which", lambda _name: "/bin/libreoffice"
     )
-    monkeypatch.setattr("course_harness.slide_preview.render_layout_backgrounds", lambda _: None)
-    monkeypatch.setattr("course_harness.slide_preview._render_pptx_png", fake_render)
+    monkeypatch.setattr(
+        "course_harness.core.slide_preview.render_layout_backgrounds", lambda _: None
+    )
+    monkeypatch.setattr("course_harness.core.slide_preview._render_pptx_png", fake_render)
 
     original = render_presentation_preview(presentation, context)
     edited = presentation.model_copy(
@@ -257,10 +255,12 @@ def test_concurrent_requests_render_each_thumbnail_once(tmp_path: Path, monkeypa
         target.write_bytes(b"png")
 
     monkeypatch.setattr(
-        "course_harness.slide_preview.shutil.which", lambda _name: "/bin/libreoffice"
+        "course_harness.core.slide_preview.shutil.which", lambda _name: "/bin/libreoffice"
     )
-    monkeypatch.setattr("course_harness.slide_preview.render_layout_backgrounds", lambda _: None)
-    monkeypatch.setattr("course_harness.slide_preview._render_pptx_png", fake_render)
+    monkeypatch.setattr(
+        "course_harness.core.slide_preview.render_layout_backgrounds", lambda _: None
+    )
+    monkeypatch.setattr("course_harness.core.slide_preview._render_pptx_png", fake_render)
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         previews = list(
@@ -359,7 +359,7 @@ async def test_preview_api_exposes_semantic_fallback_and_renderer_state(
     PPTXPresentation().save(str(template_path))
     profile = _profile(template_path)
     write_profile_version(template_data, profile)
-    from course_harness.presentation import write_presentation
+    from course_harness.core.presentation import write_presentation
 
     write_presentation(
         workspace,
@@ -375,7 +375,7 @@ async def test_preview_api_exposes_semantic_fallback_and_renderer_state(
             ],
         ),
     )
-    monkeypatch.setattr("course_harness.slide_preview.shutil.which", lambda _name: None)
+    monkeypatch.setattr("course_harness.core.slide_preview.shutil.which", lambda _name: None)
     app = create_app(
         workspace,
         templates_data_path=template_data,

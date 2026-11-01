@@ -10,14 +10,14 @@ from pydantic_ai.models import Model
 
 from course_harness import app as app_module
 from course_harness.app import create_app
-from course_harness.course_plan import (
+from course_harness.core.course_plan import (
     CoursePlanInput,
     LectureInput,
     create_course_plan,
     create_course_plan_file,
     initialize_workspace_history,
 )
-from course_harness.slide_preview import PreviewContext
+from course_harness.core.slide_preview import PreviewContext
 from course_harness.workspace_history import record_app_authored_state
 
 PP_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"

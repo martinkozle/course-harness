@@ -2,11 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from course_harness.template_profiles import (
+from course_harness.core.template_profiles import (
     BUILTIN_DEFAULT_ID,
     BUILTIN_DEFAULT_PROFILE_NAME,
     TemplateLayoutMapping,
     TemplateProfile,
+)
+from course_harness.template_profiles import (
     TemplateProfileRegistry,
     TemplateProfileSummary,
     delete_profile,

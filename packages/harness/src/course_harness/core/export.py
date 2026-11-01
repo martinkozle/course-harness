@@ -14,7 +14,8 @@ from pptx.oxml import parse_xml
 from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 
-from course_harness.presentation import (
+from course_harness.core.images import image_dimensions
+from course_harness.core.presentation import (
     BigStatementSlide,
     BulletsSlide,
     ClosingSlide,
@@ -28,9 +29,8 @@ from course_harness.presentation import (
     TwoColumnSlide,
     strip_list_marker,
 )
-from course_harness.resources import image_dimensions
-from course_harness.slide_fit import fit_placeholder_text
-from course_harness.template_slots import (
+from course_harness.core.slide_fit import fit_placeholder_text
+from course_harness.core.template_slots import (
     CONTENT_LIKE_TYPES,
     find_body_placeholder,
     find_column_placeholder_groups,
@@ -44,8 +44,8 @@ from course_harness.template_slots import (
 )
 
 if TYPE_CHECKING:
-    from course_harness.sources import SourceImage, SourceImageResolver
-    from course_harness.template_profiles import TemplateProfile
+    from course_harness.core.sources import SourceImage, SourceImageResolver
+    from course_harness.core.template_profiles import TemplateProfile
 
 DEFAULT_LAYOUT_MAPPING: dict[str, int] = {
     "title": 0,

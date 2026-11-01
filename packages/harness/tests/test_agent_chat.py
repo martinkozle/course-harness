@@ -24,7 +24,6 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 from starlette.responses import StreamingResponse
 
-from course_harness import canonical_mutation
 from course_harness import providers as providers_module
 from course_harness import workspace_history as history
 from course_harness.app import create_app
@@ -37,6 +36,8 @@ from course_harness.chat_history import (
     read_chat_transcript,
     save_chat_history,
 )
+from course_harness.core import canonical_mutation
+from course_harness.core.course_plan import read_course_plan, write_course_plan
 from course_harness.course_agent import (
     CourseAgentDeps,
     CourseAgentState,
@@ -46,7 +47,6 @@ from course_harness.course_agent import (
     apply_course_plan_command,
     build_provider_model,
 )
-from course_harness.course_plan import read_course_plan, write_course_plan
 from course_harness.providers import (
     ContextWindowUnknownError,
     ModelSuggestion,
@@ -140,7 +140,7 @@ def _plan_command(**changes: object) -> ReplaceCoursePlanCommand:
 
 
 def test_course_plan_revisions_cannot_silently_replace_lecture_identity(tmp_path: Path) -> None:
-    from course_harness.course_plan import write_course_plan
+    from course_harness.core.course_plan import write_course_plan
 
     workspace = tmp_path / "course"
     workspace.mkdir()
@@ -196,7 +196,7 @@ def test_course_plan_revisions_cannot_silently_replace_lecture_identity(tmp_path
 def test_course_plan_revision_keeps_lectures_sent_back_by_title_without_ids(
     tmp_path: Path,
 ) -> None:
-    from course_harness.course_plan import write_course_plan
+    from course_harness.core.course_plan import write_course_plan
 
     workspace = tmp_path / "course"
     workspace.mkdir()
@@ -2231,7 +2231,7 @@ async def test_agent_can_archive_and_restore_slides(tmp_path: Path) -> None:
     workspace.mkdir()
     provider_store = tmp_path / "user-data" / "provider"
 
-    from course_harness.course_plan import (
+    from course_harness.core.course_plan import (
         CoursePlanInput,
         LectureInput,
         create_course_plan,
@@ -2239,7 +2239,7 @@ async def test_agent_can_archive_and_restore_slides(tmp_path: Path) -> None:
         initialize_workspace_history,
         write_course_plan,
     )
-    from course_harness.presentation import (
+    from course_harness.core.presentation import (
         BulletsSlide,
         Presentation,
         TitleSlide,
@@ -2319,7 +2319,7 @@ async def test_agent_can_archive_and_restore_slides(tmp_path: Path) -> None:
     assert state_events, "archive should emit STATE_SNAPSHOT"
     assert "presentations" in state_events[0]["snapshot"]
 
-    from course_harness.presentation import read_presentation_for_lecture
+    from course_harness.core.presentation import read_presentation_for_lecture
 
     result = read_presentation_for_lecture(workspace, plan.lectures[0].id)
     assert result is not None
@@ -2339,7 +2339,7 @@ async def test_agent_can_delete_presentation_and_requires_approval_in_guided(
     workspace.mkdir()
     provider_store = tmp_path / "user-data" / "provider"
 
-    from course_harness.course_plan import (
+    from course_harness.core.course_plan import (
         CoursePlanInput,
         LectureInput,
         create_course_plan,
@@ -2347,7 +2347,7 @@ async def test_agent_can_delete_presentation_and_requires_approval_in_guided(
         initialize_workspace_history,
         write_course_plan,
     )
-    from course_harness.presentation import (
+    from course_harness.core.presentation import (
         Presentation,
         TitleSlide,
         write_presentation,
@@ -2461,7 +2461,7 @@ async def test_agent_can_delete_presentation_and_requires_approval_in_guided(
     ]
     assert approve_events[-1]["type"] == "RUN_FINISHED"
 
-    from course_harness.presentation import read_presentation_for_lecture
+    from course_harness.core.presentation import read_presentation_for_lecture
 
     result = read_presentation_for_lecture(workspace, plan.lectures[0].id)
     assert result is None, "Presentation should be deleted after approval"
@@ -2475,7 +2475,7 @@ async def test_presentation_approval_preview_contains_slide_outline(
     workspace.mkdir()
     provider_store = tmp_path / "user-data" / "provider"
 
-    from course_harness.course_plan import (
+    from course_harness.core.course_plan import (
         CoursePlanInput,
         LectureInput,
         create_course_plan,
@@ -2564,7 +2564,7 @@ async def test_presentation_state_snapshots_stream_on_canvas_updates(
     workspace.mkdir()
     provider_store = tmp_path / "user-data" / "provider"
 
-    from course_harness.course_plan import (
+    from course_harness.core.course_plan import (
         CoursePlanInput,
         LectureInput,
         create_course_plan,
@@ -2710,7 +2710,7 @@ async def test_presentation_state_snapshots_stream_on_canvas_updates(
     layouts = [s["layout"] for s in pres["slides"]]
     assert layouts == ["title", "bullets", "closing"]
 
-    from course_harness.presentation import read_presentation_for_lecture
+    from course_harness.core.presentation import read_presentation_for_lecture
 
     stored = read_presentation_for_lecture(workspace, lecture_id)
     assert stored is not None

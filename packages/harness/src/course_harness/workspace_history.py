@@ -21,14 +21,14 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from course_harness.canonical_mutation import (
+from course_harness.core.canonical_mutation import (
     CanonicalFile,
     apply_canonical_mutation,
     restore_canonical_mutation,
 )
-from course_harness.course_plan import CoursePlan, InvalidCoursePlan, read_course_plan
-from course_harness.presentation import InvalidPresentation, Presentation, read_presentation
-from course_harness.sources import InvalidSourcesIndex, SourcesIndex, read_sources_index
+from course_harness.core.course_plan import CoursePlan, InvalidCoursePlan, read_course_plan
+from course_harness.core.presentation import InvalidPresentation, Presentation, read_presentation
+from course_harness.core.sources import InvalidSourcesIndex, SourcesIndex, read_sources_index
 
 GIT_TIMEOUT_SECONDS = 5
 MAX_GIT_METADATA_ENTRIES = 10_000

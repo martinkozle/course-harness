@@ -5,9 +5,9 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict
 
 from course_harness import resources
+from course_harness.core.slide_preview import renderer_capability
 from course_harness.providers import RuntimeProviderStatus, runtime_provider_status
 from course_harness.runtime_paths import RuntimeLocations
-from course_harness.slide_preview import renderer_capability
 
 
 class ParserCapability(BaseModel):

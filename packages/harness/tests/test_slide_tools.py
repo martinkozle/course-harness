@@ -11,23 +11,14 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from course_harness import resources as res
-from course_harness.course_agent import (
-    CourseAgentDeps,
-    CourseAgentState,
-    ReplacePresentationCommand,
-    SlideCommand,
-    _build_course_agent,
-    apply_presentation_command,
-)
-from course_harness.course_plan import (
+from course_harness.core.course_plan import (
     CoursePlanInput,
     LectureInput,
     create_course_plan,
     create_course_plan_file,
     initialize_workspace_history,
 )
-from course_harness.library import register_and_snapshot
-from course_harness.presentation import (
+from course_harness.core.presentation import (
     BulletsSlide,
     ImageSlide,
     Presentation,
@@ -37,7 +28,17 @@ from course_harness.presentation import (
     read_presentation_for_lecture,
     write_presentation,
 )
-from course_harness.sources import admit_source, read_sources_index
+from course_harness.core.sources import read_sources_index
+from course_harness.course_agent import (
+    CourseAgentDeps,
+    CourseAgentState,
+    ReplacePresentationCommand,
+    SlideCommand,
+    _build_course_agent,
+    apply_presentation_command,
+)
+from course_harness.library import register_and_snapshot
+from course_harness.sources import admit_source
 from course_harness.workspace_history import record_app_authored_state
 
 TITLE_ID = "slide-000000000001"

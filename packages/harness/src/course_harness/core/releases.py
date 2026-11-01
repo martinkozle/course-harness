@@ -1,0 +1,434 @@
+"""Read and verify Course Releases from Git objects.
+
+A Release is an annotated ``course-release/<slug>`` tag whose message is the canonical JSON
+manifest and whose commit holds the canonical Course files. Everything here reads Git objects
+with ``git cat-file``, ``git ls-tree`` and ``git for-each-ref``: it works the same on a Course
+Workspace and on a bare mirror, never checks anything out, and never runs hooks.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import selectors
+import subprocess
+import time
+from contextlib import suppress
+from datetime import datetime
+from pathlib import Path
+from typing import Literal
+
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from course_harness.core.course_plan import CoursePlan
+from course_harness.core.presentation import Presentation
+from course_harness.core.release_validation import (
+    InvalidWaiver,
+    ReleaseValidationResult,
+    validate_release,
+)
+from course_harness.core.sources import Source, SourcesIndex
+from course_harness.core.template_profiles import BUILTIN_DEFAULT_ID, TemplateProfile
+
+GIT_TIMEOUT_SECONDS = 5
+MAX_GIT_OUTPUT_BYTES = 1_000_000
+MAX_MANIFEST_BYTES = 512_000
+MAX_ARTIFACT_BYTES = 64_000_000
+MAX_RELEASES = 10_000
+MAX_CANONICAL_BLOB_BYTES = 8_000_000
+SLUG_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\Z")
+OID_PATTERN = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+
+
+class ReleaseError(RuntimeError):
+    """A Course Release cannot be published or inspected safely."""
+
+
+class ReleaseSourcePin(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^source-[0-9a-f]{12}$")
+    resource_id: str = Field(pattern=r"^resource-[0-9a-f]{12}$")
+    source_version_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    label: str = Field(min_length=1, max_length=200)
+    representation: str | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
+class ReleaseTemplatePin(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^(?:tpl-[0-9a-f]{12}|_builtin-default)$")
+    version: int = Field(ge=1)
+    profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    template_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    template_storage_path: Literal["inputs/template.pptx"] | None = None
+    definition: TemplateProfile
+
+
+class ReleaseArtifact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^presentation-[0-9a-f]{12}$")
+    lecture_id: str = Field(pattern=r"^lecture-[0-9a-f]{12}$")
+    media_type: Literal[
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    ] = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    storage_path: str = Field(pattern=r"^artifacts/presentation-[0-9a-f]{12}\.pptx$", max_length=48)
+    size: int = Field(ge=0, le=MAX_ARTIFACT_BYTES)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class CourseRelease(BaseModel):
+    """The canonical, bounded manifest stored in an annotated Git tag."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    slug: str = Field(
+        min_length=1, max_length=64, pattern=r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
+    )
+    name: str = Field(min_length=1, max_length=200)
+    tag: str = Field(min_length=16, max_length=79, pattern=r"^course-release/[a-z0-9-]+$")
+    course_id: str = Field(pattern=r"^course-[0-9a-f]{12}$")
+    revision_id: str = Field(pattern=r"^revision-(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    commit_oid: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    published_at: str = Field(min_length=20, max_length=64)
+    included_lecture_ids: list[str] = Field(min_length=1, max_length=1_000)
+    planned_unpublished_lecture_ids: list[str] = Field(default_factory=list, max_length=1_000)
+    sources: list[ReleaseSourcePin] = Field(default_factory=list, max_length=2_000)
+    template_profile: ReleaseTemplatePin
+    validation: ReleaseValidationResult
+    artifacts: list[ReleaseArtifact] = Field(default_factory=list, max_length=1_000)
+
+
+def list_releases(repository: Path) -> list[CourseRelease]:
+    """List valid immutable Release manifests in a repository, newest tag first."""
+    result = run_git(
+        repository, "for-each-ref", "--format=%(refname:strip=2)", "refs/tags/course-release"
+    )
+    names = [line for line in result.decode("utf-8").splitlines() if line]
+    if len(names) > MAX_RELEASES:
+        raise ReleaseError("Course Workspace has too many Releases")
+    slugs = []
+    for name in names:
+        prefix = "course-release/"
+        slug = name.removeprefix(prefix)
+        if not name.startswith(prefix) or not SLUG_PATTERN.fullmatch(slug):
+            raise ReleaseError("Course Workspace contains an unsafe Release tag")
+        slugs.append(slug)
+    releases = [read_release(repository, slug) for slug in slugs]
+    return sorted(
+        [release for release in releases if release is not None],
+        key=lambda release: release.published_at,
+        reverse=True,
+    )
+
+
+def read_release(repository: Path, slug: str) -> CourseRelease | None:
+    """Read and verify one Release manifest from its annotated tag.
+
+    ``repository`` is a Course Workspace or a bare repository such as a mirror.
+    """
+    if not SLUG_PATTERN.fullmatch(slug):
+        raise ReleaseError("Release slug is invalid")
+    tag = f"course-release/{slug}"
+    if not tag_exists(repository, tag):
+        return None
+    raw = run_git(repository, "cat-file", "tag", f"refs/tags/{tag}")
+    try:
+        header, message = raw.split(b"\n\n", 1)
+        headers = dict(line.split(b" ", 1) for line in header.splitlines() if b" " in line)
+        revision = headers[b"object"].decode("ascii")
+        internal_tag = headers[b"tag"].decode("utf-8")
+        if headers.get(b"type") != b"commit" or not OID_PATTERN.fullmatch(revision):
+            raise ValueError
+        release = CourseRelease.model_validate_json(message)
+    except (KeyError, UnicodeError, ValidationError, ValueError) as error:
+        raise ReleaseError("Release tag does not contain a valid manifest") from error
+    if (
+        internal_tag != tag
+        or release.slug != slug
+        or release.tag != tag
+        or release.revision_id != f"revision-{revision}"
+        or release.commit_oid != revision
+    ):
+        raise ReleaseError("Release manifest identity does not match its annotated tag")
+    canonical = canonical_json(release.model_dump(mode="json"))
+    if len(canonical) > MAX_MANIFEST_BYTES or message != canonical:
+        raise ReleaseError("Release tag manifest is not exact canonical JSON")
+    verify_release_manifest(repository, release)
+    return release
+
+
+def verify_release_manifest(repository: Path, release: CourseRelease) -> None:
+    """Check a manifest against the canonical Course files of its tagged Revision."""
+    try:
+        datetime.fromisoformat(release.published_at)
+    except ValueError as error:
+        raise ReleaseError("Release publication time is invalid") from error
+    selection = release.validation.selection
+    if (
+        release.tag != f"course-release/{release.slug}"
+        or release.revision_id != f"revision-{release.commit_oid}"
+        or release.included_lecture_ids != selection.lecture_ids
+    ):
+        raise ReleaseError("Release manifest contains inconsistent identities")
+    artifact_ids = [artifact.id for artifact in release.artifacts]
+    if artifact_ids != selection.artifact_ids or len(artifact_ids) != len(set(artifact_ids)):
+        raise ReleaseError("Release manifest Artifact selection is inconsistent")
+    if any(
+        artifact.storage_path != f"artifacts/{artifact.id}.pptx"
+        or artifact.lecture_id not in release.included_lecture_ids
+        for artifact in release.artifacts
+    ):
+        raise ReleaseError("Release manifest contains an invalid Artifact path or Lecture")
+
+    plan = tagged_plan(repository, release.commit_oid)
+    if plan.id != release.course_id:
+        raise ReleaseError("Release manifest does not match its tagged Course")
+    planned_ids = [lecture.id for lecture in plan.lectures]
+    if any(lecture_id not in planned_ids for lecture_id in release.included_lecture_ids):
+        raise ReleaseError("Release manifest includes an unknown Lecture")
+    expected_unpublished = [
+        lecture_id for lecture_id in planned_ids if lecture_id not in release.included_lecture_ids
+    ]
+    if release.planned_unpublished_lecture_ids != expected_unpublished:
+        raise ReleaseError("Release manifest planned coverage is inconsistent")
+
+    sources = tagged_sources(repository, release.commit_oid)
+    if release.sources != [source_pin(source) for source in sources.sources]:
+        raise ReleaseError("Release manifest Source Versions do not match its tagged Revision")
+    source_ids = [source.id for source in release.sources]
+    if len(source_ids) != len(set(source_ids)):
+        raise ReleaseError("Release manifest contains duplicate Source identities")
+    template = release.template_profile
+    if template.id != template.definition.id or template.version != template.definition.version:
+        raise ReleaseError("Release manifest Template Profile identity is inconsistent")
+    if template.profile_sha256 != sha256_hex(
+        canonical_json(template.definition.model_dump(mode="json"))
+    ):
+        raise ReleaseError("Release manifest Template Profile hash is invalid")
+    expected_profile_id = plan.template_profile_id or BUILTIN_DEFAULT_ID
+    expected_profile_version = plan.template_profile_version or 1
+    if (template.id, template.version) != (expected_profile_id, expected_profile_version):
+        raise ReleaseError("Release manifest Template Profile does not match its tagged Course")
+    if template.id == BUILTIN_DEFAULT_ID:
+        if template.template_sha256 is not None or template.template_storage_path is not None:
+            raise ReleaseError("Built-in Template Profile must not name stored template bytes")
+    elif (
+        template.template_sha256 is None or template.template_storage_path != "inputs/template.pptx"
+    ):
+        raise ReleaseError("Custom Template Profile must pin stored template bytes")
+
+    presentations = [
+        tagged_presentation(repository, release.commit_oid, artifact_id)
+        for artifact_id in selection.artifact_ids
+    ]
+    if any(
+        presentation.lecture_id != artifact.lecture_id
+        for presentation, artifact in zip(presentations, release.artifacts, strict=True)
+    ):
+        raise ReleaseError("Release manifest Artifact metadata does not match its tagged Revision")
+    try:
+        expected_validation = validate_release(
+            plan=plan,
+            presentations=presentations,
+            sources=sources,
+            selection=selection,
+            waivers=release.validation.waivers,
+        )
+    except InvalidWaiver as error:
+        raise ReleaseError("Release manifest contains an invalid Waiver") from error
+    if expected_validation != release.validation or not expected_validation.can_publish:
+        raise ReleaseError("Release validation does not match its tagged Revision")
+
+
+def source_pin(source: Source) -> ReleaseSourcePin:
+    return ReleaseSourcePin(
+        id=source.id,
+        resource_id=source.resource_id,
+        source_version_id=source.source_version_id,
+        label=source.label,
+        representation=source.representation,
+    )
+
+
+def canonical_json(payload: object) -> bytes:
+    return (
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+        + b"\n"
+    )
+
+
+def sha256_hex(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def tagged_plan(repository: Path, commit_oid: str) -> CoursePlan:
+    try:
+        payload = yaml.safe_load(
+            read_commit_blob(repository, commit_oid, "course.yaml").decode("utf-8")
+        )
+        return CoursePlan.model_validate(payload)
+    except (UnicodeError, yaml.YAMLError, ValidationError, ValueError) as error:
+        raise ReleaseError("Tagged Course Plan is invalid") from error
+
+
+def tagged_sources(repository: Path, commit_oid: str) -> SourcesIndex:
+    names = run_git(repository, "ls-tree", "--name-only", commit_oid, "--", "sources.yaml")
+    if names == b"":
+        return SourcesIndex()
+    if names != b"sources.yaml\n":
+        raise ReleaseError("Tagged Sources index cannot be identified safely")
+    try:
+        payload = yaml.safe_load(
+            read_commit_blob(repository, commit_oid, "sources.yaml").decode("utf-8")
+        )
+        return SourcesIndex.model_validate(payload)
+    except (UnicodeError, yaml.YAMLError, ValidationError, ValueError) as error:
+        raise ReleaseError("Tagged Sources index is invalid") from error
+
+
+def tagged_presentation(repository: Path, commit_oid: str, presentation_id: str) -> Presentation:
+    if re.fullmatch(r"presentation-[0-9a-f]{12}", presentation_id) is None:
+        raise ReleaseError("Release Presentation identity is invalid")
+    path = f"presentations/{presentation_id}.yaml"
+    try:
+        payload = yaml.safe_load(read_commit_blob(repository, commit_oid, path).decode("utf-8"))
+        presentation = Presentation.model_validate(payload)
+    except (UnicodeError, yaml.YAMLError, ValidationError, ValueError) as error:
+        raise ReleaseError("Tagged Presentation is invalid") from error
+    if presentation.id != presentation_id:
+        raise ReleaseError("Tagged Presentation identity is inconsistent")
+    return presentation
+
+
+def read_commit_blob(repository: Path, commit_oid: str, path: str) -> bytes:
+    if not OID_PATTERN.fullmatch(commit_oid):
+        raise ReleaseError("Course Revision identity is invalid")
+    return run_git(
+        repository,
+        "cat-file",
+        "blob",
+        f"{commit_oid}:{path}",
+        max_output_bytes=MAX_CANONICAL_BLOB_BYTES,
+    )
+
+
+def git_environment() -> dict[str, str]:
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update(
+        {
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
+    return environment
+
+
+def run_git(
+    repository: Path,
+    *arguments: str,
+    input_data: bytes | None = None,
+    max_output_bytes: int = MAX_GIT_OUTPUT_BYTES,
+) -> bytes:
+    command = [
+        "git",
+        "--literal-pathspecs",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.pager=cat",
+        "-c",
+        "tag.gpgSign=false",
+        "-c",
+        "user.name=Course Harness",
+        "-c",
+        "user.email=course-harness@localhost",
+        *arguments,
+    ]
+    process: subprocess.Popen[bytes] | None = None
+    selector = selectors.DefaultSelector()
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=repository,
+            stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=git_environment(),
+        )
+        if input_data is not None and process.stdin is not None:
+            process.stdin.write(input_data)
+            process.stdin.close()
+        if process.stdout is None:
+            raise ReleaseError("Course Release Git operation failed")
+        os.set_blocking(process.stdout.fileno(), False)
+        selector.register(process.stdout, selectors.EVENT_READ)
+        deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
+        output = bytearray()
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ReleaseError("Course Release Git operation timed out")
+            events = selector.select(remaining)
+            if not events:
+                raise ReleaseError("Course Release Git operation timed out")
+            for key, _mask in events:
+                chunk = os.read(key.fd, min(65_536, max_output_bytes + 1 - len(output)))
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                output.extend(chunk)
+                if len(output) > max_output_bytes:
+                    raise ReleaseError("Course Release Git output is too large")
+        returncode = process.wait(timeout=max(0.001, deadline - time.monotonic()))
+        if returncode != 0:
+            raise ReleaseError("Course Release Git operation failed")
+        return bytes(output)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ReleaseError("Course Release Git operation failed") from error
+    finally:
+        selector.close()
+        if process is not None and process.poll() is None:
+            process.kill()
+            with suppress(OSError, subprocess.TimeoutExpired):
+                process.wait(timeout=1)
+
+
+def tag_exists(repository: Path, tag: str) -> bool:
+    command = [
+        "git",
+        "--literal-pathspecs",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "show-ref",
+        "--verify",
+        "--quiet",
+        f"refs/tags/{tag}",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=repository,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=GIT_TIMEOUT_SECONDS,
+            env=git_environment(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ReleaseError("Course Release Git operation failed") from error
+    if result.returncode not in {0, 1}:
+        raise ReleaseError("Course Release Git operation failed")
+    return result.returncode == 0

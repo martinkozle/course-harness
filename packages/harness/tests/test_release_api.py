@@ -4,16 +4,21 @@ import httpx2
 import pytest
 
 from course_harness.app import create_app
-from course_harness.canonical_mutation import capture_canonical_files
-from course_harness.course_plan import (
+from course_harness.core.canonical_mutation import capture_canonical_files
+from course_harness.core.course_plan import (
     CoursePlan,
     Lecture,
     initialize_workspace_history,
     read_course_plan,
     write_course_plan,
 )
-from course_harness.presentation import Presentation, SlideCitation, TitleSlide, write_presentation
-from course_harness.sources import Source, SourcesIndex, write_sources_index
+from course_harness.core.presentation import (
+    Presentation,
+    SlideCitation,
+    TitleSlide,
+    write_presentation,
+)
+from course_harness.core.sources import Source, SourcesIndex, write_sources_index
 from course_harness.workspace_history import (
     RevisionCreateRequest,
     create_revision,

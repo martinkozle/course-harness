@@ -13,8 +13,9 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from course_harness.app import create_app
 from course_harness.chat_history import is_course_state_part
-from course_harness.course_plan import read_course_plan
-from course_harness.presentation import read_presentation_for_lecture
+from course_harness.core.course_plan import read_course_plan
+from course_harness.core.presentation import read_presentation_for_lecture
+from course_harness.core.sources import read_sources_index
 from course_harness.providers import (
     ContextWindowUnknownError,
     ModelSuggestion,
@@ -22,7 +23,6 @@ from course_harness.providers import (
     ProviderCapabilities,
     ProviderConfigurationRequest,
 )
-from course_harness.sources import read_sources_index
 
 # A model whose server, like some vLLM deployments, does not report its context window.
 UNREPORTED_CONTEXT_MODEL = "vllm/unreported-context"

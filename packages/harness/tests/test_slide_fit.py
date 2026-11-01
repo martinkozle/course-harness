@@ -5,15 +5,15 @@ from io import BytesIO
 from pptx import Presentation as PPTXPresentation
 from pptx.oxml.ns import qn
 
-from course_harness.export import export_presentation
-from course_harness.presentation import (
+from course_harness.core.export import export_presentation
+from course_harness.core.presentation import (
     BigStatementSlide,
     BulletsSlide,
     ClosingSlide,
     Presentation,
 )
-from course_harness.slide_fit import TextSlot, fit_estimate, fitted_font_size, min_font_size
-from course_harness.template_slots import (
+from course_harness.core.slide_fit import TextSlot, fit_estimate, fitted_font_size, min_font_size
+from course_harness.core.template_slots import (
     find_body_placeholder,
     find_subtitle_or_body_placeholder,
     find_title_placeholder,

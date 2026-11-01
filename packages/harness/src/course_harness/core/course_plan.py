@@ -7,7 +7,7 @@ from uuid import uuid4
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from course_harness.canonical_mutation import CanonicalFile, apply_canonical_mutation
+from course_harness.core.canonical_mutation import CanonicalFile, apply_canonical_mutation
 
 Goal = Annotated[str, Field(min_length=1, max_length=500)]
 Outcome = Annotated[str, Field(min_length=1, max_length=500)]

@@ -5,9 +5,9 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from course_harness.course_plan import CoursePlan
-from course_harness.presentation import Presentation
-from course_harness.sources import SourcesIndex
+from course_harness.core.course_plan import CoursePlan
+from course_harness.core.presentation import Presentation
+from course_harness.core.sources import SourcesIndex
 
 FindingSeverity = Literal["error", "warning"]
 FindingScope = Literal["release", "lecture", "artifact", "slide", "content_block", "citation"]

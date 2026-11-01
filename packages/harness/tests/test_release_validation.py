@@ -1,8 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-from course_harness.course_plan import CoursePlan, Lecture
-from course_harness.presentation import (
+from course_harness.core.course_plan import CoursePlan, Lecture
+from course_harness.core.presentation import (
     BulletsSlide,
     ClosingSlide,
     CodeSlide,
@@ -11,13 +11,13 @@ from course_harness.presentation import (
     QuoteSlide,
     SlideCitation,
 )
-from course_harness.release_validation import (
+from course_harness.core.release_validation import (
     InvalidWaiver,
     ReleaseSelection,
     Waiver,
     validate_release,
 )
-from course_harness.sources import Source, SourcesIndex
+from course_harness.core.sources import Source, SourcesIndex
 
 
 def test_missing_selected_lecture_is_a_blocking_structural_finding() -> None:

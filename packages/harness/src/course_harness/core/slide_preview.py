@@ -15,11 +15,11 @@ from uuid import uuid4
 from pptx import Presentation as PPTXPresentation
 from pydantic import BaseModel, ConfigDict
 
-from course_harness.export import export_presentation
-from course_harness.presentation import ImageSlide, Presentation, Slide
-from course_harness.sources import SourceImageResolver
-from course_harness.template_inspect import infer_slot_mappings, inspect_template
-from course_harness.template_profiles import TemplateProfile
+from course_harness.core.export import export_presentation
+from course_harness.core.presentation import ImageSlide, Presentation, Slide
+from course_harness.core.sources import SourceImageResolver
+from course_harness.core.template_inspect import infer_slot_mappings, inspect_template
+from course_harness.core.template_profiles import TemplateProfile
 
 
 @dataclass(frozen=True)

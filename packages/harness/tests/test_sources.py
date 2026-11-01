@@ -854,12 +854,12 @@ async def test_agent_admit_source_wraps_malicious_label_as_untrusted_data(tmp_pa
         observed_admission.append(str(returned[-1].content))
         yield "The source was admitted as evidence."
 
+    from course_harness.core.course_plan import CoursePlanInput, LectureInput, create_course_plan
     from course_harness.course_agent import (
         CourseAgentDeps,
         CourseAgentState,
         _build_course_agent,
     )
-    from course_harness.course_plan import CoursePlanInput, LectureInput, create_course_plan
 
     plan = create_course_plan(
         CoursePlanInput(title="Course", audience="Authors", lectures=[LectureInput(title="One")])

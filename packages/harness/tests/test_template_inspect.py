@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pptx import Presentation as PPTXPresentation
 
-from course_harness.template_inspect import _name_score, inspect_template, map_semantic_layouts
+from course_harness.core.template_inspect import _name_score, inspect_template, map_semantic_layouts
 
 PUBLIC_TEMPLATE_FIXTURE = Path(__file__).parent / "fixtures" / "templates" / "python-pptx-test.pptx"
 

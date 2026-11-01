@@ -13,6 +13,7 @@ from uuid import uuid4
 import httpx2
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from course_harness.core.images import image_dimensions
 from course_harness.docling_parser import HTML_MEDIA_TYPES, OFFICE_MEDIA_TYPES, PDF_MEDIA_TYPE
 from course_harness.document_processors import (
     DocumentProcessor,
@@ -486,20 +487,6 @@ def _process_document(
     if processor.hosted and data_dir is not None:
         representations.save_durable(data_dir, content_hash, derived_dir)
     return ResourceState(resource_id="", status="ready", processing=record)
-
-
-def image_dimensions(content: bytes) -> tuple[int, int]:
-    """Return an image's pixel size, rejecting content that is not a readable image."""
-    from io import BytesIO  # noqa: PLC0415
-
-    from PIL import Image, UnidentifiedImageError  # noqa: PLC0415
-
-    try:
-        with Image.open(BytesIO(content)) as image:
-            image.verify()
-            return image.size
-    except (UnidentifiedImageError, OSError, SyntaxError) as error:
-        raise ValueError("The image could not be read.") from error
 
 
 def describe_image(media_type: str, content: bytes) -> str:

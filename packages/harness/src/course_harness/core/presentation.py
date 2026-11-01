@@ -14,7 +14,7 @@ from pydantic import (
     model_validator,
 )
 
-from course_harness.canonical_mutation import CanonicalFile, apply_canonical_mutation
+from course_harness.core.canonical_mutation import CanonicalFile, apply_canonical_mutation
 
 # A leading bullet or list number the Course Agent typed.  Templates add their own
 # bullets, so a typed one would show twice.  The marker must be followed by space so

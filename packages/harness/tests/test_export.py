@@ -11,31 +11,28 @@ from pptx.oxml.ns import nsdecls, qn
 from pptx.util import Emu, Inches
 
 from course_harness.app import create_app
-from course_harness.course_plan import (
+from course_harness.core.course_plan import (
     CoursePlanInput,
     LectureInput,
     create_course_plan,
     create_course_plan_file,
     initialize_workspace_history,
 )
-from course_harness.export import export_presentation, validate_export_mapping
-from course_harness.presentation import (
+from course_harness.core.export import export_presentation, validate_export_mapping
+from course_harness.core.presentation import (
     BulletsSlide,
     CodeSlide,
     Presentation,
     SlideCitation,
     TwoColumnSlide,
 )
-from course_harness.template_profiles import (
-    TemplateLayoutMapping,
-    TemplateProfile,
-    _generate_calibration_deck,
-)
+from course_harness.core.template_profiles import TemplateLayoutMapping, TemplateProfile
+from course_harness.template_profiles import _generate_calibration_deck
 
 
 def _build_presentation(workspace: Path, lecture_id: str, slides: list[dict]):
-    from course_harness.presentation import SLIDE_CLASSES_BY_LAYOUT, write_presentation
-    from course_harness.presentation import Presentation as PresModel
+    from course_harness.core.presentation import SLIDE_CLASSES_BY_LAYOUT, write_presentation
+    from course_harness.core.presentation import Presentation as PresModel
 
     hydrated = []
     for s in slides:
@@ -601,12 +598,8 @@ async def test_export_citations_and_notes(tmp_path: Path) -> None:
 
 @pytest.mark.anyio
 async def test_export_uses_course_pinned_profile_version(tmp_path: Path) -> None:
-    from course_harness.template_profiles import (
-        TemplateLayoutMapping,
-        TemplateProfile,
-        profile_dir,
-        write_profile_version,
-    )
+    from course_harness.core.template_profiles import TemplateLayoutMapping, TemplateProfile
+    from course_harness.template_profiles import profile_dir, write_profile_version
 
     workspace = tmp_path / "export-pinned"
     workspace.mkdir()

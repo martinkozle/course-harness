@@ -11,6 +11,7 @@ from pptx import Presentation as PPTXPresentation
 from course_harness import hosted_processors
 from course_harness import sources as sources_module
 from course_harness.app import create_app
+from course_harness.core.sources import Source, SourcesIndex, serialize_sources_index
 from course_harness.docling_parser import PDF_MEDIA_TYPE, PPTX_MEDIA_TYPE, PageContent
 from course_harness.document_processing_settings import DocumentProcessingStore
 from course_harness.document_processors import (
@@ -267,16 +268,14 @@ async def test_a_pinned_representation_is_kept_when_reprocessing(tmp_path: Path)
 
 
 def test_sources_without_a_recorded_representation_keep_their_yaml_shape() -> None:
-    source = sources_module.Source(
+    source = Source(
         id="source-000000000001",
         resource_id="resource-000000000001",
         source_version_id="a" * 64,
         label="Notes",
         admitted_at="2026-10-11T00:00:00+00:00",
     )
-    serialized = sources_module.serialize_sources_index(
-        sources_module.SourcesIndex(sources=[source])
-    )
+    serialized = serialize_sources_index(SourcesIndex(sources=[source]))
     assert b"representation" not in serialized
 
 

@@ -24,11 +24,6 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import Model
 
-from course_harness.canonical_mutation import (
-    CanonicalFile,
-    apply_canonical_mutation,
-    capture_canonical_file,
-)
 from course_harness.chat_history import (
     COURSE_STATE_HEADING,
     is_course_state_part,
@@ -37,7 +32,12 @@ from course_harness.chat_history import (
 from course_harness.chat_history import (
     list_conversations as stored_conversations,
 )
-from course_harness.course_plan import (
+from course_harness.core.canonical_mutation import (
+    CanonicalFile,
+    apply_canonical_mutation,
+    capture_canonical_file,
+)
+from course_harness.core.course_plan import (
     CoursePlan,
     CoursePlanInput,
     Lecture,
@@ -49,7 +49,7 @@ from course_harness.course_plan import (
     serialize_course_plan,
     write_course_plan,
 )
-from course_harness.presentation import (
+from course_harness.core.presentation import (
     SLIDE_CLASSES_BY_LAYOUT,
     Presentation,
     Slide,
@@ -61,21 +61,17 @@ from course_harness.presentation import (
     slide_by_id,
     write_presentation,
 )
-from course_harness.resources import Candidate, ResourceState
-from course_harness.slide_lint import CONTENT_LIMITS_GUIDE, format_findings, lint_slides
-from course_harness.sources import (
+from course_harness.core.sources import (
     Source,
     SourceImageResolver,
     SourcesIndex,
-    pinned_image_resolver,
     serialize_sources_index,
 )
-from course_harness.template_profiles import (
-    BUILTIN_DEFAULT_ID,
-    TemplateProfile,
-    profile_dir,
-    resolve_profile,
-)
+from course_harness.core.template_profiles import BUILTIN_DEFAULT_ID, TemplateProfile
+from course_harness.resources import Candidate, ResourceState
+from course_harness.slide_lint import CONTENT_LIMITS_GUIDE, format_findings, lint_slides
+from course_harness.sources import pinned_image_resolver
+from course_harness.template_profiles import profile_dir, resolve_profile
 from course_harness.workspace_history import (
     MAX_REVISION_SUMMARY_CHARACTERS,
     InvalidAgentMutationError,
@@ -971,7 +967,7 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         """List all Course Sources currently admitted for this Workspace."""
         if not ctx.deps.course_state.sources:
             return ToolReturn(return_value="No Sources have been admitted for this Course yet.")
-        from course_harness.sources import SourcesIndex  # noqa: PLC0415
+        from course_harness.core.sources import SourcesIndex  # noqa: PLC0415
 
         index = SourcesIndex(sources=ctx.deps.course_state.sources)
         return ToolReturn(
@@ -1573,7 +1569,7 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
     ) -> ToolReturn:
         """Reorder the non-archived slides in a Presentation. Provide every non-archived
         Slide ID in the desired order. Archived slides are preserved at the end."""
-        from course_harness.presentation import reorder_slides as reorder  # noqa: PLC0415
+        from course_harness.core.presentation import reorder_slides as reorder  # noqa: PLC0415
 
         pres = read_presentation_for_lecture(ctx.deps.workspace, lecture_id)
         if pres is None:

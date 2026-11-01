@@ -16,9 +16,9 @@ from typing import TYPE_CHECKING
 
 from pptx import Presentation as PPTXPresentation
 
-from course_harness.export import export_presentation
-from course_harness.presentation import Presentation, Slide, strip_list_marker
-from course_harness.slide_fit import (
+from course_harness.core.export import export_presentation
+from course_harness.core.presentation import Presentation, Slide, strip_list_marker
+from course_harness.core.slide_fit import (
     BULLET_INDENT_PT,
     fit_estimate,
     min_font_size,
@@ -27,7 +27,7 @@ from course_harness.slide_fit import (
 )
 
 if TYPE_CHECKING:
-    from course_harness.template_profiles import TemplateProfile
+    from course_harness.core.template_profiles import TemplateProfile
 
 MAX_BULLETS = 6
 MAX_COLUMN_ITEMS = 6  # including the heading item

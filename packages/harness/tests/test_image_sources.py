@@ -22,6 +22,15 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 from course_harness import resources as res
 from course_harness.app import create_app
 from course_harness.chat_history import read_chat_history, save_chat_history
+from course_harness.core.course_plan import (
+    CoursePlanInput,
+    LectureInput,
+    create_course_plan,
+    create_course_plan_file,
+    initialize_workspace_history,
+)
+from course_harness.core.export import export_presentation
+from course_harness.core.presentation import ImageSlide, Presentation
 from course_harness.course_agent import (
     CourseAgentDeps,
     CourseAgentState,
@@ -30,16 +39,7 @@ from course_harness.course_agent import (
     _build_course_agent,
     apply_presentation_command,
 )
-from course_harness.course_plan import (
-    CoursePlanInput,
-    LectureInput,
-    create_course_plan,
-    create_course_plan_file,
-    initialize_workspace_history,
-)
-from course_harness.export import export_presentation
 from course_harness.library import register_and_snapshot
-from course_harness.presentation import ImageSlide, Presentation
 from course_harness.sources import admit_source, source_image_resolver
 from course_harness.workspace_history import record_app_authored_state
 

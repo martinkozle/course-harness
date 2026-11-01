@@ -4,7 +4,7 @@ import shutil
 
 import pytest
 
-from course_harness.presentation import (
+from course_harness.core.presentation import (
     BulletsSlide,
     CodeSlide,
     TitleSlide,

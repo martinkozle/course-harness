@@ -7,28 +7,33 @@ import pytest
 from pptx import Presentation as PPTXPresentation
 from pydantic import ValidationError
 
-from course_harness.canonical_mutation import capture_canonical_files
-from course_harness.course_plan import CoursePlan, Lecture, write_course_plan
-from course_harness.presentation import Presentation, SlideCitation, TitleSlide, write_presentation
+from course_harness.core import releases
+from course_harness.core.canonical_mutation import capture_canonical_files
+from course_harness.core.course_plan import CoursePlan, Lecture, write_course_plan
+from course_harness.core.presentation import (
+    Presentation,
+    SlideCitation,
+    TitleSlide,
+    write_presentation,
+)
+from course_harness.core.release_validation import ReleaseSelection, Waiver
+from course_harness.core.releases import ReleaseError
+from course_harness.core.sources import Source, SourcesIndex, write_sources_index
+from course_harness.core.template_profiles import (
+    BUILTIN_DEFAULT_ID,
+    TemplateLayoutMapping,
+    TemplateProfile,
+)
 from course_harness.release_service import (
     PublishReleaseRequest,
     ReleaseConflict,
-    ReleaseError,
     list_releases,
     publish_release,
     read_release,
     read_release_artifact,
     regenerate_release_artifact,
 )
-from course_harness.release_validation import ReleaseSelection, Waiver
-from course_harness.sources import Source, SourcesIndex, write_sources_index
-from course_harness.template_profiles import (
-    BUILTIN_DEFAULT_ID,
-    TemplateLayoutMapping,
-    TemplateProfile,
-    profile_dir,
-    write_profile_version,
-)
+from course_harness.template_profiles import profile_dir, write_profile_version
 from course_harness.workspace_history import (
     RevisionCreateRequest,
     create_revision,
@@ -216,6 +221,39 @@ def test_publish_release_exports_artifacts_and_records_a_bounded_annotated_tag(
         )
         == stored
     )
+
+
+def test_a_bare_mirror_reads_and_verifies_releases_without_a_checkout(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    _clean_course(workspace)
+    release = publish_release(
+        workspace=workspace,
+        release_data_root=tmp_path / "releases",
+        templates_data_root=tmp_path / "templates",
+        evidence_line_counts={},
+        request=PublishReleaseRequest(
+            slug="fall-2026",
+            name="Fall 2026",
+            selection=ReleaseSelection(lecture_ids=[LECTURE_ID], artifact_ids=[PRESENTATION_ID]),
+        ),
+    )
+    mirror = tmp_path / "mirror.git"
+    subprocess.run(
+        ["git", "clone", "--quiet", "--mirror", str(workspace), str(mirror)],
+        check=True,
+        capture_output=True,
+    )
+
+    assert releases.list_releases(mirror) == [release]
+    assert releases.read_release(mirror, "fall-2026") == release
+    assert releases.read_release(mirror, "spring-2027") is None
+    assert releases.tagged_plan(mirror, release.commit_oid).id == "course-aaaaaaaaaaaa"
+    presentation = releases.tagged_presentation(mirror, release.commit_oid, PRESENTATION_ID)
+    assert presentation.lecture_id == LECTURE_ID
+
+    _replace_release_tag(mirror, "fall-2026", release.commit_oid, b"{}\n")
+    with pytest.raises(ReleaseError):
+        releases.read_release(mirror, "fall-2026")
 
 
 def test_publish_release_requires_resolvable_coordinate_evidence(tmp_path: Path) -> None:

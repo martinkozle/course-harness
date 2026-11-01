@@ -7,10 +7,10 @@ from typing import Literal
 import httpx2
 import pytest
 
-import course_harness.canonical_mutation as canonical_mutation
+import course_harness.core.canonical_mutation as canonical_mutation
 import course_harness.workspace_history as history
 from course_harness.app import create_app
-from course_harness.course_plan import (
+from course_harness.core.course_plan import (
     CoursePlanInput,
     LectureInput,
     create_course_plan,
@@ -18,7 +18,12 @@ from course_harness.course_plan import (
     serialize_course_plan,
     write_course_plan,
 )
-from course_harness.presentation import Presentation, SlideCitation, TitleSlide, write_presentation
+from course_harness.core.presentation import (
+    Presentation,
+    SlideCitation,
+    TitleSlide,
+    write_presentation,
+)
 from course_harness.workspace_history import (
     DriftAcceptRequest,
     InvalidAgentMutationError,

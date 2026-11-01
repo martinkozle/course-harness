@@ -8,101 +8,28 @@ from uuid import uuid4
 
 import yaml
 from pptx import Presentation as PPTXPresentation
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
-from course_harness.presentation import VALID_LAYOUTS
-from course_harness.runtime_paths import RuntimePaths
-from course_harness.template_slots import (
+from course_harness.core.presentation import VALID_LAYOUTS
+from course_harness.core.template_profiles import (
+    BUILTIN_DEFAULT_ID,
+    BUILTIN_DEFAULT_PROFILE_NAME,
+    SEMANTIC_SLOTS,
+    TemplateLayoutMapping,
+    TemplateProfile,
+    builtin_default_profile,
+)
+from course_harness.core.template_slots import (
     find_body_placeholder,
     find_column_placeholder_groups,
     find_content_placeholders,
     find_subtitle_or_body_placeholder,
     find_title_placeholder,
 )
+from course_harness.runtime_paths import RuntimePaths
 
-BUILTIN_DEFAULT_ID = "_builtin-default"
 TEMPLATE_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 TEMPLATE_POTX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.template"
-
-DEFAULT_LAYOUT_MAPPING: dict[str, int] = {
-    "title": 0,
-    "section": 2,
-    "bullets": 1,
-    "two_column": 3,
-    "big_statement": 5,
-    "closing": 2,
-    "code": 1,
-    "image": 8,
-    "quote": 1,
-}
-
-BUILTIN_DEFAULT_PROFILE_NAME = "Built-in default"
-BUILTIN_LAYOUT_NAMES: dict[int, str] = {
-    0: "Title Slide",
-    1: "Title and Content",
-    2: "Section Header",
-    3: "Two Content",
-    4: "Comparison",
-    5: "Blank",
-    6: "Content with Caption",
-    7: "Vertical Title and Text",
-    8: "Picture with Caption",
-    9: "Title and Vertical Text",
-    10: "Vertical Title and Vertical Text",
-}
-
-SEMANTIC_SLOTS: dict[str, tuple[str, ...]] = {
-    "title": ("title", "subtitle"),
-    "section": ("title",),
-    "bullets": ("title", "body"),
-    "two_column": ("title", "left", "right"),
-    "big_statement": ("statement",),
-    "closing": ("title", "body"),
-    "code": ("title", "body"),
-    "image": ("title", "image"),
-    "quote": ("title", "body"),
-}
-
-
-class TemplateLayoutMapping(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    semantic_layout: str = Field(
-        pattern=(
-            r"^(title|section|bullets|two_column"
-            r"|big_statement|closing|code|image|quote)$"
-        )
-    )
-    template_layout_index: int = Field(ge=0)
-    confidence: float = Field(ge=0.0, le=1.0)
-    rationale: str = Field(min_length=1)
-    slot_mappings: dict[str, int] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def validate_slot_mappings(self) -> TemplateLayoutMapping:
-        allowed = SEMANTIC_SLOTS[self.semantic_layout]
-        unknown = self.slot_mappings.keys() - set(allowed)
-        if unknown:
-            raise ValueError(
-                f"Unknown slots for {self.semantic_layout}: {', '.join(sorted(unknown))}"
-            )
-        if any(index < 0 for index in self.slot_mappings.values()):
-            raise ValueError("Template placeholder indices cannot be negative")
-        return self
-
-
-class TemplateProfile(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    schema_version: Literal[1] = 1
-    id: str = Field(pattern=r"^(tpl-[0-9a-f]{12}|_builtin-default)$")
-    name: str = Field(min_length=1, max_length=200)
-    version: int = Field(ge=1)
-    template_filename: str = Field(min_length=1)
-    slide_width: int
-    slide_height: int
-    slide_count: int
-    layouts: list[TemplateLayoutMapping] = Field(min_length=1)
 
 
 class TemplateProfileSummary(BaseModel):
@@ -203,7 +130,7 @@ def write_registry(data_dir: Path, registry: TemplateProfileRegistry) -> None:
 
 def read_profile(data_dir: Path, profile_id: str) -> TemplateProfile | None:
     if profile_id == BUILTIN_DEFAULT_ID:
-        return _builtin_default_profile()
+        return builtin_default_profile()
     path = _profile_yaml_path(profile_dir(data_dir, profile_id))
     if not path.exists():
         return None
@@ -213,7 +140,7 @@ def read_profile(data_dir: Path, profile_id: str) -> TemplateProfile | None:
 
 def read_profile_version(data_dir: Path, profile_id: str, version: int) -> TemplateProfile | None:
     if profile_id == BUILTIN_DEFAULT_ID:
-        profile = _builtin_default_profile()
+        profile = builtin_default_profile()
         return profile if version == profile.version else None
     path = _profile_version_yaml_path(profile_dir(data_dir, profile_id), version)
     if not path.exists():
@@ -270,33 +197,11 @@ def validate_template_content(content: bytes) -> object:
     return PPTXPresentation(io.BytesIO(content))
 
 
-def _builtin_default_profile() -> TemplateProfile:
-    return TemplateProfile(
-        id=BUILTIN_DEFAULT_ID,
-        name=BUILTIN_DEFAULT_PROFILE_NAME,
-        version=1,
-        template_filename="python-pptx built-in Office Theme",
-        slide_width=12192000,
-        slide_height=6858000,
-        slide_count=11,
-        layouts=[
-            TemplateLayoutMapping(
-                semantic_layout=layout,
-                template_layout_index=idx,
-                confidence=1.0,
-                rationale=f"Built-in layout '{BUILTIN_LAYOUT_NAMES.get(idx, f'Index {idx}')}' "
-                f"mapped to {layout}",
-            )
-            for layout, idx in DEFAULT_LAYOUT_MAPPING.items()
-        ],
-    )
-
-
 def resolve_profile(
     data_dir: Path, profile_id: str | None, version: int | None = None
 ) -> TemplateProfile:
     if profile_id is None or profile_id == BUILTIN_DEFAULT_ID:
-        profile = _builtin_default_profile()
+        profile = builtin_default_profile()
         if version is not None and version != profile.version:
             raise ValueError(f"Template profile '{profile.id}' version {version} not found")
         return profile

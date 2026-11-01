@@ -32,13 +32,6 @@ from course_harness import search as search_module
 from course_harness import sources as sources_module
 from course_harness import template_profiles as tpl
 from course_harness.agent_traces import AgentTrace, prune_traces
-from course_harness.canonical_mutation import (
-    MAX_CANONICAL_FILES,
-    CanonicalMutationConflict,
-    apply_canonical_mutation,
-    capture_canonical_file,
-    capture_canonical_files,
-)
 from course_harness.chat_history import (
     ChatTranscript,
     CompactionPreview,
@@ -81,16 +74,14 @@ from course_harness.connectors import (
     ResolvedConnector,
 )
 from course_harness.conversation_titles import generate_conversation_title
-from course_harness.course_agent import (
-    AgentMode,
-    CourseAgentDeps,
-    CourseAgentState,
-    build_provider_model,
-    create_autonomous_course_agent,
-    create_course_agent,
-    create_reconciliation_agent,
+from course_harness.core.canonical_mutation import (
+    MAX_CANONICAL_FILES,
+    CanonicalMutationConflict,
+    apply_canonical_mutation,
+    capture_canonical_file,
+    capture_canonical_files,
 )
-from course_harness.course_plan import (
+from course_harness.core.course_plan import (
     CoursePlan,
     CoursePlanInput,
     Goal,
@@ -104,27 +95,8 @@ from course_harness.course_plan import (
     serialize_course_plan,
     write_course_plan,
 )
-from course_harness.credential_store import CredentialStoreError
-from course_harness.document_processing_settings import (
-    ConsentVendor,
-    DocumentProcessingError,
-    DocumentProcessingPreferences,
-    DocumentProcessingStore,
-    ProcessorKeyInput,
-    ProcessorKeyVendor,
-    ProcessorKeyView,
-)
-from course_harness.document_processors import DocumentProcessors, ProcessorView
-from course_harness.export import ExportError, export_presentation, validate_export_mapping
-from course_harness.hosted_processors import installed_processors
-from course_harness.paper_search_keys import (
-    PaperSearchKeyError,
-    PaperSearchKeyInput,
-    PaperSearchKeyProvider,
-    PaperSearchKeyStore,
-    PaperSearchKeyView,
-)
-from course_harness.presentation import (
+from course_harness.core.export import ExportError, export_presentation, validate_export_mapping
+from course_harness.core.presentation import (
     Presentation,
     Slide,
     SlideCitation,
@@ -137,6 +109,66 @@ from course_harness.presentation import (
     serialize_presentation,
     slide_by_id,
     write_presentation,
+)
+from course_harness.core.release_validation import (
+    InvalidWaiver,
+    ReleaseSelection,
+    ReleaseValidationResult,
+    Waiver,
+    validate_release,
+)
+from course_harness.core.releases import CourseRelease, ReleaseError
+from course_harness.core.slide_preview import (
+    PresentationPreview,
+    PreviewContext,
+    build_preview,
+    render_layout_backgrounds,
+    render_presentation_preview,
+    renderer_capability,
+)
+from course_harness.core.sources import (
+    InvalidSourcesIndex,
+    Source,
+    SourceAdmissionRequest,
+    SourcesIndex,
+    read_sources_index,
+    serialize_sources_index,
+    write_sources_index,
+)
+from course_harness.core.template_inspect import inspect_template, map_semantic_layouts
+from course_harness.core.template_profiles import (
+    BUILTIN_DEFAULT_ID,
+    TemplateLayoutMapping,
+    TemplateProfile,
+    builtin_default_profile,
+)
+from course_harness.course_agent import (
+    AgentMode,
+    CourseAgentDeps,
+    CourseAgentState,
+    build_provider_model,
+    create_autonomous_course_agent,
+    create_course_agent,
+    create_reconciliation_agent,
+)
+from course_harness.credential_store import CredentialStoreError
+from course_harness.document_processing_settings import (
+    ConsentVendor,
+    DocumentProcessingError,
+    DocumentProcessingPreferences,
+    DocumentProcessingStore,
+    ProcessorKeyInput,
+    ProcessorKeyVendor,
+    ProcessorKeyView,
+)
+from course_harness.document_processors import DocumentProcessors, ProcessorView
+from course_harness.hosted_processors import installed_processors
+from course_harness.paper_search_keys import (
+    PaperSearchKeyError,
+    PaperSearchKeyInput,
+    PaperSearchKeyProvider,
+    PaperSearchKeyStore,
+    PaperSearchKeyView,
 )
 from course_harness.provider_detection import (
     DetectedCredential,
@@ -181,10 +213,8 @@ from course_harness.providers import (
     validate_provider_capabilities,
 )
 from course_harness.release_service import (
-    CourseRelease,
     PublishReleaseRequest,
     ReleaseConflict,
-    ReleaseError,
     ReleaseValidationError,
     list_releases,
     publish_release,
@@ -192,31 +222,12 @@ from course_harness.release_service import (
     read_release_artifact,
     regenerate_release_artifact,
 )
-from course_harness.release_validation import (
-    InvalidWaiver,
-    ReleaseSelection,
-    ReleaseValidationResult,
-    Waiver,
-    validate_release,
-)
 from course_harness.runtime_diagnostics import (
     RuntimeDiagnostics,
     runtime_diagnostics,
 )
 from course_harness.runtime_paths import RuntimeLocations, RuntimePaths
-from course_harness.slide_preview import (
-    PresentationPreview,
-    PreviewContext,
-    build_preview,
-    render_layout_backgrounds,
-    render_presentation_preview,
-    renderer_capability,
-)
-from course_harness.template_inspect import (
-    inspect_template,
-    map_semantic_layouts,
-    suggest_mappings_with_llm,
-)
+from course_harness.template_inspect import suggest_mappings_with_llm
 from course_harness.workspace_history import (
     CourseRevision,
     CurrentState,
@@ -598,7 +609,7 @@ def create_app(
         task.add_done_callback(finish_conversation_title)
 
     def schedule_template_background_render(
-        profile: tpl.TemplateProfile,
+        profile: TemplateProfile,
         template_path: Path,
     ) -> None:
         if not precompute_template_backgrounds or not renderer_capability().available:
@@ -1050,7 +1061,7 @@ def create_app(
                 )
             plan = read_required_course_plan(active)
             try:
-                sources = sources_module.read_sources_index(active) or sources_module.SourcesIndex()
+                sources = read_sources_index(active) or SourcesIndex()
                 result = validate_release(
                     plan=plan,
                     presentations=list_presentations(active),
@@ -1061,7 +1072,7 @@ def create_app(
                         cache_dir, sources.sources
                     ),
                 )
-            except sources_module.InvalidSourcesIndex as error:
+            except InvalidSourcesIndex as error:
                 raise HTTPException(status_code=422, detail="sources.yaml is invalid") from error
             except InvalidWaiver as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
@@ -1095,7 +1106,7 @@ def create_app(
                         evidence_line_counts={},
                         library_data_root=data_dir,
                     )
-                sources = sources_module.read_sources_index(active) or sources_module.SourcesIndex()
+                sources = read_sources_index(active) or SourcesIndex()
                 return publish_release(
                     workspace=active,
                     release_data_root=release_data,
@@ -1106,7 +1117,7 @@ def create_app(
                     ),
                     library_data_root=data_dir,
                 )
-            except sources_module.InvalidSourcesIndex as error:
+            except InvalidSourcesIndex as error:
                 raise HTTPException(status_code=422, detail="sources.yaml is invalid") from error
             except ReleaseConflict as error:
                 raise HTTPException(status_code=409, detail=str(error)) from error
@@ -1789,8 +1800,8 @@ def create_app(
                             deps.course_state.course
                         )
                     if deps.course_state.sources or (active / "sources.yaml").exists():
-                        expected_entries["sources.yaml"] = sources_module.serialize_sources_index(
-                            sources_module.SourcesIndex(sources=deps.course_state.sources)
+                        expected_entries["sources.yaml"] = serialize_sources_index(
+                            SourcesIndex(sources=deps.course_state.sources)
                         )
                     current_presentations = {
                         f"presentations/{presentation.id}.yaml": serialize_presentation(
@@ -1889,7 +1900,7 @@ def create_app(
                     raise HTTPException(
                         status_code=422, detail=f"course.yaml is invalid: {error}"
                     ) from error
-                sources_index = sources_module.read_sources_index(active)
+                sources_index = read_sources_index(active)
             mode = (
                 AgentMode.GUIDED
                 if is_reconciliation
@@ -2378,7 +2389,7 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(error)) from error
         template_path = (
             tpl.profile_dir(templates_data, profile.id) / "template.pptx"
-            if profile.id != tpl.BUILTIN_DEFAULT_ID
+            if profile.id != BUILTIN_DEFAULT_ID
             else None
         )
         return presentation, PreviewContext(
@@ -2440,7 +2451,7 @@ def create_app(
     ) -> Presentation:
         from uuid import uuid4
 
-        from course_harness.presentation import (
+        from course_harness.core.presentation import (
             SLIDE_CLASSES_BY_LAYOUT,
             fill_slide_layout_fields,
         )
@@ -2733,10 +2744,10 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(error)) from error
 
         template_file = None
-        if resolved_profile.id != tpl.BUILTIN_DEFAULT_ID:
+        if resolved_profile.id != BUILTIN_DEFAULT_ID:
             template_file = tpl.profile_dir(templates_data, resolved_profile.id) / "template.pptx"
 
-        if resolved_profile.id != tpl.BUILTIN_DEFAULT_ID:
+        if resolved_profile.id != BUILTIN_DEFAULT_ID:
             issues = validate_export_mapping(
                 resolved_profile,
                 template_file,
@@ -2762,26 +2773,26 @@ def create_app(
             headers={"Content-Disposition": f'attachment; filename="{pres.id}.pptx"'},
         )
 
-    @app.get("/api/sources", response_model=list[sources_module.Source])
-    async def list_sources() -> list[sources_module.Source]:
+    @app.get("/api/sources", response_model=list[Source])
+    async def list_sources() -> list[Source]:
         active = require_workspace()
-        index = sources_module.read_sources_index(active)
+        index = read_sources_index(active)
         if index is None:
             return []
         return index.sources
 
     @app.post(
         "/api/sources",
-        response_model=sources_module.Source,
+        response_model=Source,
         status_code=201,
     )
     async def admit_source_route(
-        request: sources_module.SourceAdmissionRequest,
-    ) -> sources_module.Source:
+        request: SourceAdmissionRequest,
+    ) -> Source:
         return await admit_resource(require_workspace(), request.resource_id, request.label)
 
-    @app.post("/api/sources/from-url", response_model=sources_module.Source, status_code=201)
-    async def add_source_from_url(request: res.RemoteSourceRequest) -> sources_module.Source:
+    @app.post("/api/sources/from-url", response_model=Source, status_code=201)
+    async def add_source_from_url(request: res.RemoteSourceRequest) -> Source:
         active = require_workspace()
         try:
             state = await capture_remote_resource(request.url)
@@ -2797,7 +2808,7 @@ def create_app(
             raise HTTPException(
                 status_code=422, detail=state.error or "This result could not be processed."
             )
-        index = sources_module.read_sources_index(active)
+        index = read_sources_index(active)
         existing = next(
             (s for s in (index.sources if index else []) if s.resource_id == state.resource_id),
             None,
@@ -2806,14 +2817,10 @@ def create_app(
             return existing
         return await admit_resource(active, state.resource_id, request.label)
 
-    async def admit_resource(
-        active: Path, resource_id: str, label: str | None
-    ) -> sources_module.Source:
+    async def admit_resource(active: Path, resource_id: str, label: str | None) -> Source:
         async with exclusive_mutation(active):
             expected_sources = capture_canonical_file(active, "sources.yaml")
-            before_index = (
-                sources_module.read_sources_index(active) or sources_module.SourcesIndex()
-            )
+            before_index = read_sources_index(active) or SourcesIndex()
             provenance_permitted = require_canonical_authoring(active, allow_uninitialized=True)
             if not (active / ".git").exists():
                 try:
@@ -2837,7 +2844,7 @@ def create_app(
                 record_canonical_mutation(
                     active,
                     provenance_permitted,
-                    {"sources.yaml": sources_module.serialize_sources_index(expected_index)},
+                    {"sources.yaml": serialize_sources_index(expected_index)},
                 )
                 return source
             except CanonicalMutationConflict as error:
@@ -2845,10 +2852,10 @@ def create_app(
             except ValueError as error:
                 raise HTTPException(status_code=422, detail=str(error)) from error
 
-    @app.get("/api/sources/{source_id}", response_model=sources_module.Source)
-    async def source_detail(source_id: str) -> sources_module.Source:
+    @app.get("/api/sources/{source_id}", response_model=Source)
+    async def source_detail(source_id: str) -> Source:
         active = require_workspace()
-        index = sources_module.read_sources_index(active)
+        index = read_sources_index(active)
         if index is None:
             raise HTTPException(status_code=404, detail="Source was not found")
         source = next((s for s in index.sources if s.id == source_id), None)
@@ -2861,19 +2868,19 @@ def create_app(
         active = require_workspace()
         async with exclusive_mutation(active):
             expected_sources = capture_canonical_file(active, "sources.yaml")
-            index = sources_module.read_sources_index(active)
+            index = read_sources_index(active)
             if index is None:
                 raise HTTPException(status_code=404, detail="Source was not found")
             remaining = [s for s in index.sources if s.id != source_id]
             if len(remaining) == len(index.sources):
                 raise HTTPException(status_code=404, detail="Source was not found")
             provenance_permitted = require_canonical_authoring(active)
-            updated = sources_module.SourcesIndex(version=index.version, sources=remaining)
-            sources_module.write_sources_index(active, updated, expected=expected_sources)
+            updated = SourcesIndex(version=index.version, sources=remaining)
+            write_sources_index(active, updated, expected=expected_sources)
             record_canonical_mutation(
                 active,
                 provenance_permitted,
-                {"sources.yaml": sources_module.serialize_sources_index(updated)},
+                {"sources.yaml": serialize_sources_index(updated)},
             )
             return Response(status_code=204)
 
@@ -2885,7 +2892,7 @@ def create_app(
         request: search_module.SearchRequest,
     ) -> list[search_module.GroupedSearchResult]:
         active = require_workspace()
-        index = sources_module.read_sources_index(active)
+        index = read_sources_index(active)
         if index is None or not index.sources:
             return []
 
@@ -2933,7 +2940,7 @@ def create_app(
         line_end: int | None = None,
     ) -> StarletteResponse:
         active = require_workspace()
-        index = sources_module.read_sources_index(active)
+        index = read_sources_index(active)
         if index is None:
             raise HTTPException(status_code=404, detail="Source was not found")
         source = next((s for s in index.sources if s.id == source_id), None)
@@ -3423,13 +3430,13 @@ def create_app(
         schedule_remote_capture(resource_id, resource.location, media_type)
         return with_remote_job_state(state)
 
-    @app.post("/api/sources/{source_id}/adopt-version", response_model=sources_module.Source)
-    async def adopt_source_version(source_id: str) -> sources_module.Source:
+    @app.post("/api/sources/{source_id}/adopt-version", response_model=Source)
+    async def adopt_source_version(source_id: str) -> Source:
         active = require_workspace()
         async with exclusive_mutation(active):
             try:
                 expected_sources = capture_canonical_file(active, "sources.yaml")
-                before_index = sources_module.read_sources_index(active)
+                before_index = read_sources_index(active)
                 provenance_permitted = require_canonical_authoring(active)
                 source = sources_module.adopt_source_version(
                     active, data_dir, cache_dir, source_id, expected=expected_sources
@@ -3447,7 +3454,7 @@ def create_app(
                 record_canonical_mutation(
                     active,
                     provenance_permitted,
-                    {"sources.yaml": sources_module.serialize_sources_index(expected_index)},
+                    {"sources.yaml": serialize_sources_index(expected_index)},
                 )
                 return source
             except CanonicalMutationConflict as error:
@@ -3488,12 +3495,12 @@ def create_app(
     # -------------------------------------------------------------------
 
     class TemplateUploadResponse(BaseModel):
-        profile: tpl.TemplateProfile
+        profile: TemplateProfile
         inspection: dict
 
     @app.get("/api/templates", response_model=list[tpl.TemplateProfileSummary])
     async def api_list_templates() -> list[tpl.TemplateProfileSummary]:
-        builtin = tpl._builtin_default_profile()
+        builtin = builtin_default_profile()
         builtin_summary = tpl.TemplateProfileSummary(
             id=builtin.id,
             name=builtin.name,
@@ -3554,7 +3561,7 @@ def create_app(
 
         registry = tpl.read_registry(templates_data)
         name = tpl.unique_profile_name(name, registry)
-        profile = tpl.TemplateProfile(
+        profile = TemplateProfile(
             id=profile_id,
             name=name[:200],
             version=1,
@@ -3563,7 +3570,7 @@ def create_app(
             slide_height=inspection["slide_height"],
             slide_count=inspection["slide_count"],
             layouts=[
-                tpl.TemplateLayoutMapping(
+                TemplateLayoutMapping(
                     semantic_layout=m["semantic_layout"],
                     template_layout_index=m["template_layout_index"],
                     confidence=m["confidence"],
@@ -3590,8 +3597,8 @@ def create_app(
 
         return TemplateUploadResponse(profile=profile, inspection=inspection)
 
-    @app.get("/api/templates/{profile_id}", response_model=tpl.TemplateProfile)
-    async def api_get_template(profile_id: str) -> tpl.TemplateProfile:
+    @app.get("/api/templates/{profile_id}", response_model=TemplateProfile)
+    async def api_get_template(profile_id: str) -> TemplateProfile:
         try:
             return tpl.resolve_profile(templates_data, profile_id)
         except ValueError as error:
@@ -3599,7 +3606,7 @@ def create_app(
 
     @app.get("/api/templates/{profile_id}/inspection")
     async def api_inspect_template(profile_id: str) -> dict:
-        if profile_id == tpl.BUILTIN_DEFAULT_ID:
+        if profile_id == BUILTIN_DEFAULT_ID:
             raise HTTPException(
                 status_code=400,
                 detail="The built-in default does not have an imported template file",
@@ -3626,11 +3633,11 @@ def create_app(
         model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
         name: str = Field(min_length=1, max_length=200)
 
-    @app.patch("/api/templates/{profile_id}", response_model=tpl.TemplateProfile)
+    @app.patch("/api/templates/{profile_id}", response_model=TemplateProfile)
     async def api_rename_template(
         profile_id: str, request: TemplateRenameRequest
-    ) -> tpl.TemplateProfile:
-        if profile_id == tpl.BUILTIN_DEFAULT_ID:
+    ) -> TemplateProfile:
+        if profile_id == BUILTIN_DEFAULT_ID:
             raise HTTPException(
                 status_code=400,
                 detail="Cannot rename the built-in default profile",
@@ -3660,11 +3667,11 @@ def create_app(
         tpl.write_registry(templates_data, registry)
         return updated_profile
 
-    @app.put("/api/templates/{profile_id}", response_model=tpl.TemplateProfile)
+    @app.put("/api/templates/{profile_id}", response_model=TemplateProfile)
     async def api_update_template_mapping(
         profile_id: str, request: MappingUpdateRequest
-    ) -> tpl.TemplateProfile:
-        if profile_id == tpl.BUILTIN_DEFAULT_ID:
+    ) -> TemplateProfile:
+        if profile_id == BUILTIN_DEFAULT_ID:
             raise HTTPException(
                 status_code=400,
                 detail="Cannot update the built-in default profile",
@@ -3685,7 +3692,7 @@ def create_app(
                 )
                 if requested.confidence is not None and requested.rationale is not None:
                     updated_layouts.append(
-                        tpl.TemplateLayoutMapping(
+                        TemplateLayoutMapping(
                             semantic_layout=m.semantic_layout,
                             template_layout_index=new_idx,
                             confidence=requested.confidence,
@@ -3697,7 +3704,7 @@ def create_app(
                     updated_layouts.append(m)
                 else:
                     updated_layouts.append(
-                        tpl.TemplateLayoutMapping(
+                        TemplateLayoutMapping(
                             semantic_layout=m.semantic_layout,
                             template_layout_index=new_idx,
                             confidence=1.0,
@@ -3707,7 +3714,7 @@ def create_app(
                     )
             else:
                 updated_layouts.append(m)
-        updated_profile = tpl.TemplateProfile(
+        updated_profile = TemplateProfile(
             id=profile.id,
             name=profile.name,
             version=profile.version + 1,
@@ -3731,7 +3738,7 @@ def create_app(
 
     @app.delete("/api/templates/{profile_id}", status_code=204)
     async def api_delete_template(profile_id: str) -> Response:
-        if profile_id == tpl.BUILTIN_DEFAULT_ID:
+        if profile_id == BUILTIN_DEFAULT_ID:
             raise HTTPException(
                 status_code=400,
                 detail="Cannot delete the built-in default profile",
@@ -3744,7 +3751,7 @@ def create_app(
     @app.post("/api/templates/{profile_id}/calibrate", response_model=list[tpl.CalibrationSlide])
     async def api_calibrate(profile_id: str) -> list[tpl.CalibrationSlide]:
         profile = tpl.read_profile(templates_data, profile_id)
-        if profile is None and profile_id != tpl.BUILTIN_DEFAULT_ID:
+        if profile is None and profile_id != BUILTIN_DEFAULT_ID:
             raise HTTPException(status_code=404, detail="Template profile not found")
         try:
             resolved = tpl.resolve_profile(templates_data, profile_id)
@@ -3770,7 +3777,7 @@ def create_app(
 
     @app.post("/api/templates/{profile_id}/validate")
     async def api_validate_template(profile_id: str) -> list[dict]:
-        if profile_id == tpl.BUILTIN_DEFAULT_ID:
+        if profile_id == BUILTIN_DEFAULT_ID:
             return []
         profile = tpl.read_profile(templates_data, profile_id)
         if profile is None:
@@ -3796,7 +3803,7 @@ def create_app(
         profile_id: str, request: SuggestMappingsRequest
     ) -> SuggestMappingsResponse:
         del request  # The Literal[True] field is the explicit transmission consent boundary.
-        if profile_id == tpl.BUILTIN_DEFAULT_ID:
+        if profile_id == BUILTIN_DEFAULT_ID:
             raise HTTPException(
                 status_code=400,
                 detail="Cannot suggest mappings for the built-in default",

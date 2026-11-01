@@ -6,9 +6,9 @@ import httpx2
 import pytest
 
 import course_harness.app as app_module
-from course_harness import canonical_mutation
 from course_harness.app import create_app
-from course_harness.course_plan import read_course_plan, write_course_plan
+from course_harness.core import canonical_mutation
+from course_harness.core.course_plan import read_course_plan, write_course_plan
 from course_harness.runtime_paths import RuntimePaths
 
 
