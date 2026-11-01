@@ -527,10 +527,12 @@ textarea.input {
 /* ---------- Tabs ---------- */
 
 /* A row too wide for a narrow screen scrolls sideways instead of widening the page. The rule
-   is an inset shadow so the selected tab's underline, at the bottom edge, still covers it. */
+   is an inset shadow in a 1px bottom padding, inside the scrolling box, so the selected tab's
+   underline still covers it without being clipped. */
 .tabs {
 	display: flex;
 	gap: 4px;
+	padding-bottom: 1px;
 	overflow-x: auto;
 	overflow-y: hidden;
 	scrollbar-width: none;
@@ -564,7 +566,7 @@ textarea.input {
 	content: "";
 	position: absolute;
 	right: 8px;
-	bottom: 0;
+	bottom: -1px;
 	left: 8px;
 	height: 2px;
 	border-radius: 2px;
