@@ -37,6 +37,7 @@ MAX_LISTED_REVISIONS = 50
 MAX_TITLE_CHARACTERS = 60
 _PRESENTATION_PATH = re.compile(r"presentations/(presentation-[0-9a-f]{12})\.yaml\Z")
 _QUIZ_PATH = re.compile(r"quizzes/(lecture-[0-9a-f]{12})\.yaml\Z")
+TAG_PREFIX = "refs/tags/course-release/"
 _VERBS = {"added": "Added", "modified": "Edited", "deleted": "Removed"}
 
 
@@ -77,6 +78,12 @@ class SharingStatus(BaseModel):
     behind: int | None = None
     checked_at: str | None = None
     check_error: str | None = None
+    # Both sides have Revisions the other lacks: Sync offers to use one of them.
+    diverged: bool = False
+    # Release IDs already shared from elsewhere, which a new Release cannot reuse.
+    remote_release_slugs: list[str] = Field(default_factory=list)
+    # Releases whose files could not be shared because they do not match the Release.
+    skipped_files: list[str] = Field(default_factory=list)
 
 
 class SyncResult(BaseModel):
@@ -89,6 +96,11 @@ class SyncResult(BaseModel):
     revision: CourseRevision | None = None
     # Course Revisions received from the remote.
     received: int = 0
+    # This computer and the shared copy diverged; ``use-shared-copy`` or
+    # ``replace-shared-copy`` resolves it.
+    diverged: bool = False
+    # Things that worked but need the Course Author's attention.
+    notices: list[str] = Field(default_factory=list)
     status: SharingStatus | None = None
 
 
@@ -161,7 +173,7 @@ def _blocker(state: CurrentState) -> AutomaticRevisionBlocked | None:
         return None
     if state.drift != "clean":
         return AutomaticRevisionBlocked(
-            "Course files changed outside the app. Review those changes first.", []
+            "Files were changed outside Course Harness; review them in History first.", []
         )
     if not state.validation.valid:
         return AutomaticRevisionBlocked(
@@ -208,15 +220,41 @@ def _head(workspace: Path, ref: str) -> str | None:
         return None
 
 
+def main_contains(workspace: Path, commit: str) -> bool:
+    """Whether this computer's ``main`` already includes ``commit``."""
+    head = _head(workspace, f"refs/heads/{BRANCH}")
+    if head is None:
+        return False
+    try:
+        run_git(workspace, "merge-base", "--is-ancestor", commit, head)
+    except ReleaseError:
+        return False
+    return True
+
+
+def _release_slug(name: str) -> str:
+    return name.rsplit("/", 1)[1]
+
+
 def sharing_status(workspace: Path) -> SharingStatus:
     state = read_current_state(workspace)
     scan = scan_releases(workspace)
     latest = scan.releases[0] if scan.releases else None
     head = _head(workspace, f"refs/heads/{BRANCH}")
+    url = read_remote(workspace).url
+    check = read_remote_check(workspace) if url is not None else None
+    remote_tags = {
+        _release_slug(name)
+        for name in (check.refs if check is not None else {})
+        if name.startswith(TAG_PREFIX)
+    }
+    local_slugs = {release.slug for release in scan.releases}
     summaries: list[str] = []
     committed = 0
     if head is not None:
-        exclude = [f"^{latest.commit_oid}"] if latest is not None else []
+        # Revisions that some Release (published here or shared from elsewhere) covers are
+        # not changes since a Release.
+        exclude = sorted({f"^{release.commit_oid}" for release in scan.releases})
         committed = _count(workspace, "--first-parent", head, *exclude)
         log = run_git(
             workspace,
@@ -230,7 +268,7 @@ def sharing_status(workspace: Path) -> SharingStatus:
         summaries = list(reversed(log.decode("utf-8", errors="replace").splitlines()))
     blocker = _blocker(state)
     status = SharingStatus(
-        release_count=len(scan.releases),
+        release_count=len(local_slugs | remote_tags),
         latest_release_name=latest.name if latest else None,
         changes_since_release=committed + (0 if state.clean else 1),
         uncommitted=not state.clean,
@@ -243,30 +281,41 @@ def sharing_status(workspace: Path) -> SharingStatus:
         blocked=(None if blocker is None else "drift" if state.drift != "clean" else "invalid"),
         findings=blocker.findings if blocker is not None else [],
     )
-    url = read_remote(workspace).url
     if url is None:
         return status
     status.remote_url = url
     status.remote_label = remote_label(url)
-    check = read_remote_check(workspace)
     if check is None:
         return status
     status.checked_at = check.checked_at
     status.check_error = check.error
+    status.remote_release_slugs = sorted(remote_tags)
+    status.skipped_files = list(check.skipped_files)
     remote_head = check.refs.get(f"refs/heads/{BRANCH}")
     if remote_head is None:
         ahead = _count(workspace, head) if head is not None else 0
         behind = 0
     elif _head(workspace, REMOTE_MAIN) != remote_head:
-        # The remote moved since its main was last fetched.
+        # The remote-tracking ref changed since the check; wait for the next one.
         return status
     elif head is None:
         ahead, behind = 0, _count(workspace, remote_head)
     else:
         ahead = _count(workspace, head, f"^{remote_head}")
         behind = _count(workspace, remote_head, f"^{head}")
-    for name, oid in _local_refs(workspace).items():
-        if check.refs.get(name) != oid:
+    status.diverged = ahead > 0 and behind > 0
+    # One change per Release the remote lacks: its tag, or else its files.
+    local = _local_refs(workspace)
+    for name, oid in local.items():
+        if not name.startswith(TAG_PREFIX):
+            continue
+        slug = _release_slug(name)
+        files = f"{RELEASE_FILES_REF_PREFIX}{slug}"
+        if check.refs.get(name) != oid or (
+            files in local
+            and check.refs.get(files) != local[files]
+            and slug not in check.skipped_files
+        ):
             ahead += 1
     status.ahead = ahead + (0 if state.clean else 1)
     status.behind = behind

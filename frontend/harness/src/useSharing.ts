@@ -6,26 +6,59 @@ import type { SharingStatus, SyncResult } from "./models";
 /** How often the remote is asked what it has while a Course is open. */
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;
 
+export type SyncAction = "sync" | "use-shared-copy" | "replace-shared-copy";
+
+const actionPaths: Record<SyncAction, string> = {
+	sync: "/api/workspace/sync",
+	"use-shared-copy": "/api/workspace/sync/use-shared-copy",
+	"replace-shared-copy": "/api/workspace/sync/replace-shared-copy",
+};
+
 export type Sharing = {
 	status: SharingStatus | null;
 	checking: boolean;
 	syncing: boolean;
-	/** The last Sync that did not finish, until it is dismissed or retried. */
+	/** The last Sync that did not finish or needs attention, until dismissed or retried. */
 	failure: SyncResult | null;
 	refresh: () => Promise<void>;
 	check: () => Promise<void>;
-	sync: () => Promise<SyncResult | null>;
+	sync: (action?: SyncAction) => Promise<SyncResult | null>;
 	dismissFailure: () => void;
 };
 
-/** Publish and Sync status, kept current in the background. */
-export function useSharing(enabled: boolean): Sharing {
+function failed(message: string): SyncResult {
+	return {
+		ok: false,
+		message,
+		detail: null,
+		findings: [],
+		revision: null,
+		received: 0,
+		status: null,
+		diverged: false,
+		notices: [],
+	};
+}
+
+/**
+ * Publish and Sync status, kept current in the background.
+ *
+ * ``onCourseChanged`` runs after a Sync saved or received Course Revisions, so everything
+ * on screen can be read again.
+ */
+export function useSharing(
+	enabled: boolean,
+	onCourseChanged: () => void,
+): Sharing {
 	const [status, setStatus] = useState<SharingStatus | null>(null);
 	const [checking, setChecking] = useState(false);
 	const [syncing, setSyncing] = useState(false);
 	const [failure, setFailure] = useState<SyncResult | null>(null);
 	const remoteRef = useRef(false);
 	const busyRef = useRef(false);
+	const syncingRef = useRef(false);
+	const changedRef = useRef(onCourseChanged);
+	changedRef.current = onCourseChanged;
 
 	const accept = useCallback((next: SharingStatus) => {
 		remoteRef.current = next.remote_url !== null;
@@ -58,47 +91,35 @@ export function useSharing(enabled: boolean): Sharing {
 		}
 	}, [accept]);
 
-	const sync = useCallback(async () => {
-		if (busyRef.current) return null;
-		busyRef.current = true;
-		setSyncing(true);
-		setFailure(null);
-		try {
-			const response = await fetch("/api/workspace/sync", { method: "POST" });
-			if (!response.ok) {
-				const result: SyncResult = {
-					ok: false,
-					message: await responseError(response),
-					detail: null,
-					findings: [],
-					revision: null,
-					received: 0,
-					status: null,
-				};
+	const sync = useCallback(
+		async (action: SyncAction = "sync") => {
+			if (syncingRef.current) return null;
+			syncingRef.current = true;
+			setSyncing(true);
+			setFailure(null);
+			try {
+				const response = await fetch(actionPaths[action], { method: "POST" });
+				if (!response.ok) {
+					const result = failed(await responseError(response));
+					setFailure(result);
+					return result;
+				}
+				const result = (await response.json()) as SyncResult;
+				if (result.status) accept(result.status);
+				if (!result.ok || result.notices.length > 0) setFailure(result);
+				if (result.revision || result.received > 0) changedRef.current();
+				return result;
+			} catch {
+				const result = failed("Course Harness could not start Sync.");
 				setFailure(result);
 				return result;
+			} finally {
+				syncingRef.current = false;
+				setSyncing(false);
 			}
-			const result = (await response.json()) as SyncResult;
-			if (result.status) accept(result.status);
-			if (!result.ok) setFailure(result);
-			return result;
-		} catch {
-			const result: SyncResult = {
-				ok: false,
-				message: "Course Harness could not start Sync.",
-				detail: null,
-				findings: [],
-				revision: null,
-				received: 0,
-				status: null,
-			};
-			setFailure(result);
-			return result;
-		} finally {
-			busyRef.current = false;
-			setSyncing(false);
-		}
-	}, [accept]);
+		},
+		[accept],
+	);
 
 	useEffect(() => {
 		if (!enabled) return;

@@ -446,6 +446,8 @@ export function InsightsPage({
 	const [error, setError] = useState<string | null>(null);
 	const [reload, setReload] = useState(0);
 	const releaseId = useId();
+	// What the Course Author wrote about the Release being graded against.
+	const gradedNotes = insights?.graded_release.notes ?? null;
 	const instructorsId = useId();
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `reload` asks for the same Insights again after a sync
@@ -496,6 +498,7 @@ export function InsightsPage({
 						value={release ?? ""}
 						onChange={(event) => setRelease(event.target.value || null)}
 						disabled={!insights}
+						aria-describedby={gradedNotes ? `${releaseId}-notes` : undefined}
 					>
 						<option value="">
 							{course.release
@@ -510,6 +513,12 @@ export function InsightsPage({
 								</option>
 							))}
 					</select>
+					{gradedNotes ? (
+						<small id={`${releaseId}-notes`} className="release-notes">
+							<strong>What changed: </strong>
+							{gradedNotes}
+						</small>
+					) : null}
 				</div>
 				<label className="check-row" htmlFor={instructorsId}>
 					<input
@@ -554,15 +563,6 @@ export function InsightsPage({
 				<p className="meta">Loading…</p>
 			) : (
 				<>
-					{insights.graded_release.notes ? (
-						<section
-							className="release-notes"
-							aria-label={`What changed in ${releaseLabel(insights.graded_release)}`}
-						>
-							<h3>What changed in {releaseLabel(insights.graded_release)}</h3>
-							<p>{insights.graded_release.notes}</p>
-						</section>
-					) : null}
 					<Overview insights={insights} />
 					<details className="score-help">
 						<summary>How scores work</summary>

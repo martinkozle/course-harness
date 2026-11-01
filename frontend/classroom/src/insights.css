@@ -281,15 +281,9 @@
 }
 
 .release-notes {
-	margin-bottom: 16px;
-}
-
-.release-notes h3 {
-	font-size: 0.9375rem;
-	font-weight: 650;
-}
-
-.release-notes p {
-	white-space: pre-line;
+	display: block;
+	max-width: 48ch;
+	margin-top: 6px;
 	color: var(--ink-muted);
+	white-space: pre-line;
 }

@@ -26,6 +26,7 @@ import type {
 	SharingStatus,
 	Source,
 } from "../models";
+import { SYNC_FIRST } from "../shell/SharingControls";
 import { RemoteSetup } from "./RemoteSetup";
 
 const MAX_NOTES = 4000;
@@ -102,9 +103,11 @@ export function PublishDialog({
 		presentations.map((presentation) => presentation.id),
 	);
 	const [name, setName] = useState(() =>
-		defaultReleaseName(status?.release_count ?? 0),
+		status ? defaultReleaseName(status.release_count) : "",
 	);
 	const [notes, setNotes] = useState(() => defaultNotes(status));
+	const nameEditedRef = useRef(false);
+	const notesEditedRef = useRef(false);
 	const [validation, setValidation] = useState<ReleaseValidation | null>(null);
 	const [checking, setChecking] = useState(false);
 	const [waiverText, setWaiverText] = useState<Record<string, string>>({});
@@ -119,7 +122,22 @@ export function PublishDialog({
 	const requestRef = useRef<AbortController | null>(null);
 	const doneRef = useRef<HTMLHeadingElement>(null);
 
+	// The defaults depend on the status: fill them in once it has loaded, unless edited.
+	const statusLoaded = status !== null;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: only the first status counts
+	useEffect(() => {
+		if (!status) return;
+		if (!nameEditedRef.current)
+			setName(defaultReleaseName(status.release_count));
+		if (!notesEditedRef.current) setNotes(defaultNotes(status));
+		if (status.remote_url) {
+			setShare(true);
+			setRemoteLabel(status.remote_label);
+		}
+	}, [statusLoaded]);
+
 	const running = steps !== null && !published && !error;
+	const behind = (status?.behind ?? 0) > 0;
 	const blocked = status?.blocked ?? null;
 	const findings = blockedFindings.length
 		? blockedFindings
@@ -259,17 +277,19 @@ export function PublishDialog({
 			? "Give this release a name."
 			: !slugify(name)
 				? "Use letters or numbers in the name."
-				: lectureIds.length === 0
-					? "Choose at least one Lecture."
-					: checking || validation === null
-						? "Checking the release…"
-						: errors.length > 0
-							? "Fix the problems above to publish."
-							: missingReasons > 0
-								? `Record why you're publishing with ${plural(missingReasons, "warning")}.`
-								: share && !remoteLabel
-									? "Choose where to share, or untick Share."
-									: null;
+				: status?.remote_release_slugs.includes(slugify(name))
+					? "A release with this name was already shared. Choose another name."
+					: lectureIds.length === 0
+						? "Choose at least one Lecture."
+						: checking || validation === null
+							? "Checking the release…"
+							: errors.length > 0
+								? "Fix the problems above to publish."
+								: missingReasons > 0
+									? `Record why you're publishing with ${plural(missingReasons, "warning")}.`
+									: share && !remoteLabel
+										? "Choose where to share, or untick Share."
+										: null;
 
 	function setStep(key: keyof Steps, value: StepState) {
 		setSteps((current) => (current ? { ...current, [key]: value } : current));
@@ -284,83 +304,86 @@ export function PublishDialog({
 			publish: "waiting",
 			share: share ? "waiting" : null,
 		});
-		// 1. Save uncommitted edits as an automatic Course Revision.
-		const saved = await fetch("/api/workspace/revisions/automatic", {
-			method: "POST",
-		});
-		if (!saved.ok) {
-			const detail = await responseErrorDetail(saved.clone());
-			try {
-				const payload = (await saved.json()) as {
-					detail?: { findings?: string[] };
-				};
-				setBlockedFindings(payload.detail?.findings ?? []);
-			} catch {
-				// The message alone explains it.
+		let step: keyof Steps = "save";
+		try {
+			// 1. Save uncommitted edits as an automatic Course Revision.
+			const saved = await fetch("/api/workspace/revisions/automatic", {
+				method: "POST",
+			});
+			if (!saved.ok) {
+				const detail = await responseErrorDetail(saved.clone());
+				try {
+					const payload = (await saved.json()) as {
+						detail?: { findings?: string[] };
+					};
+					setBlockedFindings(payload.detail?.findings ?? []);
+				} catch {
+					// The message alone explains it.
+				}
+				throw new Error(detail.message);
 			}
-			setStep("save", "failed");
-			setError(detail.message);
-			return;
-		}
-		setStep("save", "done");
-		setStep("publish", "running");
-		// 2. Check again with the reasons, then name the Release.
-		const checked = await validate(waivers(validation));
-		if (!checked?.can_publish) {
-			setStep("publish", "failed");
-			setError("The release has problems to fix before it can be published.");
-			return;
-		}
-		const response = await fetch("/api/releases", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				name: name.trim(),
-				slug: slugify(name),
-				selection: checked.selection,
-				waivers: checked.waivers,
-				notes: notes.trim() || null,
-			}),
-		});
-		if (!response.ok) {
-			setStep("publish", "failed");
-			setError(await responseError(response));
+			setStep("save", "done");
+			step = "publish";
+			setStep("publish", "running");
+			// 2. Check again with the reasons, then name the Release.
+			const checked = await validate(waivers(validation));
+			if (!checked?.can_publish)
+				throw new Error(
+					"The release has problems to fix before it can be published.",
+				);
+			const response = await fetch("/api/releases", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					name: name.trim(),
+					slug: slugify(name),
+					selection: checked.selection,
+					waivers: checked.waivers,
+					notes: notes.trim() || null,
+				}),
+			});
+			if (!response.ok) throw new Error(await responseError(response));
+			const release = (await response.json()) as CourseRelease;
+			setStep("publish", "done");
+			// The header counts the new Release right away.
 			onPublished();
-			return;
-		}
-		const release = (await response.json()) as CourseRelease;
-		setStep("publish", "done");
-		// 3. Share it. A failed push keeps the Release; Sync can send it later.
-		if (share) {
-			setStep("share", "running");
-			try {
-				const pushed = await fetch("/api/workspace/remote/push", {
-					method: "POST",
-				});
-				const result: PushResult = pushed.ok
-					? ((await pushed.json()) as PushResult)
-					: {
-							ok: false,
-							remote: remoteLabel ?? "",
-							message: await responseError(pushed),
-							releases_without_files: [],
-							releases_with_invalid_files: [],
-						};
+			// 3. Share it. A failed push keeps the Release; Sync can send it later.
+			if (share) {
+				step = "share";
+				setStep("share", "running");
+				let result: PushResult;
+				try {
+					const pushed = await fetch("/api/workspace/remote/push", {
+						method: "POST",
+					});
+					result = pushed.ok
+						? ((await pushed.json()) as PushResult)
+						: {
+								ok: false,
+								remote: remoteLabel ?? "",
+								message: await responseError(pushed),
+								releases_without_files: [],
+								releases_with_invalid_files: [],
+							};
+				} catch {
+					result = {
+						ok: false,
+						remote: remoteLabel ?? "",
+						message: "Course Harness could not start sharing.",
+						releases_without_files: [],
+						releases_with_invalid_files: [],
+					};
+				}
 				setPush(result);
 				setStep("share", result.ok ? "done" : "failed");
-			} catch {
-				setPush({
-					ok: false,
-					remote: remoteLabel ?? "",
-					message: "The push could not start.",
-					releases_without_files: [],
-					releases_with_invalid_files: [],
-				});
-				setStep("share", "failed");
 			}
+			setPublished(release);
+			onPublished();
+		} catch (caught) {
+			setStep(step, "failed");
+			setError(errorMessage(caught, "The release could not be published."));
+			onPublished();
 		}
-		setPublished(release);
-		onPublished();
 	}
 
 	const shareLabel = remoteLabel
@@ -459,8 +482,15 @@ export function PublishDialog({
 									</button>
 								}
 							>
-								Course files changed outside the app. Review those changes
-								before you publish.
+								Files were changed outside Course Harness; review them in
+								History first.
+							</Notice>
+						) : null}
+						{behind ? (
+							<Notice tone="warning">
+								{SYNC_FIRST}: the shared copy has{" "}
+								{plural(status?.behind ?? 0, "change")} this computer doesn't
+								have yet.
 							</Notice>
 						) : null}
 						{findings.length > 0 ? (
@@ -491,7 +521,10 @@ export function PublishDialog({
 								value={name}
 								maxLength={200}
 								disabled={running}
-								onChange={(event) => setName(event.target.value)}
+								onChange={(event) => {
+									nameEditedRef.current = true;
+									setName(event.target.value);
+								}}
 							/>
 						</div>
 						<div className="field">
@@ -503,7 +536,10 @@ export function PublishDialog({
 								value={notes}
 								disabled={running}
 								aria-describedby="publish-notes-help"
-								onChange={(event) => setNotes(event.target.value)}
+								onChange={(event) => {
+									notesEditedRef.current = true;
+									setNotes(event.target.value);
+								}}
 							/>
 							<small id="publish-notes-help">
 								Instructors see this beside the release in the Classroom.

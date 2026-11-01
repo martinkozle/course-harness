@@ -571,7 +571,10 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	await expect(unsetSync).toBeVisible();
 	// Sync without a remote opens the sharing setup.
 	await unsetSync.click();
-	const setup = page.getByRole("dialog", { name: "Share to GitHub" });
+	const setup = page.getByRole("dialog", {
+		name: /^Share to (GitHub|a Git host)$/,
+	});
+	await expect(setup.getByText("Checking GitHub CLI…")).toHaveCount(0);
 	const existingInSetup = setup.getByLabel("Use a repository you already have");
 	if (await existingInSetup.isVisible()) await existingInSetup.check();
 	await expect(setup.getByLabel("Repository address")).toBeVisible();
@@ -602,7 +605,9 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 			"Source “chapter_causal.md” has no public link, so its Citations show only their label in a Classroom.",
 		),
 	).toBeVisible();
-	await expect(publish.getByText("Note · does not block publishing")).toBeVisible();
+	await expect(
+		publish.getByText("Note · does not block publishing"),
+	).toBeVisible();
 	await publish.getByLabel("Name").fill("Causal Foundations Preview");
 
 	// Share to a local bare repository, which the smoke server accepts for development.
@@ -614,6 +619,7 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	const share = publish.getByRole("checkbox", { name: "Share to GitHub" });
 	await expect(share).not.toBeChecked();
 	await share.check();
+	await expect(publish.getByText("Checking GitHub CLI…")).toHaveCount(0);
 	const existing = publish.getByLabel("Use a repository you already have");
 	if (await existing.isVisible()) await existing.check();
 	await publish.getByLabel("Repository address").fill(bareRemote);

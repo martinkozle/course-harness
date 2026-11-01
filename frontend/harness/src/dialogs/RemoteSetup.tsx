@@ -1,4 +1,5 @@
-import { Dialog, errorMessage, Notice } from "@course-harness/ui";
+import { Dialog, errorMessage, isAbort, Notice } from "@course-harness/ui";
+import { Loader2 } from "lucide-react";
 import { type FormEvent, useEffect, useId, useState } from "react";
 
 import { responseError } from "../api";
@@ -20,6 +21,8 @@ async function request<T>(path: string, method: string, body?: object) {
 
 type Mode = "create" | "existing";
 
+const REPOSITORY_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$/;
+
 /**
  * Choose where your Course is shared: a new GitHub repository made with your
  * own GitHub CLI, or the Git URL of a repository you already have.
@@ -28,10 +31,13 @@ export function RemoteSetup({
 	onSaved,
 	onCancel,
 	submitLabel = "Save",
+	onHostChange,
 }: {
 	onSaved: (settings: RemoteSettings) => void;
 	onCancel?: () => void;
 	submitLabel?: string;
+	/** Whether the repository will be on GitHub, for the surrounding title. */
+	onHostChange?: (github: boolean) => void;
 }) {
 	const [github, setGithub] = useState<GitHubSetup | null>(null);
 	const [mode, setMode] = useState<Mode>("existing");
@@ -49,17 +55,29 @@ export function RemoteSetup({
 				const response = await fetch("/api/workspace/remote/github", {
 					signal: controller.signal,
 				});
-				if (!response.ok) return;
+				if (!response.ok) throw new Error();
 				const setup = (await response.json()) as GitHubSetup;
-				setGithub(setup);
 				setName(setup.suggested_name);
-				if (setup.available) setMode("create");
-			} catch {
+				setMode(setup.available ? "create" : "existing");
+				setGithub(setup);
+			} catch (caught) {
+				if (isAbort(caught)) return;
 				// Pasting a URL always works.
+				setGithub({
+					available: false,
+					reason: null,
+					owner: null,
+					protocol: "https",
+					suggested_name: "",
+				});
 			}
 		})();
 		return () => controller.abort();
 	}, []);
+
+	const onGithub = github !== null && mode === "create";
+	const toGithub = onGithub || /github\.com/i.test(url);
+	useEffect(() => onHostChange?.(toGithub), [toGithub, onHostChange]);
 
 	async function save(event: FormEvent) {
 		event.preventDefault();
@@ -92,7 +110,33 @@ export function RemoteSetup({
 	}
 
 	const canSave =
-		!saving && (mode === "create" ? Boolean(name.trim()) : Boolean(url.trim()));
+		!saving &&
+		(mode === "create"
+			? REPOSITORY_NAME.test(name.trim())
+			: Boolean(url.trim()));
+
+	if (github === null) {
+		return (
+			<div className="remote-setup">
+				<p className="meta remote-setup-checking" role="status">
+					<Loader2 className="spin" aria-hidden="true" />
+					Checking GitHub CLI…
+				</p>
+				{onCancel ? (
+					<div className="remote-setup-actions">
+						<button type="button" className="btn" onClick={onCancel}>
+							Cancel
+						</button>
+					</div>
+				) : null}
+			</div>
+		);
+	}
+
+	const nameProblem =
+		mode === "create" && name.trim() && !REPOSITORY_NAME.test(name.trim())
+			? "Use up to 100 letters, numbers, hyphens, dots or underscores, starting with a letter, number or underscore."
+			: null;
 
 	return (
 		<form className="remote-setup" onSubmit={(event) => void save(event)}>
@@ -125,7 +169,10 @@ export function RemoteSetup({
 					<div className="field">
 						<label htmlFor={`${id}-name`}>Repository name</label>
 						<div className="remote-setup-owner">
-							<span className="mono" aria-hidden="true">
+							<span className="mono" id={`${id}-owner`}>
+								<span className="visually-hidden">
+									Created in the GitHub account{" "}
+								</span>
 								{github.owner}/
 							</span>
 							<input
@@ -135,9 +182,16 @@ export function RemoteSetup({
 								maxLength={100}
 								spellCheck={false}
 								autoComplete="off"
+								aria-invalid={nameProblem ? true : undefined}
+								aria-describedby={`${id}-owner${nameProblem ? ` ${id}-name-problem` : ""}`}
 								onChange={(event) => setName(event.target.value)}
 							/>
 						</div>
+						{nameProblem ? (
+							<small id={`${id}-name-problem`} className="field-error">
+								{nameProblem}
+							</small>
+						) : null}
 					</div>
 					<fieldset className="remote-setup-visibility">
 						<legend>Visibility</legend>
@@ -177,8 +231,9 @@ export function RemoteSetup({
 						onChange={(event) => setUrl(event.target.value)}
 					/>
 					<small id={`${id}-url-help`}>
-						An HTTPS or SSH address of an empty repository. Leave passwords and
-						tokens out; Git signs in with your SSH key or credential helper.
+						The address of an empty repository, such as
+						https://github.com/you/course. Leave passwords out: your computer
+						signs in to the host the way it usually does.
 					</small>
 				</div>
 			)}
@@ -229,13 +284,21 @@ export function RemoteSetupDialog({
 	onSaved: (settings: RemoteSettings) => void;
 	onClose: () => void;
 }) {
+	const [github, setGithub] = useState(false);
 	return (
-		<Dialog title="Share to GitHub" onClose={onClose}>
+		<Dialog
+			title={github ? "Share to GitHub" : "Share to a Git host"}
+			onClose={onClose}
+		>
 			<p className="meta remote-setup-intro">
 				Sync and Publish send your Course, its history and every release to this
 				repository, where a Classroom can read them.
 			</p>
-			<RemoteSetup onSaved={onSaved} onCancel={onClose} />
+			<RemoteSetup
+				onSaved={onSaved}
+				onCancel={onClose}
+				onHostChange={setGithub}
+			/>
 		</Dialog>
 	);
 }

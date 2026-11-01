@@ -14,7 +14,7 @@ import subprocess
 import unicodedata
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from course_harness.workspace_remote import redact
 
@@ -42,8 +42,18 @@ class GitHubCliStatus(BaseModel):
 class GitHubRepositoryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    name: str = Field(pattern=REPOSITORY_NAME_PATTERN)
+    name: str
     visibility: Literal["public", "private"]
+
+    @field_validator("name")
+    @classmethod
+    def name_is_a_repository_name(cls, value: str) -> str:
+        if not re.fullmatch(REPOSITORY_NAME_PATTERN, value) or value.endswith(".git"):
+            raise ValueError(
+                "Use up to 100 letters, numbers, hyphens, dots or underscores for the "
+                "repository name, starting with a letter, number or underscore."
+            )
+        return value
 
 
 def suggested_repository_name(course_title: str | None) -> str:
@@ -103,9 +113,11 @@ def create_github_repository(request: GitHubRepositoryRequest, *, description: s
         raise GitHubCliError("Sign in to the GitHub CLI with `gh auth login` first.")
     description = " ".join(description.split())[:MAX_DESCRIPTION_CHARACTERS]
     full_name = f"{status.owner}/{request.name}"
-    arguments = ["repo", "create", full_name, f"--{request.visibility}"]
+    # The host is named, so gh never picks another signed-in host; ``--option=value`` keeps a
+    # title starting with a hyphen from being read as an option.
+    arguments = ["repo", "create", f"{GITHUB_HOST}/{full_name}", f"--{request.visibility}"]
     if description:
-        arguments += ["--description", description]
+        arguments.append(f"--description={description}")
     result = _gh(*arguments)
     if result.returncode != 0:
         detail = redact((result.stderr or result.stdout).strip())[-2_000:]

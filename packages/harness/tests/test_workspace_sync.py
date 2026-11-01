@@ -9,12 +9,15 @@ from pathlib import Path
 import httpx2
 import pytest
 
+from course_harness import release_service, workspace_remote
 from course_harness.app import create_app
 from course_harness.core.course_plan import CoursePlan, Lecture, read_course_plan, write_course_plan
 from course_harness.core.presentation import Presentation, TitleSlide, write_presentation
 from course_harness.core.quiz import Quiz, QuizOption, QuizQuestion, write_quiz
-from course_harness.core.releases import read_release
+from course_harness.core.releases import ReleaseError, canonical_json, read_release
+from course_harness.release_service import backfill_release_files
 from course_harness.workspace_history import (
+    KEPT_REF_PREFIX,
     FastForwardRefused,
     RevisionCreateRequest,
     create_revision,
@@ -27,6 +30,7 @@ from course_harness.workspace_remote import (
     ALLOW_LOCAL_REMOTES_ENVIRONMENT,
     InvalidRemoteUrl,
     check_remote,
+    push_workspace,
     remote_label,
     validate_remote_url,
 )
@@ -51,7 +55,7 @@ LECTURES = [
 ]
 
 
-def _git(repository: Path, *arguments: str) -> str:
+def _git(repository: Path, *arguments: str, input_text: str | None = None) -> str:
     return subprocess.run(
         [
             "git",
@@ -62,6 +66,7 @@ def _git(repository: Path, *arguments: str) -> str:
             *arguments,
         ],
         cwd=repository,
+        input=input_text,
         check=True,
         capture_output=True,
         text=True,
@@ -187,7 +192,7 @@ def test_outside_changes_do_not_become_a_revision_automatically(tmp_path: Path) 
     _course(workspace)
     (workspace / "course.yaml").write_text("id: course-aaaaaaaaaaaa\nlectures: nope\n")
 
-    with pytest.raises(AutomaticRevisionBlocked, match="outside the app"):
+    with pytest.raises(AutomaticRevisionBlocked, match="outside Course Harness"):
         create_automatic_revision(workspace)
 
     status = sharing_status(workspace)
@@ -291,8 +296,9 @@ def test_fast_forward_refuses_uncommitted_edits_and_diverged_history(tmp_path: P
     _commit_elsewhere(tmp_path, remote, "Agents elsewhere")
     target = check_remote(workspace).refs["refs/heads/main"]
 
+    # Both sides changed the Course Plan.
     _edit(workspace)
-    with pytest.raises(FastForwardRefused, match="Save or undo"):
+    with pytest.raises(FastForwardRefused, match="same parts"):
         fast_forward_main(workspace, target)
 
     create_automatic_revision(workspace)
@@ -418,7 +424,9 @@ async def test_publish_with_notes_then_a_rejected_push_keeps_the_release(tmp_pat
     body = status.json()
     assert body["release_count"] == 1
     assert body["changes_since_release"] == 0
-    assert body["ahead"] >= 2
+    # The automatic Revision and the Release (its tag and files count as one change).
+    assert body["ahead"] == 2
+    assert body["behind"] == 1 and body["diverged"] is True
 
 
 def test_local_remotes_are_accepted_only_in_development(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -492,16 +500,16 @@ async def test_a_github_repository_is_created_with_gh_and_becomes_the_remote(
         "suggested_name": "course-agents-in-practice",
     }
     assert refused.status_code == 422
+    assert "repository name" in refused.json()["detail"][0]["msg"]
     assert created.status_code == 201, created.text
     assert created.json()["url"] == "git@github.com:octo/course-agents-in-practice.git"
     calls = [json.loads(line) for line in log.read_text().splitlines()]
     assert [
         "repo",
         "create",
-        "octo/course-agents-in-practice",
+        "github.com/octo/course-agents-in-practice",
         "--public",
-        "--description",
-        "Agents in practice",
+        "--description=Agents in practice",
     ] in calls
 
 
@@ -526,3 +534,234 @@ async def test_without_gh_only_a_pasted_url_is_offered(
     assert missing.json()["reason"] == "missing"
     assert out.json()["reason"] == "signed-out"
     assert created.status_code == 422
+
+
+def _edit_quiz_only(workspace: Path) -> None:
+    write_quiz(workspace, _quiz(LECTURES[0], "Is this new?"))
+    record_app_authored_state(workspace)
+
+
+@pytest.mark.anyio
+async def test_sync_receives_first_when_local_edits_touch_other_files(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    _course(workspace)
+    remote = _bare_remote(tmp_path, workspace)
+    _git(workspace, "push", "--quiet", "origin", "main")
+    _commit_elsewhere(tmp_path, remote, "Agents elsewhere")
+    _edit_quiz_only(workspace)
+
+    async with _client(_app(workspace, tmp_path)) as client:
+        synced = await client.post("/api/workspace/sync")
+
+    body = synced.json()
+    assert body["ok"] is True, body
+    assert body["received"] == 1
+    assert body["revision"]["summary"] == "Edited the Quiz for Lecture 1"
+    # The edit is saved on top of what was received, so the remote simply moves forward.
+    log = _git(remote, "log", "--format=%s", "main").splitlines()
+    assert log[:2] == ["Edited the Quiz for Lecture 1", "Rename the Course to Agents elsewhere"]
+    plan = read_course_plan(workspace)
+    assert plan is not None and plan.title == "Agents elsewhere"
+    assert read_current_state(workspace).drift == "clean"
+
+
+async def _diverge(tmp_path: Path, client: httpx2.AsyncClient) -> tuple[Path, Path, str]:
+    workspace = tmp_path / "course"
+    remote = tmp_path / "remote.git"
+    _commit_elsewhere(tmp_path, remote, "Agents elsewhere")
+    _edit(workspace)
+    synced = await client.post("/api/workspace/sync")
+    assert synced.json()["diverged"] is True, synced.text
+    return workspace, remote, synced.json()["revision"]["id"].removeprefix("revision-")
+
+
+@pytest.mark.anyio
+async def test_using_the_shared_copy_keeps_this_computers_version(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    _course(workspace)
+    _bare_remote(tmp_path, workspace)
+    _git(workspace, "push", "--quiet", "origin", "main")
+
+    async with _client(_app(workspace, tmp_path)) as client:
+        workspace, remote, local_head = await _diverge(tmp_path, client)
+        used = await client.post("/api/workspace/sync/use-shared-copy")
+
+    assert used.json()["ok"] is True, used.text
+    assert _git(workspace, "rev-parse", "main") == _git(remote, "rev-parse", "main")
+    plan = read_course_plan(workspace)
+    assert plan is not None and plan.title == "Agents elsewhere"
+    kept = _git(workspace, "for-each-ref", "--format=%(objectname)", KEPT_REF_PREFIX).split()
+    assert kept == [local_head]
+    state = read_current_state(workspace)
+    assert state.clean and state.drift == "clean"
+    assert used.json()["status"]["ahead"] == 0 and used.json()["status"]["behind"] == 0
+
+
+@pytest.mark.anyio
+async def test_replacing_the_shared_copy_never_touches_release_tags(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    _course(workspace)
+    _bare_remote(tmp_path, workspace)
+    _git(workspace, "push", "--quiet", "origin", "main")
+    remote = tmp_path / "remote.git"
+    # A Release tag someone shared stays as it is.
+    _git(remote, "update-ref", "refs/tags/course-release/kept-elsewhere", "main")
+
+    async with _client(_app(workspace, tmp_path)) as client:
+        workspace, remote, local_head = await _diverge(tmp_path, client)
+        replaced = await client.post("/api/workspace/sync/replace-shared-copy")
+
+    assert replaced.json()["ok"] is True, replaced.text
+    assert _git(remote, "rev-parse", "main").strip() == local_head
+    assert _git(remote, "tag", "--list").split() == ["course-release/kept-elsewhere"]
+
+
+def test_replacing_the_shared_copy_is_refused_when_it_moved_since_the_check(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "course"
+    _course(workspace)
+    remote = _bare_remote(tmp_path, workspace)
+    _git(workspace, "push", "--quiet", "origin", "main")
+    _commit_elsewhere(tmp_path, remote, "Agents elsewhere")
+    checked = check_remote(workspace).fetched_main
+    _commit_elsewhere(tmp_path, remote, "Agents moved again")
+    _edit(workspace)
+    create_automatic_revision(workspace)
+    backfill = backfill_release_files(workspace=workspace, release_data_root=tmp_path / "r")
+
+    pushed = push_workspace(
+        workspace, remote="the remote", backfill=backfill, replace_main_from=checked
+    )
+
+    assert pushed.ok is False
+    assert "Agents moved again" in _git(remote, "log", "-1", "--format=%s", "main")
+
+
+def test_the_background_check_never_prompts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "course"
+    _course(workspace)
+    _bare_remote(tmp_path, workspace)
+    monkeypatch.setenv("SSH_ASKPASS", "/usr/bin/ssh-askpass")
+    monkeypatch.setenv("GIT_ASKPASS", "/usr/bin/ssh-askpass")
+    calls: list[tuple[list[str], dict[str, str]]] = []
+    real_popen = subprocess.Popen
+
+    def recording_popen(command, *args, **kwargs):
+        calls.append((list(command), dict(kwargs["env"])))
+        return real_popen(command, *args, **kwargs)
+
+    monkeypatch.setattr(workspace_remote.subprocess, "Popen", recording_popen)
+    check_remote(workspace)
+    check_remote(workspace, interactive=True)
+
+    remote_calls = [call for call in calls if "ls-remote" in call[0]]
+    background, environment = remote_calls[0]
+    assert "credential.interactive=false" in background
+    assert "core.askPass=" in background
+    assert environment["SSH_ASKPASS_REQUIRE"] == "never"
+    assert environment["GCM_INTERACTIVE"] == "never"
+    assert "SSH_ASKPASS" not in environment and "GIT_ASKPASS" not in environment
+    sync_command, sync_environment = remote_calls[-1]
+    assert "credential.interactive=false" not in sync_command
+    assert sync_environment["GIT_ASKPASS"] == "/usr/bin/ssh-askpass"
+
+
+@pytest.mark.anyio
+async def test_releases_shared_from_elsewhere_count_and_their_ids_are_taken(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "course"
+    _course(workspace)
+    remote = _bare_remote(tmp_path, workspace)
+    async with _client(_app(workspace, tmp_path)) as client:
+        await client.post("/api/workspace/sync")
+        selection = {"lecture_ids": [LECTURES[0].id], "artifact_ids": []}
+        checked = await client.post(
+            "/api/releases/validate", json={"selection": selection, "waivers": []}
+        )
+        waivers = [
+            {"finding_id": finding["id"], "justification": "Worked examples."}
+            for finding in checked.json()["findings"]
+            if finding["severity"] == "warning"
+        ]
+        release = {"slug": "spring", "name": "Spring", "selection": selection, "waivers": waivers}
+        first = await client.post("/api/releases", json=release)
+        unshared = (await client.get("/api/workspace/sharing")).json()
+        await client.post("/api/workspace/sync")
+        # This computer forgets the Release, as if another computer had published it.
+        _git(workspace, "tag", "-d", "course-release/spring")
+        _git(workspace, "update-ref", "-d", "refs/course-harness/release-files/spring")
+        forgotten = (await client.get("/api/workspace/sharing")).json()
+        reused = await client.post("/api/releases", json=release)
+        rechecked = (await client.post("/api/workspace/remote/check")).json()
+
+    assert first.status_code == 201, first.text
+    assert unshared["ahead"] == 1
+    assert forgotten["release_count"] == 1
+    assert reused.status_code == 409
+    assert "already shared" in reused.json()["detail"]
+    # The check fetches the Release tag back; its Revisions are no longer changes.
+    assert _git(workspace, "tag", "--list").split() == ["course-release/spring"]
+    assert rechecked["release_count"] == 1
+    assert rechecked["changes_since_release"] == 0
+    assert (rechecked["ahead"], rechecked["behind"]) == (0, 0)
+    assert remote.exists()
+
+
+def test_a_release_whose_files_were_left_out_is_not_counted_forever(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    _course(workspace)
+    _bare_remote(tmp_path, workspace)
+    _git(workspace, "push", "--quiet", "origin", "main")
+    tree = _git(workspace, "mktree", input_text="").strip()
+    commit = _git(workspace, "commit-tree", tree, "-m", "files").strip()
+    _git(workspace, "update-ref", "refs/course-harness/release-files/broken", commit)
+    _git(workspace, "update-ref", "refs/tags/course-release/broken", "main")
+    _git(workspace, "push", "--quiet", "origin", "refs/tags/course-release/broken")
+    check_remote(workspace)
+    assert sharing_status(workspace).ahead == 1
+
+    workspace_remote._remember_skipped_files(workspace, ["broken"])
+
+    assert sharing_status(workspace).ahead == 0
+    assert sharing_status(workspace).skipped_files == ["broken"]
+
+
+async def _publish(client: httpx2.AsyncClient, slug: str) -> httpx2.Response:
+    selection = {"lecture_ids": [LECTURES[0].id], "artifact_ids": []}
+    checked = await client.post(
+        "/api/releases/validate", json={"selection": selection, "waivers": []}
+    )
+    waivers = [
+        {"finding_id": finding["id"], "justification": "Worked examples."}
+        for finding in checked.json()["findings"]
+        if finding["severity"] == "warning"
+    ]
+    return await client.post(
+        "/api/releases",
+        json={"slug": slug, "name": slug.title(), "selection": selection, "waivers": waivers},
+    )
+
+
+@pytest.mark.anyio
+async def test_a_manifest_from_a_newer_harness_names_the_upgrade(tmp_path: Path) -> None:
+    workspace = tmp_path / "course"
+    _course(workspace)
+    async with _client(_app(workspace, tmp_path)) as client:
+        assert (await _publish(client, "today")).status_code == 201
+    release = read_release(workspace, "today")
+    assert release is not None
+    manifest = release.model_dump(mode="json") | {
+        "slug": "future",
+        "tag": "course-release/future",
+        "from_the_future": True,
+    }
+    release_service._create_annotated_tag(
+        workspace, "course-release/future", release.commit_oid, canonical_json(manifest)
+    )
+
+    with pytest.raises(ReleaseError, match="newer Course Harness"):
+        read_release(workspace, "future")

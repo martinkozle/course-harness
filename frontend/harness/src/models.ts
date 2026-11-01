@@ -525,6 +525,9 @@ export type SharingStatus = {
 	behind: number | null;
 	checked_at: string | null;
 	check_error: string | null;
+	diverged: boolean;
+	remote_release_slugs: string[];
+	skipped_files: string[];
 };
 
 export type SyncResult = {
@@ -535,6 +538,8 @@ export type SyncResult = {
 	revision: CourseRevision | null;
 	received: number;
 	status: SharingStatus | null;
+	diverged: boolean;
+	notices: string[];
 };
 
 export type RemoteSettings = {

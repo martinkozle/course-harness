@@ -6,9 +6,22 @@ export async function responseErrorDetail(
 ): Promise<{ message: string; code: string | null }> {
 	try {
 		const payload = (await response.json()) as {
-			detail?: string | { message?: string; code?: string };
+			detail?:
+				| string
+				| { message?: string; code?: string }
+				| { msg?: string }[];
 		};
 		const detail = payload.detail;
+		// Request validation lists one message per field.
+		if (Array.isArray(detail)) {
+			const messages = detail
+				.map((item) => item.msg?.replace(/^Value error, /, ""))
+				.filter(Boolean);
+			return {
+				message: messages.length ? messages.join(" ") : fallbackError,
+				code: null,
+			};
+		}
 		if (typeof detail === "object" && detail !== null) {
 			return {
 				message: detail.message ?? fallbackError,

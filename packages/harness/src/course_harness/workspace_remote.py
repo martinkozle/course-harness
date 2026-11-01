@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field
 
 from course_harness.core.release_files import RELEASE_FILES_REF_PREFIX
+from course_harness.core.releases import ReleaseError, read_release
 from course_harness.release_service import ReleaseFilesBackfill
 from course_harness.workspace_history import list_revisions
 
@@ -50,6 +51,7 @@ _HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\
 _URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s@]*@")
 _URL_PASSWORD = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^/\s:@]*):[^/\s@]*@")
 _OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
+_SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?")
 MAX_REMOTE_REFS = 10_000
 _LOCAL_HINT = "To use a local folder, run `git remote add origin <path>` in a terminal."
 # Environment that would point Git at another repository, object store or configuration.
@@ -107,7 +109,11 @@ class RemoteCheck(BaseModel):
     checked_at: str
     # Ref name to object ID for ``main``, the Release tags and the Release files refs.
     refs: dict[str, str] = Field(default_factory=dict)
+    # The remote's ``main`` as fetched into ``REMOTE_MAIN``; Sync moves forward only to this.
+    fetched_main: str | None = None
     error: str | None = None
+    # Releases whose files ref the last push left out because it does not match the manifest.
+    skipped_files: list[str] = Field(default_factory=list)
 
 
 def validate_remote_url(url: str) -> str:
@@ -213,6 +219,7 @@ def push_workspace(
     remote: str,
     backfill: ReleaseFilesBackfill,
     timeout: float = PUSH_TIMEOUT_SECONDS,
+    replace_main_from: str | None = None,
 ) -> PushResult:
     """Push the branch, the Release tags and the Release files refs; see ``PUSH_COMMAND``.
 
@@ -225,7 +232,18 @@ def push_workspace(
         else [f"{RELEASE_FILES_REF_PREFIX}*"]
     )
     refspecs = [f"refs/heads/{BRANCH}", RELEASE_TAGS, *files]
-    ok, message = _run_push(workspace, refspecs, remote=remote, timeout=timeout)
+    # Replacing the shared ``main`` is allowed only while it still is the checked commit; the
+    # Release tags and files refs are never forced.
+    lease = (
+        [f"--force-with-lease=refs/heads/{BRANCH}:{replace_main_from}"]
+        if replace_main_from is not None
+        else []
+    )
+    if replace_main_from is not None and not _OID.fullmatch(replace_main_from):
+        raise WorkspaceRemoteError("The shared copy must be checked first.")
+    ok, message = _run_push(workspace, [*lease, *refspecs], remote=remote, timeout=timeout)
+    if ok:
+        _remember_skipped_files(workspace, backfill.invalid)
     return PushResult(
         ok=ok,
         remote=remote,
@@ -240,7 +258,15 @@ def _run_push(
 ) -> tuple[bool, str]:
     returncode, stdout, stderr = _run_network_git(
         workspace,
-        ["-c", "protocol.ext.allow=never", "push", "--porcelain", REMOTE_NAME, *refspecs],
+        [
+            "-c",
+            "protocol.ext.allow=never",
+            "push",
+            "--porcelain",
+            *[item for item in refspecs if item.startswith("--")],
+            REMOTE_NAME,
+            *[item for item in refspecs if not item.startswith("--")],
+        ],
         timeout=timeout,
         what="push",
     )
@@ -252,21 +278,37 @@ def _run_push(
 
 
 def _run_network_git(
-    workspace: Path, arguments: list[str], *, timeout: float, what: str
+    workspace: Path,
+    arguments: list[str],
+    *,
+    timeout: float,
+    what: str,
+    interactive: bool = True,
 ) -> tuple[int, str, str]:
-    """Run Git against the remote as the Course Author would, but never on a hidden prompt."""
+    """Run Git against the remote as the Course Author would, but never on a hidden prompt.
+
+    A background (non-interactive) run also never opens a sign-in window: no askpass helper,
+    no interactive credential helper, no Git Credential Manager dialog.
+    """
+    quiet = [] if interactive else ["-c", "core.askPass=", "-c", "credential.interactive=false"]
     command = [
         "git",
         "-c",
         "core.hooksPath=/dev/null",
         "-c",
         "core.fsmonitor=false",
+        *quiet,
         *arguments,
     ]
     environment = {
         key: value for key, value in os.environ.items() if key not in _REDIRECTING_ENVIRONMENT
     }
     environment["GIT_TERMINAL_PROMPT"] = "0"
+    if not interactive:
+        environment.pop("SSH_ASKPASS", None)
+        environment.pop("GIT_ASKPASS", None)
+        environment["SSH_ASKPASS_REQUIRE"] = "never"
+        environment["GCM_INTERACTIVE"] = "never"
     try:
         # A new session has no controlling terminal, so nothing can wait on a hidden prompt.
         process = subprocess.Popen(
@@ -302,11 +344,16 @@ def _raw_remote_url(workspace: Path) -> str | None:
     return result.stdout.decode("utf-8", errors="replace").strip() or None
 
 
-def check_remote(workspace: Path, *, timeout: float = CHECK_TIMEOUT_SECONDS) -> RemoteCheck:
-    """Learn which shared refs the remote has, and fetch its ``main`` to compare with.
+def check_remote(
+    workspace: Path, *, timeout: float = CHECK_TIMEOUT_SECONDS, interactive: bool = False
+) -> RemoteCheck:
+    """Learn which shared refs the remote has, and fetch its ``main`` and new Release tags.
 
-    Only ``main`` is downloaded; Release tags and files refs are compared by object ID, so a
-    check never downloads Release files. The result is kept for ``read_remote_check``.
+    ``main`` goes to ``REMOTE_MAIN``. Release tags that this computer lacks are fetched, never
+    forced, so a Release published elsewhere counts here; a local tag is never replaced.
+    Release files refs are only compared by object ID, so a check never downloads Release
+    files. The result is kept for ``read_remote_check``. Background checks are
+    non-interactive; Sync's own check may ask for credentials the usual way.
     """
     list_revisions(workspace)
     url = _raw_remote_url(workspace)
@@ -314,10 +361,17 @@ def check_remote(workspace: Path, *, timeout: float = CHECK_TIMEOUT_SECONDS) -> 
         raise WorkspaceRemoteError("Set a Git remote before checking it.")
     previous = read_remote_check(workspace)
     checked_at = datetime.now(UTC).isoformat()
+    skipped = previous.skipped_files if previous is not None else []
 
     def failed(message: str) -> RemoteCheck:
-        refs = previous.refs if previous is not None else {}
-        check = RemoteCheck(url=url, checked_at=checked_at, refs=refs, error=message)
+        check = RemoteCheck(
+            url=url,
+            checked_at=checked_at,
+            refs=previous.refs if previous is not None else {},
+            fetched_main=previous.fetched_main if previous is not None else None,
+            error=message,
+            skipped_files=skipped,
+        )
         _write_remote_check(workspace, check)
         return check
 
@@ -326,6 +380,7 @@ def check_remote(workspace: Path, *, timeout: float = CHECK_TIMEOUT_SECONDS) -> 
         ["-c", "protocol.ext.allow=never", "ls-remote", "--refs", REMOTE_NAME],
         timeout=timeout,
         what="check",
+        interactive=interactive,
     )
     if returncode != 0:
         return failed(_trim(redact(stderr)) or "Git could not reach the remote.")
@@ -334,13 +389,24 @@ def check_remote(workspace: Path, *, timeout: float = CHECK_TIMEOUT_SECONDS) -> 
         oid, _, name = line.partition("\t")
         if not _OID.fullmatch(oid):
             continue
-        if name == f"refs/heads/{BRANCH}" or name.startswith(
-            ("refs/tags/course-release/", RELEASE_FILES_REF_PREFIX)
+        if name == f"refs/heads/{BRANCH}" or (
+            name.startswith(("refs/tags/course-release/", RELEASE_FILES_REF_PREFIX))
+            and _SLUG.fullmatch(name.rsplit("/", 1)[1])
         ):
             refs[name] = oid
         if len(refs) > MAX_REMOTE_REFS:
             return failed("The remote has too many refs to compare.")
+    local_tags = set(_local_ref_names(workspace, "refs/tags/course-release/"))
+    new_tags = sorted(
+        name
+        for name in refs
+        if name.startswith("refs/tags/course-release/") and name not in local_tags
+    )
+    refspecs = [f"{name}:{name}" for name in new_tags]
     if f"refs/heads/{BRANCH}" in refs:
+        refspecs.insert(0, f"+refs/heads/{BRANCH}:{REMOTE_MAIN}")
+    fetched_main: str | None = None
+    if refspecs:
         returncode, _stdout, stderr = _run_network_git(
             workspace,
             [
@@ -353,21 +419,57 @@ def check_remote(workspace: Path, *, timeout: float = CHECK_TIMEOUT_SECONDS) -> 
                 "fetch",
                 "--quiet",
                 "--no-tags",
+                "--refmap=",
                 "--no-write-fetch-head",
                 "--no-recurse-submodules",
                 REMOTE_NAME,
-                f"+refs/heads/{BRANCH}:{REMOTE_MAIN}",
+                *refspecs,
             ],
             timeout=timeout,
             what="check",
+            interactive=interactive,
         )
         if returncode != 0:
             return failed(_trim(redact(stderr)) or "Git could not fetch from the remote.")
+        # A Release tag from the remote is kept only if it is a valid Release here too.
+        for name in new_tags:
+            try:
+                valid = read_release(workspace, name.rsplit("/", 1)[1]) is not None
+            except ReleaseError:
+                valid = False
+            if not valid:
+                _config_git(workspace, "update-ref", "-d", name)
+    if f"refs/heads/{BRANCH}" in refs:
+        resolved = _config_git(workspace, "rev-parse", "--verify", "--quiet", REMOTE_MAIN)
+        fetched_main = resolved.stdout.decode("ascii", errors="replace").strip() or None
+        if fetched_main is None or not _OID.fullmatch(fetched_main):
+            return failed("Git could not fetch from the remote.")
+        # What was fetched is what Sync compares with, even if the remote moved since.
+        refs[f"refs/heads/{BRANCH}"] = fetched_main
     else:
         _config_git(workspace, "update-ref", "-d", REMOTE_MAIN)
-    check = RemoteCheck(url=url, checked_at=checked_at, refs=refs)
+    check = RemoteCheck(
+        url=url,
+        checked_at=checked_at,
+        refs=refs,
+        fetched_main=fetched_main,
+        skipped_files=skipped,
+    )
     _write_remote_check(workspace, check)
     return check
+
+
+def _local_ref_names(workspace: Path, prefix: str) -> list[str]:
+    result = _config_git(workspace, "for-each-ref", "--format=%(refname)", prefix)
+    if result.returncode != 0:
+        raise WorkspaceRemoteError("The Workspace's Git refs cannot be read")
+    return result.stdout.decode("utf-8", errors="replace").split()
+
+
+def _remember_skipped_files(workspace: Path, slugs: list[str]) -> None:
+    check = read_remote_check(workspace)
+    if check is not None and check.skipped_files != slugs:
+        _write_remote_check(workspace, check.model_copy(update={"skipped_files": slugs}))
 
 
 def read_remote_check(workspace: Path) -> RemoteCheck | None:

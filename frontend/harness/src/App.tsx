@@ -436,7 +436,24 @@ function CourseWorkspace({
 		return map;
 	}, [course]);
 
-	const sharing = useSharing(Boolean(course));
+	// After Sync saved or received Revisions, read the whole Course again.
+	const reloadCourse = useCallback(() => {
+		setReleaseVersion((version) => version + 1);
+		void Promise.all([
+			refreshCurrentState(),
+			loadCourse().catch(() => undefined),
+			refreshPresentations(),
+			refreshQuizzes(),
+			refreshSources(),
+		]);
+	}, [
+		refreshCurrentState,
+		loadCourse,
+		refreshPresentations,
+		refreshQuizzes,
+		refreshSources,
+	]);
+	const sharing = useSharing(Boolean(course), reloadCourse);
 	const { refresh: refreshSharing } = sharing;
 	// Every change to Current State can change what Publish and Sync count.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: currentState is the trigger

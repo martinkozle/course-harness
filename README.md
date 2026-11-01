@@ -80,9 +80,14 @@ network you trust.
   ```
 
   Each Release's files travel in their own ref, never in the Course branch. Sending
-  from the app also records those refs for Releases published by earlier versions. Sync only
-  receives changes when your Course can simply move forward to them; otherwise it explains why
-  and changes nothing.
+  from the app also records those refs for Releases published by earlier versions. Sync
+  receives changes only when your Course can simply move forward to them; when this computer
+  and the shared copy both changed, it changes nothing and lets you choose which version to
+  keep.
+
+  Upgrade any Course Harness Classroom that serves your Course before you publish with a newer
+  Course Harness: a Classroom refuses Releases whose manifest has fields it does not know (this
+  version adds release notes).
 - **History**: see and restore earlier Course Revisions and Releases.
 
 <table>

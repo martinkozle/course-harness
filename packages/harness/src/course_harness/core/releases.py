@@ -354,7 +354,16 @@ def read_verified_release(repository: Path, slug: str) -> CourseRelease | None:
         if headers.get(b"type") != b"commit" or not OID_PATTERN.fullmatch(revision):
             raise ValueError
         release = CourseRelease.model_validate_json(message)
-    except (KeyError, UnicodeError, ValidationError, ValueError) as error:
+    except ValidationError as error:
+        # Unknown fields are never ignored: the manifest is verified as exact canonical JSON
+        # of what this reader understands, and a field it does not know might change what the
+        # Release means. Say plainly that the reader is older than the publisher.
+        if error.errors() and all(item["type"] == "extra_forbidden" for item in error.errors()):
+            raise ReleaseError(
+                "Release was published by a newer Course Harness; upgrade this reader to use it"
+            ) from error
+        raise ReleaseError("Release tag does not contain a valid manifest") from error
+    except (KeyError, UnicodeError, ValueError) as error:
         raise ReleaseError("Release tag does not contain a valid manifest") from error
     if (
         internal_tag != tag

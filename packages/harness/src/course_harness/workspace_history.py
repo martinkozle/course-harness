@@ -2226,34 +2226,21 @@ class FastForwardRefused(ValueError):
     """Course history cannot simply move forward to the other commit; nothing was changed."""
 
 
-@_serialized
-def fast_forward_main(workspace: Path, target: str) -> int:
-    """Move ``main`` and the canonical files forward to ``target``, a descendant of ``main``.
+class HistoryDiverged(FastForwardRefused):
+    """This computer and the shared copy each have Revisions the other lacks."""
 
-    Current State must be clean and provenance-clean, so no uncommitted work can be lost, and
-    ``target`` must contain ``main``. Returns how many Course Revisions were added.
-    """
-    _require_private_workspace_repository(workspace)
-    if not OID_PATTERN.fullmatch(target):
+
+KEPT_REF_PREFIX = "refs/course-harness/kept/"
+
+
+def _is_ancestor(workspace: Path, ancestor: str, descendant: str) -> bool:
+    result = _git_result(workspace, "merge-base", "--is-ancestor", ancestor, descendant)
+    if result.returncode not in {0, 1}:
         raise WorkspaceHistoryError(HISTORY_UNSAFE)
-    _require_commit(workspace, target)
-    state = read_current_state(workspace)
-    if not state.clean or state.drift == "drift":
-        raise FastForwardRefused("Save or undo your changes before receiving others.")
-    head = _head_oid(workspace)
-    if head == target:
-        return 0
-    if head is not None:
-        if _git_result(workspace, "merge-base", "--is-ancestor", target, head).returncode == 0:
-            # Only this computer has new Revisions; there is nothing to receive.
-            return 0
-        ancestor = _git_result(workspace, "merge-base", "--is-ancestor", head, target)
-        if ancestor.returncode == 1:
-            raise FastForwardRefused(
-                "This computer and the shared copy both have changes the other lacks."
-            )
-        if ancestor.returncode != 0:
-            raise WorkspaceHistoryError(HISTORY_UNSAFE)
+    return result.returncode == 0
+
+
+def _first_parent_count(workspace: Path, target: str, head: str | None) -> int:
     count = _git_result(
         workspace,
         "rev-list",
@@ -2263,37 +2250,130 @@ def fast_forward_main(workspace: Path, target: str) -> int:
         *([f"^{head}"] if head is not None else []),
     )
     try:
-        added = int(count.stdout.decode("ascii", errors="strict").strip())
+        return int(count.stdout.decode("ascii", errors="strict").strip())
     except (UnicodeError, ValueError) as error:
         raise WorkspaceHistoryError(HISTORY_UNSAFE) from error
+
+
+def _move_main(
+    workspace: Path,
+    target: str,
+    head: str | None,
+    *,
+    keep_paths: set[str],
+) -> None:
+    """Point ``main`` at ``target`` and write its canonical files, except ``keep_paths``.
+
+    ``keep_paths`` are uncommitted edits that ``target`` does not touch; they stay as they are.
+    Provenance follows the new state. When nothing is kept, provenance is prepared before
+    ``main`` moves and finished after, as for a new Revision, so a crash at any point either
+    leaves the old state or recovers the new one. With kept edits, a crash between moving
+    ``main`` and recording provenance shows those files as Workspace Drift to review.
+    """
     target_blobs = _tree_blobs(workspace, target)
     if any(entry.mode == "120000" for entry in target_blobs.values()):
         raise WorkspaceHistoryError(HISTORY_UNSAFE)
-    if not _validate_captured_blobs(workspace, target_blobs, set(target_blobs)).valid:
-        raise FastForwardRefused("The shared copy of the Course has problems to fix first.")
     _recovery_ref, snapshot = _begin_transaction(workspace)
     snapshot_blobs = _tree_blobs(workspace, snapshot)
+    result_blobs = {path: entry for path, entry in target_blobs.items() if path not in keep_paths}
+    for path in keep_paths:
+        if path in snapshot_blobs:
+            result_blobs[path] = snapshot_blobs[path]
     changed_paths = {
         path
-        for path in snapshot_blobs.keys() | target_blobs.keys()
-        if snapshot_blobs.get(path) != target_blobs.get(path)
+        for path in snapshot_blobs.keys() | result_blobs.keys()
+        if snapshot_blobs.get(path) != result_blobs.get(path)
     }
     try:
+        if not _validate_captured_blobs(workspace, result_blobs, set(target_blobs)).valid:
+            raise FastForwardRefused("The shared copy of the Course has problems to fix first.")
         if changed_paths:
             apply_canonical_mutation(
                 workspace,
                 expected={
                     path: _canonical_file(snapshot_blobs.get(path)) for path in changed_paths
                 },
-                updates={path: _canonical_file(target_blobs.get(path)) for path in changed_paths},
+                updates={path: _canonical_file(result_blobs.get(path)) for path in changed_paths},
             )
+        expected = _fingerprints(result_blobs)
+        if not keep_paths:
+            _write_pending_provenance(workspace, "prepared", expected, target, head)
         _git(workspace, "update-ref", "refs/heads/main", target, head or "0" * len(target))
-        _complete_transaction(workspace, snapshot)
     except Exception:
-        _rollback_transaction(workspace, snapshot, expected_current=target_blobs)
+        _rollback_transaction(workspace, snapshot, expected_current=result_blobs)
         raise
-    payload = json.dumps(
-        {"version": 1, "canonical": _fingerprints(target_blobs)}, separators=(",", ":")
-    )
-    _write_blob(workspace / ".git", PROVENANCE_FILE, payload.encode("ascii"))
+    if keep_paths:
+        payload = json.dumps({"version": 1, "canonical": expected}, separators=(",", ":"))
+        _write_blob(workspace / ".git", PROVENANCE_FILE, payload.encode("ascii"))
+    else:
+        _persist_committed_provenance(workspace, target, expected)
+    _complete_transaction(workspace, snapshot)
+
+
+@_serialized
+def fast_forward_main(workspace: Path, target: str) -> int:
+    """Move ``main`` and the canonical files forward to ``target``, a descendant of ``main``.
+
+    Uncommitted edits are kept when ``target`` changes none of their files; otherwise nothing
+    changes. Returns how many Course Revisions were added.
+    """
+    _require_private_workspace_repository(workspace)
+    if not OID_PATTERN.fullmatch(target):
+        raise WorkspaceHistoryError(HISTORY_UNSAFE)
+    _require_commit(workspace, target)
+    state = read_current_state(workspace)
+    if state.drift == "drift":
+        raise FastForwardRefused(
+            "Files were changed outside Course Harness; review them in History first."
+        )
+    head = _head_oid(workspace)
+    if head == target or (head is not None and _is_ancestor(workspace, target, head)):
+        # Only this computer has new Revisions; there is nothing to receive.
+        return 0
+    if head is not None and not _is_ancestor(workspace, head, target):
+        raise HistoryDiverged(
+            "This computer and the shared copy both have changes the other lacks."
+        )
+    local_paths = {change.path for change in state.changes}
+    if local_paths:
+        if not state.validation.valid:
+            raise FastForwardRefused("Your changes have problems to fix first.")
+        head_blobs = _tree_blobs(workspace, head) if head is not None else {}
+        target_blobs = _tree_blobs(workspace, target)
+        incoming = {
+            path
+            for path in head_blobs.keys() | target_blobs.keys()
+            if head_blobs.get(path) != target_blobs.get(path)
+        }
+        if incoming & local_paths:
+            raise FastForwardRefused(
+                "You and the shared copy changed the same parts of the Course."
+            )
+    added = _first_parent_count(workspace, target, head)
+    _move_main(workspace, target, head, keep_paths=local_paths)
     return added
+
+
+@_serialized
+def use_shared_main(workspace: Path, target: str) -> str | None:
+    """Replace this computer's ``main`` with ``target``, keeping the old one under a ref.
+
+    Current State must be clean (save it as a Revision first). Returns the ref that keeps the
+    replaced Revisions, or ``None`` when ``main`` already contained ``target``'s history.
+    """
+    _require_private_workspace_repository(workspace)
+    if not OID_PATTERN.fullmatch(target):
+        raise WorkspaceHistoryError(HISTORY_UNSAFE)
+    _require_commit(workspace, target)
+    state = read_current_state(workspace)
+    if not state.clean or state.drift == "drift":
+        raise FastForwardRefused("Save or undo your changes first.")
+    head = _head_oid(workspace)
+    if head == target:
+        return None
+    kept: str | None = None
+    if head is not None and not _is_ancestor(workspace, head, target):
+        kept = f"{KEPT_REF_PREFIX}{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-{head[:12]}"
+        _git(workspace, "update-ref", kept, head, "0" * len(head))
+    _move_main(workspace, target, head, keep_paths=set())
+    return kept

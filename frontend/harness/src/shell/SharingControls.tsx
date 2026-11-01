@@ -1,4 +1,6 @@
+import { ConfirmDialog } from "@course-harness/ui";
 import {
+	AlertTriangle,
 	ArrowDown,
 	ArrowUp,
 	Check,
@@ -8,14 +10,17 @@ import {
 	Sparkles,
 	X,
 } from "lucide-react";
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import type { SharingStatus } from "../models";
-import type { Sharing } from "../useSharing";
+import type { Sharing, SyncAction } from "../useSharing";
 
 function plural(count: number, one: string, many = `${one}s`) {
 	return `${count} ${count === 1 ? one : many}`;
 }
+
+/** Shown in the header and in Publish while the shared copy has Revisions this computer lacks. */
+export const SYNC_FIRST = "Sync first to get the latest shared copy";
 
 /** "3 changes since last release", "Released · up to date" or "Not released yet". */
 export function releaseStatusText(status: SharingStatus): string {
@@ -45,37 +50,39 @@ export function syncView(
 	if (!status?.remote_url) {
 		return {
 			label: "Sync: set up sharing first",
-			title: "Share your Course to GitHub to sync it",
+			title: "Share your Course to a Git host to sync it",
 			inSync: false,
 		};
 	}
 	const where = status.remote_label ?? status.remote_url;
-	const problem = status.check_error
-		? ` · Couldn't check ${where}: ${status.check_error}`
-		: "";
+	// A failed background check is part of the name, so screen readers hear it too.
+	const problem = status.check_error ? `; couldn't check ${where}` : "";
+	const reason = status.check_error ? `: ${status.check_error}` : "";
 	if (syncing)
 		return { label: "Syncing…", title: `Syncing with ${where}`, inSync: false };
 	if (status.ahead === null || status.behind === null) {
 		return {
-			label: `Sync with ${where}`,
-			title: `Sync with ${where}${problem || " · not checked yet"}`,
+			label: `Sync with ${where}${problem}`,
+			title: `Sync with ${where}${problem ? `${problem}${reason}` : " · not checked yet"}`,
 			inSync: false,
 		};
 	}
 	if (status.ahead === 0 && status.behind === 0) {
 		return {
-			label: `In sync with ${where}`,
-			title: `Up to date with ${where} · ${minutesAgo(status.checked_at)}${problem}`,
+			label: `In sync with ${where}${problem}`,
+			title: `Up to date with ${where} · ${minutesAgo(status.checked_at)}${problem}${reason}`,
 			inSync: true,
 		};
 	}
 	const counts = `${plural(status.ahead, "change")} to send, ${status.behind} to receive`;
 	return {
-		label: `Sync: ${counts}`,
-		title: `Sync with ${where}: ${counts} · ${minutesAgo(status.checked_at)}${problem}`,
+		label: `Sync: ${counts}${problem}`,
+		title: `Sync with ${where}: ${counts} · ${minutesAgo(status.checked_at)}${problem}${reason}`,
 		inSync: false,
 	};
 }
+
+type Choice = Exclude<SyncAction, "sync">;
 
 /** Publish with its release status, and a Sync button with what it would send and receive. */
 export function SharingControls({
@@ -93,7 +100,10 @@ export function SharingControls({
 	const view = syncView(status, syncing);
 	const popoverId = useId();
 	const popoverRef = useRef<HTMLDivElement>(null);
+	const [choice, setChoice] = useState<Choice | null>(null);
 	const counts = status?.ahead !== null && status?.ahead !== undefined;
+	const behind = (status?.behind ?? 0) > 0;
+	const where = status?.remote_label ?? "the shared copy";
 
 	useEffect(() => {
 		if (failure) popoverRef.current?.focus();
@@ -108,6 +118,11 @@ export function SharingControls({
 		void sharing.sync();
 	}
 
+	async function confirm(action: Choice) {
+		setChoice(null);
+		await sharing.sync(action);
+	}
+
 	return (
 		<div className="sharing-controls">
 			<div className="sharing-publish">
@@ -116,8 +131,18 @@ export function SharingControls({
 					<span className="sharing-publish-label">Publish</span>
 				</button>
 				{status ? (
-					<span className="sharing-status" aria-live="polite">
-						{releaseStatusText(status)}
+					<span
+						className={`sharing-status${behind ? " is-warning" : ""}`}
+						aria-live="polite"
+					>
+						{behind ? (
+							<>
+								<AlertTriangle aria-hidden="true" />
+								<span className="sharing-status-text">{SYNC_FIRST}</span>
+							</>
+						) : (
+							releaseStatusText(status)
+						)}
 					</span>
 				) : null}
 			</div>
@@ -163,14 +188,21 @@ export function SharingControls({
 						ref={popoverRef}
 						id={popoverId}
 						className="sync-popover"
-						role="alert"
+						role="dialog"
+						aria-labelledby={`${popoverId}-title`}
 						tabIndex={-1}
 						onKeyDown={(event) => {
 							if (event.key === "Escape") sharing.dismissFailure();
 						}}
 					>
 						<div className="sync-popover-head">
-							<strong>Sync didn't finish</strong>
+							<strong id={`${popoverId}-title`}>
+								{failure.ok
+									? "Synced, with something to check"
+									: failure.diverged
+										? "Choose which version to keep"
+										: "Sync didn't finish"}
+							</strong>
 							<button
 								type="button"
 								className="icon-btn"
@@ -180,7 +212,10 @@ export function SharingControls({
 								<X aria-hidden="true" />
 							</button>
 						</div>
-						<p>{failure.message}</p>
+						<p role={failure.ok ? "status" : "alert"}>{failure.message}</p>
+						{failure.notices.map((notice) => (
+							<p key={notice}>{notice}</p>
+						))}
 						{failure.findings.length > 0 ? (
 							<ul className="sync-findings">
 								{failure.findings.map((finding) => (
@@ -201,24 +236,91 @@ export function SharingControls({
 								))}
 							</ul>
 						) : null}
+						{failure.diverged ? (
+							<ul className="sync-choices">
+								<li>
+									<button
+										type="button"
+										className="btn btn-small"
+										onClick={() => setChoice("use-shared-copy")}
+									>
+										Use the shared copy
+									</button>
+									<span className="meta">
+										Your Course here becomes the version on {where}. This
+										computer's version is kept as a backup.
+									</span>
+								</li>
+								<li>
+									<button
+										type="button"
+										className="btn btn-small"
+										onClick={() => setChoice("replace-shared-copy")}
+									>
+										Replace the shared copy with this computer's
+									</button>
+									<span className="meta">
+										{where} gets your version. Changes made elsewhere since your
+										last Sync are no longer shared; releases stay.
+									</span>
+								</li>
+							</ul>
+						) : null}
 						{failure.detail ? (
 							<details className="sync-detail">
 								<summary>Details</summary>
 								<pre>{failure.detail}</pre>
 							</details>
 						) : null}
-						<div className="sync-popover-actions">
-							<button
-								type="button"
-								className="btn btn-small btn-primary"
-								onClick={() => void sharing.sync()}
-							>
-								Retry
-							</button>
-						</div>
+						{!failure.ok && !failure.diverged ? (
+							<div className="sync-popover-actions">
+								<button
+									type="button"
+									className="btn btn-small btn-primary"
+									onClick={() => void sharing.sync()}
+								>
+									Retry
+								</button>
+							</div>
+						) : null}
 					</div>
 				) : null}
 			</div>
+			{choice === "use-shared-copy" ? (
+				<ConfirmDialog
+					title="Use the shared copy?"
+					confirmLabel="Use the shared copy"
+					danger={false}
+					onConfirm={() => void confirm("use-shared-copy")}
+					onCancel={() => setChoice(null)}
+				>
+					<p>
+						Your Course on this computer will become the version on {where}.
+					</p>
+					<p>
+						Nothing is lost: this computer's version, with your latest changes,
+						is kept as a backup in the Course folder.
+					</p>
+				</ConfirmDialog>
+			) : null}
+			{choice === "replace-shared-copy" ? (
+				<ConfirmDialog
+					title="Replace the shared copy?"
+					confirmLabel="Replace the shared copy"
+					onConfirm={() => void confirm("replace-shared-copy")}
+					onCancel={() => setChoice(null)}
+				>
+					<p>
+						{where} will get this computer's version of the Course. Changes made
+						elsewhere since your last Sync will no longer be part of the shared
+						copy.
+					</p>
+					<p>
+						Releases are never removed or changed. If someone shares again
+						before you confirm, nothing is replaced.
+					</p>
+				</ConfirmDialog>
+			) : null}
 		</div>
 	);
 }

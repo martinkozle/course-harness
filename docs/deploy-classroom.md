@@ -276,6 +276,12 @@ docker compose up -d --build
 docker image prune
 ```
 
+Upgrade the Classroom before Course Authors publish Releases with a newer Course Harness. A
+Classroom reads Release manifests strictly and refuses one with fields it does not know (its
+sync message then says the Release came from a newer Course Harness), so it keeps serving the
+previous Release until it is upgraded. For example, Releases with notes ("What changed") need a
+Classroom that knows that field.
+
 The Classroom migrates its SQLite store on start, so back it up first. The base images are pinned
 by digest, so a rebuild changes them only when the repository does; rebuild without the cache now
 and then (`docker compose build --no-cache`) to pick up Debian security updates for LibreOffice

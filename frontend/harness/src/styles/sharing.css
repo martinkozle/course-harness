@@ -153,9 +153,57 @@
 	overflow-wrap: anywhere;
 }
 
+.sharing-status.is-warning {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--warning);
+}
+
+.sharing-status.is-warning svg {
+	flex: none;
+	width: 14px;
+	height: 14px;
+}
+
+.sync-choices {
+	display: grid;
+	gap: 10px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.sync-choices li {
+	display: grid;
+	justify-items: start;
+	gap: 4px;
+}
+
+.remote-setup-checking {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.remote-setup-checking svg {
+	width: 16px;
+	height: 16px;
+}
+
 @media (max-width: 1180px) {
-	.sharing-status {
+	.sharing-status:not(.is-warning) {
 		display: none;
+	}
+
+	/* The warning keeps its icon; the words stay for screen readers. */
+	.sharing-status-text {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
 	}
 }
 
