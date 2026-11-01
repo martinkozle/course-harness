@@ -111,14 +111,15 @@ export function ExercisesCanvas({
 									<button
 										type="button"
 										className="btn btn-quiet btn-small"
+										aria-label={`Write a Quiz for ${lecture.title}`}
 										disabled={busy}
 										onClick={() =>
 											onAskAgent(
 												`Write a Quiz for “${lecture.title}” grounded in the course Sources.`,
 												{
 													key: `quiz-${lecture.id}`,
-													label: `Quiz · Lecture ${number}`,
-													instruction: `I'm reviewing the Quiz for the Lecture "${lecture.title}"`,
+													label: `Lecture ${number} · ${lecture.title}`,
+													instruction: `I want a Quiz for the Lecture "${lecture.title}"`,
 												},
 											)
 										}

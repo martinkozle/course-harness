@@ -134,25 +134,20 @@ RESEARCH_GUIDANCE = (
 
 QUIZ_GUIDANCE = (
     "Quizzes: each Lecture can have one Quiz of single-answer multiple-choice Questions that "
-    "Learners take after the Lecture. Use read_quiz to see a Quiz with its IDs, save_quiz to "
-    "create or revise one, and delete_quiz only when the Course Author asks to remove it. "
-    "Write each Question from what the Lecture teaches and its Sources: a Markdown prompt that "
-    "tests understanding rather than recall of wording, three or four Options, and exactly one "
-    "correct Option. Good distractors are plausible: each reflects a real misconception or a "
-    "common mistake, is about as long and specific as the correct Option, and is clearly wrong "
-    "to someone who understood the material; avoid 'all of the above', 'none of the above', "
-    "jokes, and absolute words that give the answer away. Vary the position of the correct "
-    "Option across Questions. Every wrong Option needs an Explanation in Markdown that says "
-    "why it is wrong and what is true instead, not just that it is wrong; the correct Option "
-    "may have one too. Ground Questions and Explanations in Course Sources and cite them as "
-    "on Slides, with the source_id and the cited lines. Answers Learners have given are "
-    "stored by Question and Option ID, so IDs must stay stable: when revising, give the id of "
-    "every Question and Option you keep, and leave the id out only for new ones; the tool "
-    "creates their IDs, so never invent one. Keep an Option's id when you fix its wording, its "
-    "Explanation, or which Option is correct, so earlier Answers are regraded; leave the id "
-    "out when an Option comes to say something different. Fields you leave out keep their "
-    "current values, so to revise one Question give only the ids of the others. Fix every "
-    "problem save_quiz reports before moving on."
+    "Learners take after the Lecture. Write one when the Course Author asks. Use read_quiz to "
+    "see a Quiz with its IDs, save_quiz to create or revise one, and delete_quiz only when the "
+    "Course Author asks to remove it. Write each Question from what the Lecture teaches and "
+    "its Sources: a Markdown prompt that tests understanding rather than recall of wording, "
+    "three or four Options, and exactly one correct Option. Good distractors are plausible: "
+    "each reflects a real misconception or a common mistake, is about as long and specific as "
+    "the correct Option, and is clearly wrong to someone who understood the material; avoid "
+    "'all of the above', 'none of the above', jokes, and absolute words that give the answer "
+    "away. Vary the position of the correct Option across Questions. Every wrong Option needs "
+    "an Explanation in Markdown that says why it is wrong and what is true instead; the "
+    "correct Option may have one too. Ground Questions and Explanations in Course Sources and "
+    "cite them as on Slides, with the source_id and the cited lines. Learners' Answers are "
+    "stored by Question and Option ID, so follow save_quiz's rules for IDs and never invent "
+    "one. Fix every problem save_quiz reports before moving on."
 )
 
 
@@ -1884,14 +1879,21 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         ctx: RunContext[CourseAgentDeps],
         lecture_id: str,
         questions: list[QuizQuestionCommand],
+        remove_question_ids: list[str] | None = None,
         replace_all_questions: bool = False,
     ) -> ToolReturn:
-        """Create a Lecture's Quiz, or revise it by giving its full Question order.
+        """Create a Lecture's Quiz, or change, add and remove some of its Questions.
 
-        Give the id of each existing Question and Option you keep and leave the id out for new
-        ones; their IDs are created for you. For a kept Question or Option, fields you leave out
-        or give as null keep their current values. Existing Questions you leave out are
-        removed. Returns the saved Quiz with every ID."""
+        Give the id of each existing Question or Option you change and leave the id out for a
+        new one; its ID is created for you. Fields you leave out or give as null keep their
+        current values, and Questions and Options you leave out stay unchanged. Nothing is
+        removed unless you name it in remove_question_ids or a Question's remove_option_ids.
+        When you list every existing Question (or every Option of a Question) you keep, the
+        order you give is used; otherwise existing ones keep their positions, the ones you list
+        take their own positions in the order you list them, and new ones are added at the end.
+        Set replace_all_questions only when the Course Author asks to replace every Question:
+        existing Questions you leave out are then removed. Returns the saved Quiz with every
+        ID."""
         if (problem := lecture_problem(ctx, lecture_id)) is not None:
             return ToolReturn(return_value=f"The Quiz was not saved: {problem}")
         try:
@@ -1900,6 +1902,7 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
                 lecture_id,
                 questions,
                 existing,
+                remove_question_ids=remove_question_ids or [],
                 replace_all_questions=replace_all_questions,
                 source_ids={source.id for source in ctx.deps.course_state.sources},
             )
@@ -1942,9 +1945,10 @@ def _build_course_agent(*, requires_approval: bool) -> Agent[CourseAgentDeps, st
         if path is None or not (ctx.deps.workspace / path).exists():
             return ToolReturn(return_value=f"Lecture {lecture_id} has no Quiz.")
         protect_mutation(ctx)
-        delete_quiz_file(
+        if not delete_quiz_file(
             ctx.deps.workspace, lecture_id, expected=_agent_precondition(ctx.deps, path)
-        )
+        ):
+            return ToolReturn(return_value=f"Lecture {lecture_id} has no Quiz.")
         confirm_mutation(ctx, {path: None})
         return ToolReturn(
             return_value=f"Deleted the Quiz for Lecture {lecture_id}.",

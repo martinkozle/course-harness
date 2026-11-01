@@ -412,7 +412,10 @@ export function LectureCanvas({
 	const quizContext: AgentContext = {
 		key: `quiz-${lecture.id}`,
 		label: `Quiz · Lecture ${lectureNumber}`,
-		instruction: `I'm reviewing the Quiz for the Lecture "${lecture.title}"`,
+		instruction:
+			quizQuestionCount > 0
+				? `I'm reviewing the Quiz for the Lecture "${lecture.title}"`
+				: `I want a Quiz for the Lecture "${lecture.title}"`,
 	};
 	const focus =
 		view === "quiz" ? quizContext : (slideContext ?? lectureContext);

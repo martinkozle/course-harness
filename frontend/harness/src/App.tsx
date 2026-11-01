@@ -530,7 +530,7 @@ function CourseWorkspace({
 						}}
 						onCourseChange={async () => {
 							await loadCourse();
-							await refreshPresentations();
+							await Promise.all([refreshPresentations(), refreshQuizzes()]);
 							void refreshCurrentState();
 						}}
 						onFocusChange={setFocusContext}
@@ -571,6 +571,7 @@ function CourseWorkspace({
 								refreshCurrentState(),
 								loadCourse().catch(() => undefined),
 								refreshPresentations(),
+								refreshQuizzes(),
 								refreshSources(),
 							]);
 						}}

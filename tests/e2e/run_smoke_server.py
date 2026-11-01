@@ -139,20 +139,47 @@ def place_attached_image(resource_id: str, returned: set[str]) -> str | dict[int
     }
 
 
+def latest_user_request(messages: list[ModelMessage]) -> tuple[str, set[str]]:
+    """Return the latest Course Author message and the tools returned since it."""
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if (
+                isinstance(part, UserPromptPart)
+                and isinstance(part.content, str)
+                and not is_course_state_part(part)
+            ):
+                returned = {
+                    later.tool_name
+                    for request in messages[index:]
+                    if isinstance(request, ModelRequest)
+                    for later in request.parts
+                    if isinstance(later, ToolReturnPart)
+                }
+                return part.content, returned
+    return "", set()
+
+
 def quiz_step(returned: set[str]) -> str | dict[int, DeltaToolCall]:
-    """Write a cited two-Question Quiz for the first Lecture, then report it."""
+    """Write a two-Question Quiz for the first Lecture, citing the first Source if any."""
     if "save_quiz" in returned:
-        return "I wrote a cited Quiz with an Explanation for every wrong Option."
+        return "I wrote a Quiz with an Explanation for every wrong Option."
     assert active_workspace is not None
     plan = read_course_plan(active_workspace)
     sources = read_sources_index(active_workspace)
-    assert plan is not None and sources is not None
-    source = sources.sources[0]
-    citation = {"source_id": source.id, "label": source.label, "line_start": 0, "line_end": 4}
+    assert plan is not None
+    source = sources.sources[0] if sources and sources.sources else None
+    cited = (
+        [{"source_id": source.id, "label": source.label, "line_start": 0, "line_end": 4}]
+        if source is not None
+        else []
+    )
     questions = [
         {
             "prompt": "Why can't a **single person's** causal effect be observed directly?",
-            "citations": [citation],
+            "citations": cited,
             "options": [
                 {
                     "text": "Only one potential outcome is ever observed for each person",
@@ -164,7 +191,7 @@ def quiz_step(returned: set[str]) -> str | dict[int, DeltaToolCall]:
                     "text": "Outcome measurements are too noisy",
                     "explanation": "Noise is not the obstacle: even a perfect measurement "
                     "records only the outcome under the treatment received.",
-                    "citations": [citation],
+                    "citations": cited,
                 },
                 {
                     "text": "Individual effects are always zero",
@@ -175,7 +202,7 @@ def quiz_step(returned: set[str]) -> str | dict[int, DeltaToolCall]:
         },
         {
             "prompt": "What does a causal graph make visible?",
-            "citations": [citation],
+            "citations": cited,
             "options": [
                 {
                     "text": "The estimated size of each effect",
@@ -229,15 +256,9 @@ async def course_planning_model(
         for part in message.parts
         if isinstance(part, ToolReturnPart)
     }
-    if any(
-        isinstance(part, UserPromptPart)
-        and isinstance(part.content, str)
-        and "Write a Quiz for lecture" in part.content
-        for message in messages
-        if isinstance(message, ModelRequest)
-        for part in message.parts
-    ):
-        yield quiz_step(returned_tools)
+    latest, returned_since = latest_user_request(messages)
+    if "Write a Quiz for lecture" in latest:
+        yield quiz_step(returned_since)
         return
     if "replace_course_plan" not in returned_tools:
         command = {

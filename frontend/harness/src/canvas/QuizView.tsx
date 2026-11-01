@@ -120,6 +120,7 @@ export function QuizView({
 				<button
 					type="button"
 					className="btn btn-quiet"
+					aria-label="Ask the agent about this Quiz"
 					onClick={() => onAskAgent("Improve this Quiz: ", quizContext)}
 				>
 					<Sparkles aria-hidden="true" />
@@ -168,6 +169,7 @@ function QuestionCard({
 				<button
 					type="button"
 					className="btn btn-quiet btn-small"
+					aria-label={`Ask the agent about Question ${number}`}
 					onClick={onAsk}
 				>
 					<Sparkles aria-hidden="true" />

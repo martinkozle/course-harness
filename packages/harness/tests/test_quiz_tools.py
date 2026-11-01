@@ -2,15 +2,29 @@
 
 import json
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
+from typing import Any
 
 import httpx2
 import pytest
-from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
+from pydantic_ai import DeferredToolRequests, DeferredToolResults
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    RetryPromptPart,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
 from course_harness.app import create_app
+from course_harness.core.canonical_mutation import (
+    CanonicalMutationConflict,
+    capture_canonical_files,
+)
 from course_harness.core.course_plan import (
     CoursePlan,
     Lecture,
@@ -24,6 +38,7 @@ from course_harness.core.quiz import (
     Quiz,
     QuizOption,
     QuizQuestion,
+    quiz_path,
     quiz_problems,
     read_quiz,
     write_quiz,
@@ -41,7 +56,10 @@ from course_harness.quiz_authoring import (
     build_quiz,
     quiz_notes,
 )
-from course_harness.workspace_history import record_app_authored_state
+from course_harness.workspace_history import (
+    InvalidAgentMutationError,
+    record_app_authored_state,
+)
 
 LECTURE_ID = "lecture-aaaaaaaaaaaa"
 OTHER_LECTURE_ID = "lecture-bbbbbbbbbbbb"
@@ -118,50 +136,141 @@ def test_a_new_quiz_gets_ids_minted_for_every_question_and_option() -> None:
     assert quiz_problems(revision.quiz) == []
 
 
-def test_a_revision_keeps_ids_and_unmentioned_content() -> None:
-    """Sending only IDs keeps a Question; a rewritten Option keeps its ID and its other fields."""
+def test_items_left_out_stay_unchanged_and_in_place() -> None:
+    """Changing one Option of one Question touches nothing else."""
     existing = _existing()
     revision = build_quiz(
         LECTURE_ID,
         [
-            QuizQuestionCommand(id=Q2),
             QuizQuestionCommand(
                 id=Q1,
-                options=[
-                    QuizOptionCommand(id=CONSISTENCY),
-                    QuizOptionCommand(id=POSITIVITY, text="Positivity (overlap)"),
-                    QuizOptionCommand(id=EXCHANGEABILITY),
-                    QuizOptionCommand(text="Interference", explanation="That is about spillover."),
-                ],
+                options=[QuizOptionCommand(id=EXCHANGEABILITY, text="Exchangeability (no bias)")],
             ),
         ],
         existing,
     )
 
-    second, first = revision.quiz.questions
+    first, second = revision.quiz.questions
     assert second == existing.questions[1]
     assert first.prompt == existing.questions[0].prompt
-    assert first.citations == existing.questions[0].citations
-    assert [option.id for option in first.options[:3]] == [CONSISTENCY, POSITIVITY, EXCHANGEABILITY]
-    assert first.options[1].text == "Positivity (overlap)" and first.options[1].correct
-    assert first.options[2] == existing.questions[0].options[1]
-    assert re.fullmatch(OPTION_ID_PATTERN, first.options[3].id)
+    assert [option.id for option in first.options] == [POSITIVITY, EXCHANGEABILITY, CONSISTENCY]
+    assert first.options[1].text == "Exchangeability (no bias)"
+    assert first.options[1].explanation == existing.questions[0].options[1].explanation
+    assert first.options[2] == existing.questions[0].options[2]
     assert revision.removed_question_ids == []
     assert revision.removed_option_ids == []
 
 
-def test_marking_another_option_correct_moves_the_answer_and_keeps_ids() -> None:
+def test_new_items_go_at_the_end_unless_every_existing_item_is_listed() -> None:
+    existing = _existing()
+    appended = build_quiz(
+        LECTURE_ID,
+        [
+            _new_question(),
+            QuizQuestionCommand(
+                id=Q1,
+                options=[QuizOptionCommand(text="Interference", explanation="Spillover.")],
+            ),
+        ],
+        existing,
+    )
+    first, second, new = appended.quiz.questions
+    assert (first.id, second.id) == (Q1, Q2)
+    assert new.prompt == "Why randomize?"
+    assert [option.text for option in first.options][-1] == "Interference"
+
+    reordered = build_quiz(
+        LECTURE_ID,
+        [
+            QuizQuestionCommand(id=Q2),
+            _new_question(),
+            QuizQuestionCommand(
+                id=Q1,
+                options=[
+                    QuizOptionCommand(id=CONSISTENCY),
+                    QuizOptionCommand(text="Interference", explanation="Spillover."),
+                    QuizOptionCommand(id=POSITIVITY),
+                    QuizOptionCommand(id=EXCHANGEABILITY),
+                ],
+            ),
+        ],
+        existing,
+    )
+    second, new, first = reordered.quiz.questions
+    assert (second.id, first.id) == (Q2, Q1)
+    assert re.fullmatch(QUESTION_ID_PATTERN, new.id)
+    assert [option.text for option in first.options] == [
+        "Consistency",
+        "Interference",
+        "Positivity",
+        "Exchangeability",
+    ]
+    assert re.fullmatch(OPTION_ID_PATTERN, first.options[1].id)
+
+
+def test_listed_existing_items_swap_their_own_positions() -> None:
+    three = _existing().model_copy(
+        update={
+            "questions": [
+                *_existing().questions,
+                QuizQuestion(
+                    id="question-cccccccccccc",
+                    prompt="Third?",
+                    options=_existing().questions[1].options,
+                ),
+            ]
+        }
+    )
+    revision = build_quiz(
+        LECTURE_ID,
+        [QuizQuestionCommand(id="question-cccccccccccc"), QuizQuestionCommand(id=Q1)],
+        three,
+    )
+    assert [question.id for question in revision.quiz.questions] == [
+        "question-cccccccccccc",
+        Q2,
+        Q1,
+    ]
+
+
+def test_removal_is_explicit() -> None:
+    revision = build_quiz(
+        LECTURE_ID,
+        [QuizQuestionCommand(id=Q1, remove_option_ids=[CONSISTENCY])],
+        _existing(),
+        remove_question_ids=[Q2],
+    )
+
+    (first,) = revision.quiz.questions
+    assert [option.id for option in first.options] == [POSITIVITY, EXCHANGEABILITY]
+    assert revision.removed_question_ids == [Q2]
+    assert revision.removed_option_ids == [CONSISTENCY]
+
+
+def test_replacing_all_questions_removes_those_left_out() -> None:
+    revision = build_quiz(
+        LECTURE_ID,
+        [_new_question(), QuizQuestionCommand(id=Q2)],
+        _existing(),
+        replace_all_questions=True,
+    )
+    assert [question.id for question in revision.quiz.questions][1] == Q2
+    assert revision.removed_question_ids == [Q1]
+
+
+def test_moving_the_answer_keeps_ids_and_needs_new_explanations() -> None:
     revision = build_quiz(
         LECTURE_ID,
         [
             QuizQuestionCommand(
                 id=Q1,
                 options=[
-                    QuizOptionCommand(id=POSITIVITY, explanation="Positivity is about overlap."),
+                    QuizOptionCommand(
+                        id=POSITIVITY, correct=False, explanation="Positivity is about overlap."
+                    ),
                     QuizOptionCommand(id=EXCHANGEABILITY, correct=True, explanation=""),
                 ],
             ),
-            QuizQuestionCommand(id=Q2),
         ],
         _existing(),
     )
@@ -170,33 +279,45 @@ def test_marking_another_option_correct_moves_the_answer_and_keeps_ids() -> None
     assert [(option.id, option.correct) for option in first.options] == [
         (POSITIVITY, False),
         (EXCHANGEABILITY, True),
+        (CONSISTENCY, False),
     ]
+    assert first.options[0].explanation == "Positivity is about overlap."
     assert first.options[1].explanation is None
-    assert revision.removed_option_ids == [CONSISTENCY]
 
 
 @pytest.mark.parametrize(
-    ("questions", "message"),
+    ("questions", "removals", "message"),
     [
-        ([], "at least one Question. Use delete_quiz"),
+        ([], [Q1, Q2], "at least one Question. Use delete_quiz"),
         (
             [QuizQuestionCommand(id="question-ffffffffffff")],
+            [],
             "question-ffffffffffff is not a Question of this Quiz",
         ),
         (
             [QuizQuestionCommand(id=Q1), QuizQuestionCommand(id=Q1)],
+            [],
             f"Question {Q1} is given more than once",
+        ),
+        ([QuizQuestionCommand(id=Q1)], [Q1], "either change it or remove it"),
+        ([], ["question-ffffffffffff"], "remove_question_ids: question-ffffffffffff is not"),
+        (
+            [QuizQuestionCommand(id=Q1, remove_option_ids=["option-dddddddddddd"])],
+            [],
+            "Question 1 remove_option_ids: option-dddddddddddd is not an Option of this Question",
+        ),
+        (
+            [QuizQuestionCommand(id=Q2, remove_option_ids=["option-eeeeeeeeeeee"])],
+            [],
+            "Question 1 would have 1 Options; it needs 2 to 10",
         ),
         (
             [
                 QuizQuestionCommand(
-                    id=Q1,
-                    options=[
-                        QuizOptionCommand(id=POSITIVITY),
-                        QuizOptionCommand(id="option-dddddddddddd"),
-                    ],
+                    id=Q1, options=[QuizOptionCommand(id="option-dddddddddddd", text="Moved")]
                 )
             ],
+            [],
             f"It belongs to Question {Q2}",
         ),
         (
@@ -204,41 +325,52 @@ def test_marking_another_option_correct_moves_the_answer_and_keeps_ids() -> None
                 QuizQuestionCommand(
                     id=Q1,
                     options=[
-                        QuizOptionCommand(id=POSITIVITY, correct=False),
-                        QuizOptionCommand(id=EXCHANGEABILITY),
+                        QuizOptionCommand(id=EXCHANGEABILITY, correct=True, explanation=""),
                     ],
                 )
             ],
-            "Question 1 has 0 correct Options",
-        ),
-        ([QuizQuestionCommand(prompt="New?")], "Question 1 is new, so it needs its options"),
-        (
-            [QuizQuestionCommand(id=Q1), _new_question(citations=[{**CITATION, "source_id": "x"}])],
-            "Question 2 cites x, which is not a Source of this Course",
+            [],
+            f"Question 1 would have 2 correct Options ({POSITIVITY}, {EXCHANGEABILITY})",
         ),
         (
             [
-                QuizQuestionCommand(id=Q1),
-                _new_question(options=[{"text": "Same", "correct": True}, {"text": "same"}]),
+                QuizQuestionCommand(
+                    id=Q1, options=[QuizOptionCommand(id=EXCHANGEABILITY, correct=True)]
+                )
             ],
+            [],
+            f"Question 1, Option 1 ({EXCHANGEABILITY}) becomes correct, so its Explanation no "
+            'longer fits. Give it a new explanation, or "" to remove it.',
+        ),
+        (
+            [QuizQuestionCommand(id=Q1, remove_option_ids=[POSITIVITY])],
+            [],
+            "Question 1 would have 0 correct Options",
+        ),
+        ([QuizQuestionCommand(prompt="New?")], [], "Question 1 is new, so it needs its options"),
+        (
+            [_new_question(citations=[{**CITATION, "source_id": "x"}])],
+            [],
+            "Question 1 cites x, which is not a Source of this Course",
+        ),
+        (
+            [_new_question(options=[{"text": "Same", "correct": True}, {"text": "same"}])],
+            [],
             "two Options with the same text",
         ),
     ],
 )
 def test_invalid_commands_explain_how_to_fix_them(
-    questions: list[QuizQuestionCommand], message: str
+    questions: list[QuizQuestionCommand], removals: list[str], message: str
 ) -> None:
     with pytest.raises(ValueError, match=re.escape(message)):
-        build_quiz(LECTURE_ID, questions, _existing(), source_ids={SOURCE_ID})
-
-
-def test_a_revision_must_keep_some_question_unless_replacing_all() -> None:
-    with pytest.raises(ValueError, match="must keep existing Question IDs") as raised:
-        build_quiz(LECTURE_ID, [_new_question()], _existing())
-    assert Q1 in str(raised.value) and Q2 in str(raised.value)
-
-    revision = build_quiz(LECTURE_ID, [_new_question()], _existing(), replace_all_questions=True)
-    assert revision.removed_question_ids == [Q1, Q2]
+        build_quiz(
+            LECTURE_ID,
+            questions,
+            _existing(),
+            remove_question_ids=removals,
+            source_ids={SOURCE_ID},
+        )
 
 
 def test_notes_name_what_to_fix_before_a_release() -> None:
@@ -284,9 +416,24 @@ def _source() -> Source:
     )
 
 
+def _deps(workspace: Path, tmp_path: Path, plan: CoursePlan, **changes: Any) -> CourseAgentDeps:
+    return CourseAgentDeps(
+        course_state=CourseAgentState(course=plan, sources=[_source()]),
+        workspace=workspace,
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        **changes,
+    )
+
+
 async def _run(
-    workspace: Path, tmp_path: Path, plan: CoursePlan, calls: list[tuple[str, dict[str, object]]]
+    workspace: Path,
+    tmp_path: Path,
+    plan: CoursePlan,
+    calls: list[tuple[str, dict[str, object]]],
+    **deps_changes: Any,
 ) -> list[str]:
+    """Run the autonomous agent through ``calls``; return each tool result or retry prompt."""
     returns: list[str] = []
 
     async def stream(
@@ -297,10 +444,13 @@ async def _run(
             for message in messages
             if isinstance(message, ModelRequest)
             for part in message.parts
-            if isinstance(part, ToolReturnPart)
+            if isinstance(part, (ToolReturnPart, RetryPromptPart))
         ]
         if done:
-            returns.append(str(done[-1].content))
+            last = done[-1]
+            returns.append(
+                str(last.content) if isinstance(last, ToolReturnPart) else last.model_response()
+            )
         if len(done) < len(calls):
             name, args = calls[len(done)]
             yield {0: DeltaToolCall(name=name, json_args=json.dumps(args), tool_call_id=name)}
@@ -310,12 +460,7 @@ async def _run(
     agent = _build_course_agent(requires_approval=False)
     async with agent.run_stream(
         "Write a Quiz.",
-        deps=CourseAgentDeps(
-            course_state=CourseAgentState(course=plan, sources=[_source()]),
-            workspace=workspace,
-            data_dir=tmp_path / "data",
-            cache_dir=tmp_path / "cache",
-        ),
+        deps=_deps(workspace, tmp_path, plan, **deps_changes),
         model=FunctionModel(stream_function=stream),
     ) as streamed:
         await streamed.get_output()
@@ -431,3 +576,136 @@ async def test_the_api_lists_quizzes_and_reads_one(tmp_path: Path) -> None:
     assert missing.status_code == 404
     assert malformed.status_code == 404
     assert invalid.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_the_tool_result_names_what_was_removed(tmp_path: Path) -> None:
+    workspace, plan = _workspace(tmp_path)
+    write_quiz(workspace, _existing())
+
+    (result,) = await _run(
+        workspace,
+        tmp_path,
+        plan,
+        [
+            (
+                "save_quiz",
+                {
+                    "lecture_id": LECTURE_ID,
+                    "questions": [{"id": Q1, "remove_option_ids": [CONSISTENCY]}],
+                    "remove_question_ids": [Q2],
+                },
+            )
+        ],
+    )
+
+    assert f"Removed Questions: {Q2}." in result
+    assert f"Removed Options: {CONSISTENCY}." in result
+    stored = read_quiz(workspace, LECTURE_ID)
+    assert stored is not None and [q.id for q in stored.questions] == [Q1]
+
+
+def _approving_model(calls: list[tuple[str, dict[str, object]]]) -> FunctionModel:
+    def respond(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        returned = sum(
+            isinstance(part, ToolReturnPart)
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+        )
+        if returned < len(calls) and not any(
+            isinstance(message, ModelResponse)
+            and any(isinstance(part, ToolCallPart) for part in message.parts)
+            for message in messages[-1:]
+        ):
+            name, args = calls[returned]
+            return ModelResponse(parts=[ToolCallPart(name, json.dumps(args), f"call-{name}")])
+        return ModelResponse(parts=[TextPart("Done.")])
+
+    return FunctionModel(function=respond)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("tool", ["save_quiz", "delete_quiz"])
+async def test_guided_mode_asks_before_changing_a_quiz(tmp_path: Path, tool: str) -> None:
+    workspace, plan = _workspace(tmp_path)
+    write_quiz(workspace, _existing())
+    args: dict[str, object] = {"lecture_id": LECTURE_ID}
+    if tool == "save_quiz":
+        args["questions"] = [{"id": Q1, "prompt": "Which assumption is about overlap?"}]
+    agent = _build_course_agent(requires_approval=True)
+    model = _approving_model([(tool, args)])
+    deps = _deps(workspace, tmp_path, plan)
+
+    first = await agent.run(
+        "Change the Quiz.", deps=deps, model=model, output_type=[str, DeferredToolRequests]
+    )
+
+    assert isinstance(first.output, DeferredToolRequests)
+    (request,) = first.output.approvals
+    assert request.tool_name == tool
+    assert read_quiz(workspace, LECTURE_ID) == _existing()
+
+    await agent.run(
+        deps=deps,
+        model=model,
+        output_type=[str, DeferredToolRequests],
+        message_history=first.all_messages(),
+        deferred_tool_results=DeferredToolResults(approvals={request.tool_call_id: True}),
+    )
+
+    stored = read_quiz(workspace, LECTURE_ID)
+    if tool == "save_quiz":
+        assert stored is not None
+        assert stored.questions[0].prompt == "Which assumption is about overlap?"
+    else:
+        assert stored is None
+
+
+@pytest.mark.anyio
+async def test_a_quiz_change_that_leaves_the_course_invalid_is_sent_back(tmp_path: Path) -> None:
+    workspace, plan = _workspace(tmp_path)
+    checked: list[Mapping[str, bytes | None]] = []
+
+    def reject(written: Mapping[str, bytes | None]) -> None:
+        checked.append(written)
+        raise InvalidAgentMutationError(["Quiz cites a missing Source"], reverted=True)
+
+    (result,) = await _run(
+        workspace,
+        tmp_path,
+        plan,
+        [("save_quiz", {"lecture_id": LECTURE_ID, "questions": [_new_question().model_dump()]})],
+        after_mutation=reject,
+    )
+
+    assert list(checked[0]) == [quiz_path(LECTURE_ID)]
+    assert "rejected and undone" in result
+    assert "Quiz cites a missing Source" in result
+
+
+@pytest.mark.anyio
+async def test_a_quiz_changed_during_the_run_is_not_overwritten(tmp_path: Path) -> None:
+    workspace, plan = _workspace(tmp_path)
+    write_quiz(workspace, _existing())
+    preconditions = capture_canonical_files(workspace, {quiz_path(LECTURE_ID)})
+    edited = _existing().model_copy(
+        update={"questions": [_existing().questions[0].model_copy(update={"prompt": "Edited?"})]}
+    )
+    write_quiz(workspace, edited)
+
+    with pytest.raises(CanonicalMutationConflict):
+        await _run(
+            workspace,
+            tmp_path,
+            plan,
+            [
+                (
+                    "save_quiz",
+                    {"lecture_id": LECTURE_ID, "questions": [{"id": Q1, "prompt": "Mine?"}]},
+                )
+            ],
+            canonical_preconditions=preconditions,
+        )
+
+    assert read_quiz(workspace, LECTURE_ID) == edited

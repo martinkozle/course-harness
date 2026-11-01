@@ -22,11 +22,49 @@ type PresentationProposal = {
 	}[];
 };
 
+type QuizOptionProposal = {
+	id?: string | null;
+	text?: string | null;
+	correct?: boolean | null;
+	explanation?: string | null;
+	citations?: unknown[] | null;
+};
+
+type QuizQuestionProposal = {
+	id?: string | null;
+	prompt?: string | null;
+	options?: QuizOptionProposal[] | null;
+	remove_option_ids?: string[] | null;
+	citations?: unknown[] | null;
+};
+
 type QuizProposal = {
 	lecture_id?: string;
 	replace_all_questions?: boolean;
-	questions?: { id?: string | null; prompt?: string | null }[];
+	remove_question_ids?: string[] | null;
+	questions?: QuizQuestionProposal[];
 };
+
+function plural(count: number, word: string): string {
+	return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+/** What a save_quiz command does to one Question, in a few words. */
+function questionChange(question: QuizQuestionProposal): string {
+	const options = question.options ?? [];
+	const added = options.filter((option) => !option.id).length;
+	const changed = options.length - added;
+	const removed = question.remove_option_ids?.length ?? 0;
+	if (!question.id) return `New · ${plural(added, "Option")}`;
+	const parts = [
+		question.prompt != null ? "new wording" : null,
+		question.citations != null ? "Citations" : null,
+		changed > 0 ? `${plural(changed, "Option")} changed` : null,
+		added > 0 ? `${plural(added, "Option")} added` : null,
+		removed > 0 ? `${plural(removed, "Option")} removed` : null,
+	].filter((part): part is string => part !== null);
+	return parts.length > 0 ? `Changes: ${parts.join(", ")}` : "Unchanged";
+}
 
 type ReconciliationProposal = {
 	summary: string;
@@ -198,26 +236,44 @@ export function ApprovalCard({
 	} else if (parsed.tool === "quiz") {
 		const preview = parsed.preview;
 		const questions = preview?.questions ?? [];
+		const removedQuestions = preview?.remove_question_ids ?? [];
+		const removesOptions = questions.some(
+			(question) => (question.remove_option_ids?.length ?? 0) > 0,
+		);
 		heading = preview
 			? `${preview.replace_all_questions ? "Replace" : "Save"} the Quiz for ${lectureTitle(preview.lecture_id)}?`
 			: "Save this Quiz?";
 		accept = "Save Quiz";
 		reject = "Don't save";
-		scope =
-			"Questions and Options you already have keep their IDs, so earlier Answers stay linked.";
+		scope = preview?.replace_all_questions
+			? "Replaces every Question. Questions not listed here are removed, and earlier Answers to them stop counting."
+			: removedQuestions.length > 0 || removesOptions
+				? "Earlier Answers to removed Questions and Options stop counting. Everything else keeps its ID."
+				: "Nothing is removed. Questions and Options you already have keep their IDs, so earlier Answers stay linked.";
 		body =
-			questions.length > 0 ? (
-				<ol className="proposal-list">
-					{questions.map((question, index) => (
-						<li key={question.id ?? `new-${index}`}>
-							<span className="proposal-index">{index + 1}</span>
-							<span>
-								{question.prompt ??
-									(question.id ? "Unchanged Question" : "New Question")}
-							</span>
-						</li>
-					))}
-				</ol>
+			preview && (questions.length > 0 || removedQuestions.length > 0) ? (
+				<div className="proposal">
+					{questions.length > 0 ? (
+						<ol className="proposal-list">
+							{questions.map((question, index) => (
+								<li key={question.id ?? `new-${index}`}>
+									<span className="proposal-index">{index + 1}</span>
+									<span>
+										{question.prompt ??
+											(question.id ? "Existing Question" : "New Question")}
+										<span className="meta"> · {questionChange(question)}</span>
+									</span>
+								</li>
+							))}
+						</ol>
+					) : null}
+					{removedQuestions.length > 0 ? (
+						<p className="meta">
+							Removes {plural(removedQuestions.length, "Question")}:{" "}
+							{removedQuestions.join(", ")}
+						</p>
+					) : null}
+				</div>
 			) : (
 				<p>The proposed Quiz could not be previewed.</p>
 			);

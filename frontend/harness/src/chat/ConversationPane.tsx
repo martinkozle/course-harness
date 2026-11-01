@@ -526,6 +526,14 @@ function RunResults({
 					</li>
 				) : null;
 			})}
+			{result.deletedQuizLectureIds.length > 0 ? (
+				<li className="is-static">
+					<span className="result-kind">
+						{result.deletedQuizLectureIds.length} Quiz
+						{result.deletedQuizLectureIds.length === 1 ? "" : "zes"} deleted
+					</span>
+				</li>
+			) : null}
 			{result.deletedPresentationIds.length > 0 ? (
 				<li className="is-static">
 					<span className="result-kind">

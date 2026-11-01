@@ -50,6 +50,8 @@ export type RunResult = {
 	deletedPresentationIds: string[];
 	/** Lectures whose Quiz was saved. */
 	quizLectureIds: string[];
+	/** Lectures whose Quiz was deleted. */
+	deletedQuizLectureIds: string[];
 	sourcesAdded: number;
 	stopped: boolean;
 };
@@ -716,6 +718,7 @@ function summarize(activities: Activity[], stopped: boolean): RunResult {
 	const presentationIds = new Set<string>();
 	const deletedPresentationIds = new Set<string>();
 	const quizLectureIds = new Set<string>();
+	const deletedQuizLectureIds = new Set<string>();
 	let planChanged = false;
 	let sourcesAdded = 0;
 	for (const activity of activities) {
@@ -727,16 +730,22 @@ function summarize(activities: Activity[], stopped: boolean): RunResult {
 		else if (activity.id.startsWith("presentation-"))
 			presentationIds.add(activity.id.slice("presentation-".length));
 		else if (activity.id.startsWith("sources-admit-")) sourcesAdded += 1;
-		else if (activity.id.startsWith("quiz-delete-"))
-			quizLectureIds.delete(activity.id.slice("quiz-delete-".length));
-		else if (activity.id.startsWith("quiz-"))
-			quizLectureIds.add(activity.id.slice("quiz-".length));
+		else if (activity.id.startsWith("quiz-delete-")) {
+			const lectureId = activity.id.slice("quiz-delete-".length);
+			quizLectureIds.delete(lectureId);
+			deletedQuizLectureIds.add(lectureId);
+		} else if (activity.id.startsWith("quiz-")) {
+			const lectureId = activity.id.slice("quiz-".length);
+			quizLectureIds.add(lectureId);
+			deletedQuizLectureIds.delete(lectureId);
+		}
 	}
 	return {
 		planChanged,
 		presentationIds: [...presentationIds],
 		deletedPresentationIds: [...deletedPresentationIds],
 		quizLectureIds: [...quizLectureIds],
+		deletedQuizLectureIds: [...deletedQuizLectureIds],
 		sourcesAdded,
 		stopped,
 	};
@@ -748,6 +757,7 @@ function hasChanges(result: RunResult): boolean {
 		result.presentationIds.length > 0 ||
 		result.deletedPresentationIds.length > 0 ||
 		result.quizLectureIds.length > 0 ||
+		result.deletedQuizLectureIds.length > 0 ||
 		result.sourcesAdded > 0
 	);
 }

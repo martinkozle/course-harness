@@ -1,18 +1,7 @@
-import AxeBuilder from "@axe-core/playwright";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
+import { expectNoAccessibilityViolations } from "./axe";
 import { clearSmokeModelCatalog } from "./smokeState";
-
-async function expectNoAccessibilityViolations(page: Page, surface: string) {
-	const results = await new AxeBuilder({ page })
-		.withTags(["wcag2a", "wcag2aa", "wcag21aa"])
-		.analyze();
-
-	expect(
-		results.violations,
-		`${surface} has no WCAG A or AA accessibility violations`,
-	).toEqual([]);
-}
 
 test("major Course Author journey surfaces meet automated and keyboard accessibility checks", async ({
 	page,
@@ -171,6 +160,27 @@ test("major Course Author journey surfaces meet automated and keyboard accessibi
 	await expect(page.getByRole("dialog", { name: /template/i })).toBeVisible();
 	await expectNoAccessibilityViolations(page, "Template gallery");
 	await page.keyboard.press("Escape");
+
+	// The fake agent writes a Quiz; the Quiz view and Exercises pass automated checks.
+	await composer.fill(`Write a Quiz for lecture ${firstLecture.id}`);
+	await composer.press("Enter");
+	await expect(
+		page.getByText(
+			"I wrote a Quiz with an Explanation for every wrong Option.",
+		),
+	).toBeVisible();
+	await page.getByRole("tab", { name: /Quiz/ }).click();
+	await expect(
+		page
+			.getByRole("region", { name: "Quiz" })
+			.getByRole("heading", { name: "Question 1" }),
+	).toBeVisible();
+	await expectNoAccessibilityViolations(page, "Quiz view");
+	await navigator.getByRole("button", { name: /Exercises/ }).click();
+	await expect(
+		page.getByRole("heading", { name: "Exercises", level: 1 }),
+	).toBeVisible();
+	await expectNoAccessibilityViolations(page, "Exercises");
 
 	// Sources: each scope passes automated checks and recovers from failures.
 	await navigator.getByRole("button", { name: /Sources/ }).click();

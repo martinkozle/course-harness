@@ -1,12 +1,17 @@
 """How the Course Agent creates and revises a Lecture's Quiz.
 
 The agent refers to existing Questions and Options by ID and leaves the ID out for new ones,
-so it never invents an ID: :func:`build_quiz` mints them.  A field left out or given as null
-keeps its current value, so the agent can revise one Question without repeating the others.
+so it never invents an ID: :func:`build_quiz` mints them.  Nothing is removed unless the
+command names it: Questions and Options the command leaves out stay as they are, and a field
+left out or given as null keeps its current value.
+
+Order follows one rule for Questions and for the Options of a Question:
+when the command lists every existing item it keeps, the order it gives is used, new items
+included.  Otherwise existing items stay where they are, the existing items it lists fill their
+own current positions in the order they are listed, and new items are added at the end.
 """
 
-from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -24,6 +29,12 @@ from course_harness.core.quiz import (
     new_question_id,
 )
 
+ORDER_RULE = (
+    "When you list every existing item you keep, the order you give is used. Otherwise "
+    "existing items stay where they are, the ones you list take their own positions in the "
+    "order you list them, and new items are added at the end."
+)
+
 
 class QuizOptionCommand(BaseModel):
     """One Option of a Question. Fields left out or given as null keep their current value."""
@@ -34,10 +45,10 @@ class QuizOptionCommand(BaseModel):
         default=None,
         pattern=OPTION_ID_PATTERN,
         description=(
-            "The ID of an Option this Question already has, to keep it. Leave it out for a new "
-            "Option; a new ID is created. Keep the ID when you fix the wording, the Explanation "
-            "or which Option is correct; leave it out when the Option comes to say something "
-            "different."
+            "The ID of an Option this Question already has, to change it. Leave it out for a "
+            "new Option; a new ID is created. Keep the ID when you fix the wording, the "
+            "Explanation or which Option is correct; remove the Option and add a new one when "
+            "it comes to say something different."
         ),
     )
     text: str | None = Field(
@@ -46,7 +57,11 @@ class QuizOptionCommand(BaseModel):
         description="Plain text of the answer choice, without a letter or number in front.",
     )
     correct: bool | None = Field(
-        default=None, description="True for the one correct Option of the Question."
+        default=None,
+        description=(
+            "True for the one correct Option of the Question. When you change it on an "
+            "existing Option, also give its new explanation."
+        ),
     )
     explanation: str | None = Field(
         default=None,
@@ -73,7 +88,7 @@ class QuizQuestionCommand(BaseModel):
         default=None,
         pattern=QUESTION_ID_PATTERN,
         description=(
-            "The ID of a Question this Quiz already has, to keep it. Leave it out for a new "
+            "The ID of a Question this Quiz already has, to change it. Leave it out for a new "
             "Question; a new ID is created."
         ),
     )
@@ -84,10 +99,14 @@ class QuizQuestionCommand(BaseModel):
         default=None,
         max_length=MAX_OPTIONS,
         description=(
-            f"Two to {MAX_OPTIONS} Options in the order shown, exactly one of them correct. "
-            "When given, this is the full list: Options of this Question you leave out are "
-            "removed. Leave it out to keep the current Options."
+            f"Options to add or change; a Question has two to {MAX_OPTIONS} Options, exactly "
+            "one of them correct. Options you leave out stay unchanged. " + ORDER_RULE
         ),
+    )
+    remove_option_ids: list[str] = Field(
+        default_factory=list,
+        max_length=MAX_OPTIONS,
+        description="IDs of this Question's Options to remove.",
     )
     citations: list[SlideCitation] | None = Field(
         default=None,
@@ -105,52 +124,83 @@ class QuizRevision:
     removed_option_ids: list[str]
 
 
+def _merge_order[T, C](
+    current: Sequence[T],
+    commands: Sequence[C],
+    key: Callable[[T], str],
+    existing_id: Callable[[C], str | None],
+    removed: set[str],
+    build: Callable[[C, T | None], T],
+) -> list[T]:
+    """Apply ``ORDER_RULE``: build every item, keeping untouched ones as they are."""
+    kept = [item for item in current if key(item) not in removed]
+    by_id = {key(item): item for item in kept}
+    listed = [existing_id(command) for command in commands]
+    listed_existing = {identity for identity in listed if identity is not None}
+    if kept and listed_existing == set(by_id):
+        return [
+            build(command, by_id[identity] if identity is not None else None)
+            for command, identity in zip(commands, listed, strict=True)
+        ]
+    updates = iter(
+        build(command, by_id[identity])
+        for command, identity in zip(commands, listed, strict=True)
+        if identity is not None
+    )
+    ordered = [next(updates) if key(item) in listed_existing else item for item in kept]
+    ordered.extend(
+        build(command, None)
+        for command, identity in zip(commands, listed, strict=True)
+        if identity is None
+    )
+    return ordered
+
+
 def build_quiz(
     lecture_id: str,
     questions: Sequence[QuizQuestionCommand],
     existing: Quiz | None,
     *,
+    remove_question_ids: Sequence[str] = (),
     replace_all_questions: bool = False,
     source_ids: Iterable[str] | None = None,
 ) -> QuizRevision:
     """Apply a save command on top of a Lecture's current Quiz.
 
-    ``questions`` is the full Question order: existing Questions left out are removed.
     Raises ``ValueError`` with a message the Course Agent can act on.
     """
-    if not questions:
-        raise ValueError(
-            "A Quiz needs at least one Question. Use delete_quiz to remove the whole Quiz."
-        )
-    if len(questions) > MAX_QUESTIONS:
-        raise ValueError(f"A Quiz holds at most {MAX_QUESTIONS} Questions.")
-    current = {question.id: question for question in existing.questions} if existing else {}
-    option_owner = {
-        option.id: question.id for question in current.values() for option in question.options
-    }
+    current = list(existing.questions) if existing else []
+    current_ids = {question.id: question for question in current}
     known_sources = set(source_ids) if source_ids is not None else None
-    used: set[str] = set()
-    built: list[QuizQuestion] = []
-    removed_options: list[str] = []
+    removed = _checked_removals(
+        "remove_question_ids", remove_question_ids, current_ids, "a Question of this Quiz"
+    )
+    seen: set[str] = set()
     for number, command in enumerate(questions, start=1):
-        label = f"Question {number}"
-        previous = None
-        if command.id is not None:
-            if command.id not in current:
-                raise ValueError(
-                    f"{label}: {command.id} is not a Question of this Quiz. Leave the id out "
-                    "for a new Question, or use one of "
-                    f"{_question_list(current.values()) if current else 'none (the Quiz is new)'}."
-                )
-            if command.id in used:
-                raise ValueError(f"{label}: Question {command.id} is given more than once.")
-            previous = current[command.id]
-        identity = command.id or new_question_id()
-        used.add(identity)
-        options, removed = _build_options(
-            label, command.options, previous, option_owner, known_sources
-        )
-        removed_options.extend(removed)
+        if command.id is None:
+            continue
+        if command.id not in current_ids:
+            raise ValueError(
+                f"Question {number}: {command.id} is not a Question of this Quiz. Leave the id "
+                "out for a new Question, or use one of "
+                f"{_question_list(current) if current else 'none (the Quiz is new)'}."
+            )
+        if command.id in seen:
+            raise ValueError(f"Question {number}: Question {command.id} is given more than once.")
+        if command.id in removed:
+            raise ValueError(
+                f"Question {number}: Question {command.id} is also in remove_question_ids; "
+                "either change it or remove it."
+            )
+        seen.add(command.id)
+    option_owner = {option.id: question.id for question in current for option in question.options}
+    number_of = {id(command): number for number, command in enumerate(questions, start=1)}
+    removed_options: list[str] = []
+
+    def build(command: QuizQuestionCommand, previous: QuizQuestion | None) -> QuizQuestion:
+        label = f"Question {number_of[id(command)]}"
+        options, gone = _build_options(label, command, previous, option_owner, known_sources)
+        removed_options.extend(gone)
         prompt = (
             command.prompt
             if command.prompt is not None
@@ -163,112 +213,153 @@ def build_quiz(
             if command.citations is not None
             else (previous.citations if previous else [])
         )
-        _check_citations(f"{label}", citations, known_sources)
+        _check_citations(label, citations, known_sources)
+        identity = previous.id if previous else new_question_id()
         try:
-            built.append(
-                QuizQuestion(id=identity, prompt=prompt, options=options, citations=citations)
-            )
+            return QuizQuestion(id=identity, prompt=prompt, options=options, citations=citations)
         except ValidationError as error:
             raise ValueError(f"{label}: {_readable(error)}") from None
-    if current and not replace_all_questions and not used & current.keys():
+
+    if replace_all_questions:
+        removed = removed | (set(current_ids) - seen)
+    built = _merge_order(
+        current,
+        questions,
+        key=lambda question: question.id,
+        existing_id=lambda command: command.id,
+        removed=removed,
+        build=build,
+    )
+    if not built:
         raise ValueError(
-            "Revising a Quiz must keep existing Question IDs so that earlier Answers stay "
-            "linked: set the id of each Question you keep to one of "
-            f"{_question_list(current.values())}. Set replace_all_questions only when the "
-            "Course Author explicitly asks to replace every Question."
+            "A Quiz needs at least one Question. Use delete_quiz to remove the whole Quiz."
         )
-    removed_questions = [identity for identity in current if identity not in used]
+    if len(built) > MAX_QUESTIONS:
+        raise ValueError(f"A Quiz holds at most {MAX_QUESTIONS} Questions.")
     return QuizRevision(
         quiz=Quiz(lecture_id=lecture_id, questions=built),
-        removed_question_ids=removed_questions,
+        removed_question_ids=[question.id for question in current if question.id in removed],
         removed_option_ids=removed_options,
     )
 
 
+def _checked_removals(
+    field: str, identities: Sequence[str], current: Mapping[str, object], what: str
+) -> set[str]:
+    for identity in identities:
+        if identity not in current:
+            listed = ", ".join(current) or "none"
+            raise ValueError(f"{field}: {identity} is not {what}. Its IDs are {listed}.")
+    return set(identities)
+
+
 def _build_options(
     label: str,
-    commands: list[QuizOptionCommand] | None,
+    command: QuizQuestionCommand,
     previous: QuizQuestion | None,
     option_owner: dict[str, str],
     known_sources: set[str] | None,
 ) -> tuple[list[QuizOption], list[str]]:
-    if commands is None:
-        if previous is None:
-            raise ValueError(f"{label} is new, so it needs its options.")
-        return list(previous.options), []
-    if len(commands) < 2:
-        raise ValueError(f"{label} needs at least two Options.")
-    current = {option.id: option for option in previous.options} if previous else {}
-    # Marking one Option correct is enough to move the answer: the others become wrong.
-    moves_answer = any(command.correct is True for command in commands)
-    used: set[str] = set()
-    options: list[QuizOption] = []
-    for position, command in enumerate(commands, start=1):
+    if previous is None and command.options is None:
+        raise ValueError(f"{label} is new, so it needs its options.")
+    if previous is None and command.remove_option_ids:
+        raise ValueError(f"{label} is new, so it has no Options to remove.")
+    current = list(previous.options) if previous else []
+    current_ids = {option.id: option for option in current}
+    removed = _checked_removals(
+        f"{label} remove_option_ids",
+        command.remove_option_ids,
+        current_ids,
+        "an Option of this Question",
+    )
+    commands = command.options or []
+    seen: set[str] = set()
+    for position, option in enumerate(commands, start=1):
+        if option.id is None:
+            continue
         where = f"{label}, Option {position}"
-        existing = None
-        if command.id is not None:
-            if command.id not in current:
-                owner = option_owner.get(command.id)
-                hint = (
-                    f" It belongs to Question {owner}; an Option cannot move to another "
-                    "Question, so leave its id out to add it here as a new Option."
-                    if owner is not None
-                    else " Leave the id out for a new Option."
-                )
-                raise ValueError(
-                    f"{where}: {command.id} is not an Option of this Question.{hint}"
-                    + (f" Its Options are {', '.join(current)}." if current else "")
-                )
-            if command.id in used:
-                raise ValueError(f"{where}: Option {command.id} is given more than once.")
-            existing = current[command.id]
-        identity = command.id or new_option_id()
-        used.add(identity)
-        text = command.text if command.text is not None else (existing.text if existing else None)
+        if option.id not in current_ids:
+            owner = option_owner.get(option.id)
+            hint = (
+                f" It belongs to Question {owner}; an Option cannot move to another "
+                "Question, so leave its id out to add it here as a new Option."
+                if owner is not None
+                else " Leave the id out for a new Option."
+            )
+            raise ValueError(
+                f"{where}: {option.id} is not an Option of this Question.{hint}"
+                + (f" Its Options are {', '.join(current_ids)}." if current_ids else "")
+            )
+        if option.id in seen:
+            raise ValueError(f"{where}: Option {option.id} is given more than once.")
+        if option.id in removed:
+            raise ValueError(
+                f"{where}: Option {option.id} is also in remove_option_ids; either change it "
+                "or remove it."
+            )
+        seen.add(option.id)
+    position_of = {id(option): position for position, option in enumerate(commands, start=1)}
+
+    def build(option: QuizOptionCommand, existing: QuizOption | None) -> QuizOption:
+        where = f"{label}, Option {position_of[id(option)]}"
+        text = option.text if option.text is not None else (existing.text if existing else None)
         if not text or not text.strip():
             raise ValueError(f"{where} needs its text.")
-        explanation = (
-            (command.explanation or None)
-            if command.explanation is not None
-            else (existing.explanation if existing else None)
+        correct = (
+            option.correct
+            if option.correct is not None
+            else (existing.correct if existing else False)
         )
-        if explanation is not None and not explanation.strip():
-            explanation = None
+        if existing is not None and correct != existing.correct and option.explanation is None:
+            becomes = "correct" if correct else "wrong"
+            raise ValueError(
+                f"{where} ({existing.id}) becomes {becomes}, so its Explanation no longer fits. "
+                'Give it a new explanation, or "" to remove it.'
+            )
+        if option.explanation is not None:
+            explanation = option.explanation if option.explanation.strip() else None
+        else:
+            explanation = existing.explanation if existing else None
         citations = (
-            command.citations
-            if command.citations is not None
+            option.citations
+            if option.citations is not None
             else (existing.citations if existing else [])
         )
         _check_citations(where, citations, known_sources)
-        if command.correct is not None:
-            correct = command.correct
-        else:
-            correct = existing is not None and existing.correct and not moves_answer
         try:
-            options.append(
-                QuizOption(
-                    id=identity,
-                    text=text,
-                    correct=correct,
-                    explanation=explanation,
-                    citations=citations,
-                )
+            return QuizOption(
+                id=existing.id if existing else new_option_id(),
+                text=text,
+                correct=correct,
+                explanation=explanation,
+                citations=citations,
             )
         except ValidationError as error:
             raise ValueError(f"{where}: {_readable(error)}") from None
-    correct_count = sum(option.correct for option in options)
-    if correct_count != 1:
+
+    options = _merge_order(
+        current,
+        commands,
+        key=lambda option: option.id,
+        existing_id=lambda option: option.id,
+        removed=removed,
+        build=build,
+    )
+    if not 2 <= len(options) <= MAX_OPTIONS:
+        raise ValueError(f"{label} would have {len(options)} Options; it needs 2 to {MAX_OPTIONS}.")
+    correct = [option.id for option in options if option.correct]
+    if len(correct) != 1:
+        named = f" ({', '.join(correct)})" if correct else ""
         raise ValueError(
-            f"{label} has {correct_count} correct Options; set correct to true on exactly "
-            "one Option."
+            f"{label} would have {len(correct)} correct Options{named}; exactly one must be "
+            "correct. Set correct on each Option whose answer changes, with its new "
+            "explanation."
         )
-    repeated = [
-        text for text, count in Counter(o.text.casefold() for o in options).items() if count > 1
-    ]
-    if repeated:
-        raise ValueError(f"{label} has two Options with the same text: {repeated[0]!r}.")
-    removed = [identity for identity in current if identity not in used]
-    return options, removed
+    texts = [option.text.casefold() for option in options]
+    repeated = next((text for text in texts if texts.count(text) > 1), None)
+    if repeated is not None:
+        raise ValueError(f"{label} has two Options with the same text: {repeated!r}.")
+    return options, [option.id for option in current if option.id in removed]
 
 
 def _check_citations(
