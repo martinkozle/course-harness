@@ -48,6 +48,7 @@
             end-of-file-fixer.enable = true;
             fix-byte-order-marker.enable = true;
             forbid-new-submodules.enable = true;
+            hadolint.enable = true;
             mixed-line-endings.enable = true;
             nixfmt.enable = true;
             ruff.enable = true;

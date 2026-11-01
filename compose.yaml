@@ -1,0 +1,41 @@
+# Course Harness Classroom behind a reverse proxy on the same host. See docs/deploy-classroom.md.
+#
+#   cp .env.example .env    # then set CLASSROOM_ADMIN_TOKEN and CLASSROOM_PUBLIC_URL
+#   docker compose up -d --build
+name: course-harness-classroom
+
+services:
+  classroom:
+    build:
+      context: .
+      dockerfile: packages/classroom/Dockerfile
+    image: course-harness-classroom:local
+    restart: unless-stopped
+    environment:
+      CLASSROOM_ADMIN_TOKEN: ${CLASSROOM_ADMIN_TOKEN:?Set CLASSROOM_ADMIN_TOKEN in .env}
+      CLASSROOM_PUBLIC_URL: ${CLASSROOM_PUBLIC_URL:?Set CLASSROOM_PUBLIC_URL in .env}
+      # The proxy's address as the Classroom sees it. A proxy on the host reaches the container
+      # through the Docker bridge gateway, so the default trusts the bridge networks. Without it,
+      # every Learner shares the proxy's address for rate limits.
+      CLASSROOM_TRUSTED_PROXIES: ${CLASSROOM_TRUSTED_PROXIES:-172.16.0.0/12}
+      CLASSROOM_FETCH_INTERVAL: ${CLASSROOM_FETCH_INTERVAL:-900}
+      # `required` refuses to run LibreOffice when no network-less sandbox can be created.
+      CLASSROOM_RENDER_SANDBOX: ${CLASSROOM_RENDER_SANDBOX:-auto}
+    ports:
+      # Only the host's reverse proxy reaches the Classroom; it terminates TLS.
+      - "127.0.0.1:${CLASSROOM_PORT:-8000}:8000"
+    volumes:
+      - classroom-data:/data
+    read_only: true
+    tmpfs:
+      # LibreOffice profiles, rendered slides before they are moved to /data, and Git's temp files.
+      - /tmp:size=512m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 2g
+
+volumes:
+  classroom-data:

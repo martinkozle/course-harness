@@ -124,6 +124,13 @@ downloads the Docling models.
 See [CONTRIBUTING.md](https://github.com/martinkozle/course-harness/blob/main/CONTRIBUTING.md)
 to run Course Harness from a checkout, run the checks, and publish a release.
 
+## Deploy Course Harness Classroom
+
+Course Harness Classroom serves your published Course Releases to Learners and Instructors through
+Share Links. It is self-hosted from this repository with Docker Compose behind a TLS reverse
+proxy; see
+[Deploy Course Harness Classroom](https://github.com/martinkozle/course-harness/blob/main/docs/deploy-classroom.md).
+
 ## License
 
 [MIT](https://github.com/martinkozle/course-harness/blob/main/LICENSE)

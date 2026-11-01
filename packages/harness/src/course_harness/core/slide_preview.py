@@ -352,7 +352,8 @@ def _render_pptx_png(pptx_bytes: bytes, target: Path) -> None:
 
     Each run gets its own throwaway LibreOffice profile, so concurrent or crashed runs never
     share or lock one, and the whole process group is killed when it overruns its time. The
-    Classroom container also runs it without network access (ticket 10).
+    Classroom image puts a hardened `libreoffice` wrapper first on PATH, which runs it without
+    network access where the container allows (docs/deploy-classroom.md).
     """
     executable = _libreoffice_executable()
     if executable is None:

@@ -1,0 +1,20 @@
+# The build context is the repository root, but packages/classroom/Dockerfile needs only these
+# files. Everything else (local data, secrets, caches, node_modules, Harness) stays out.
+*
+!package.json
+!bun.lock
+!tsconfig.base.json
+!frontend/ui/
+!frontend/classroom/
+!frontend/harness/package.json
+!pyproject.toml
+!uv.lock
+!packages/classroom/
+!packages/harness/pyproject.toml
+!packages/harness/src/course_harness/__init__.py
+!packages/harness/src/course_harness/core/
+**/node_modules
+**/dist
+**/__pycache__
+**/*.py[cod]
+packages/classroom/tests
