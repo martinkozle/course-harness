@@ -1,3 +1,4 @@
+import { errorMessage } from "@course-harness/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { responseError } from "./api";
@@ -9,7 +10,6 @@ import {
 	type ResourceState,
 	type Source,
 } from "./models";
-import { errorMessage } from "./ui";
 
 export const MATERIAL_ACCEPT =
 	".pdf,.pptx,.docx,.md,.markdown,.txt,application/pdf";

@@ -1,10 +1,10 @@
+import { errorMessage, Notice } from "@course-harness/ui";
 import { Check, KeyRound, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
 
 import { responseError } from "./api";
 import { storageLabels } from "./ConnectorSettings";
 import type { DocumentProcessing, ProcessorKey } from "./models";
-import { errorMessage, Notice } from "./ui";
 import type { Library } from "./useLibrary";
 
 const keyHelp: Record<ProcessorKey["vendor"], string> = {

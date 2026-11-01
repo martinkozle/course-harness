@@ -1,9 +1,9 @@
+import { errorMessage, Notice } from "@course-harness/ui";
 import { Pencil, Plug, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 
 import { responseError } from "./api";
 import type { Connector, ConnectorInput, ConnectorTool } from "./models";
-import { errorMessage, Notice } from "./ui";
 
 type HeaderDraft = {
 	key: string;

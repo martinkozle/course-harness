@@ -1,3 +1,4 @@
+import { ConfirmDialog, Dialog, Menu, Notice, errorMessage } from "@course-harness/ui";
 import {
 	ArrowDown,
 	ArrowUp,
@@ -17,7 +18,6 @@ import type {
 	PresentationSummary,
 	Source,
 } from "../models";
-import { ConfirmDialog, Dialog, Menu, Notice, errorMessage } from "../ui";
 import type { AgentContext } from "../useCourseAgent";
 
 function lines(value: string): string[] {

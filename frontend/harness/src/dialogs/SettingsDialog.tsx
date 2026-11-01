@@ -1,3 +1,4 @@
+import { Dialog, errorMessage, Notice, Tabs } from "@course-harness/ui";
 import {
 	Bot,
 	FileScan,
@@ -23,7 +24,6 @@ import { PaperSearchSettings } from "../PaperSearchSettings";
 import { ModelSettings } from "../ProviderSetup";
 import { RuntimeDiagnosticsPanel } from "../RuntimeDiagnostics";
 import { TemplateSettings } from "../TemplatesView";
-import { Dialog, errorMessage, Notice, Tabs } from "../ui";
 import type { Library } from "../useLibrary";
 
 export type SettingsSection =

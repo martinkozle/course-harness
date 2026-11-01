@@ -1,9 +1,9 @@
+import { errorMessage, isAbort } from "@course-harness/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { type AgentInterrupt, streamAgentRun } from "./agentStream";
 import { responseError } from "./api";
 import type { CoursePlan, ModelCatalog, ResearchCard } from "./models";
-import { errorMessage, isAbort } from "./ui";
 
 export type ChatMessage = {
 	id: string;

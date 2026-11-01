@@ -1,4 +1,13 @@
 import {
+	ConfirmDialog,
+	errorMessage,
+	lineRangeLabel,
+	Menu,
+	type MenuItem,
+	Notice,
+	Tabs,
+} from "@course-harness/ui";
+import {
 	AlertCircle,
 	AlertTriangle,
 	Cloud,
@@ -28,17 +37,8 @@ import {
 	type ResourceState,
 	type Source,
 } from "../models";
-import {
-	ConfirmDialog,
-	errorMessage,
-	Menu,
-	type MenuItem,
-	Notice,
-	Tabs,
-} from "../ui";
 import type { AgentContext } from "../useCourseAgent";
 import { type Library, MATERIAL_ACCEPT, resourceName } from "../useLibrary";
-import { lineRangeLabel } from "./SourceReader";
 
 export type SourcesTab = "course" | "library" | "discover";
 

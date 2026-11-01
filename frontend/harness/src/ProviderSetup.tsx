@@ -1,3 +1,4 @@
+import { Notice } from "@course-harness/ui";
 import { KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 
@@ -8,7 +9,6 @@ import type {
 	ProviderAccount,
 	ProviderKind,
 } from "./models";
-import { Notice } from "./ui";
 
 /** A model an OpenAI-compatible endpoint reports. */
 type ModelSuggestion = {

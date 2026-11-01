@@ -1,8 +1,8 @@
+import { Dialog, Notice } from "@course-harness/ui";
 import { ArrowRight, FolderOpen, Plus, Stethoscope } from "lucide-react";
 import { useState } from "react";
 
 import { RuntimeDiagnosticsPanel } from "./RuntimeDiagnostics";
-import { Dialog, Notice } from "./ui";
 
 export type RecentWorkspace = {
 	id: string;

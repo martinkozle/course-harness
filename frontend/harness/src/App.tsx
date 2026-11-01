@@ -1,3 +1,4 @@
+import { errorMessage, isAbort } from "@course-harness/ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { responseError } from "./api";
@@ -31,7 +32,6 @@ import type {
 import { Navigator } from "./shell/Navigator";
 import { CanvasFrame, type LayoutMode } from "./shell/CanvasFrame";
 import { DriftBanner } from "./shell/DriftBanner";
-import { errorMessage, isAbort } from "./ui";
 import {
 	type AgentContext,
 	type RunResult,

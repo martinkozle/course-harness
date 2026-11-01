@@ -1,3 +1,4 @@
+import { Notice } from "@course-harness/ui";
 import { ChevronDown, Search } from "lucide-react";
 import { useState } from "react";
 
@@ -10,7 +11,6 @@ import {
 	type ResourceState,
 	type Source,
 } from "../models";
-import { Notice } from "../ui";
 import type { Library } from "../useLibrary";
 
 /** Candidates a research tool found during a run, shown beside the agent's reply. */

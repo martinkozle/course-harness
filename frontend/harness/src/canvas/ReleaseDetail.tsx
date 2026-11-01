@@ -1,3 +1,4 @@
+import { downloadResponse, errorMessage, Notice } from "@course-harness/ui";
 import { Download, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 
@@ -7,7 +8,6 @@ import type {
 	CourseRelease,
 	ReleaseValidationFinding,
 } from "../models";
-import { downloadResponse, errorMessage, Notice } from "../ui";
 
 export function formatDate(value: string): string {
 	const date = new Date(value);

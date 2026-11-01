@@ -1,10 +1,10 @@
+import { errorMessage, Notice } from "@course-harness/ui";
 import { KeyRound, Trash2 } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 
 import { responseError } from "./api";
 import { storageLabels } from "./ConnectorSettings";
 import type { PaperSearchKey } from "./models";
-import { errorMessage, Notice } from "./ui";
 
 const keyHelp: Record<PaperSearchKey["provider"], string> = {
 	semantic_scholar:

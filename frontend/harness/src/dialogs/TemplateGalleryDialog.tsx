@@ -1,3 +1,4 @@
+import { Dialog, errorMessage, Notice } from "@course-harness/ui";
 import { Upload } from "lucide-react";
 import { type ChangeEvent, type FormEvent, useRef, useState } from "react";
 
@@ -8,7 +9,6 @@ import type {
 	TemplateProfileSummary,
 } from "../models";
 import { withBuiltinTemplate } from "../TemplatesView";
-import { Dialog, errorMessage, Notice } from "../ui";
 
 const BUILTIN_ID = "_builtin-default";
 

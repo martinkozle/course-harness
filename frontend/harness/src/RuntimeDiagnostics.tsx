@@ -1,7 +1,7 @@
+import { Notice } from "@course-harness/ui";
 import { useEffect, useState } from "react";
 
 import { responseError } from "./api";
-import { Notice } from "./ui";
 
 type RuntimeDiagnostics = {
 	paths: Record<string, string>;

@@ -1,0 +1,69 @@
+/* Citation chips use the evidence highlighter colours. */
+
+.citation-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	max-width: 100%;
+	padding: 3px 8px 3px 4px;
+	border: 1px solid var(--evidence-strong);
+	border-radius: var(--radius-s);
+	background: #fffbe6;
+	font-size: 0.875rem;
+	color: var(--ink);
+	text-align: left;
+}
+
+a.citation-chip {
+	text-decoration: none;
+}
+
+.citation-chip:hover {
+	background: var(--evidence);
+}
+
+.citation-chip .citation-marker {
+	display: inline-grid;
+	place-items: center;
+	flex: none;
+	min-width: 20px;
+	height: 20px;
+	border-radius: 4px;
+	background: var(--evidence);
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	font-weight: 500;
+	color: var(--evidence-ink);
+}
+
+.citation-chip .citation-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.citation-chip .citation-where {
+	flex: none;
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	color: var(--ink-muted);
+}
+
+.citation-list {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr);
+	justify-items: start;
+	gap: 6px;
+}
+
+/* Keep long labels inside the panel so they truncate instead of overflowing. */
+.citation-list > li {
+	max-width: 100%;
+	min-width: 0;
+}
+
+.citation-chip:disabled {
+	border-color: var(--rule);
+	background: var(--surface-sunken);
+	opacity: 0.7;
+}

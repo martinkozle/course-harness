@@ -1,3 +1,4 @@
+import { Menu } from "@course-harness/ui";
 import {
 	Archive,
 	ArchiveRestore,
@@ -24,7 +25,6 @@ import type {
 	Source,
 	Workspace,
 } from "../models";
-import { Menu } from "../ui";
 import type { CourseAgent } from "../useCourseAgent";
 
 export function Navigator({

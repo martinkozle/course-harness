@@ -1,4 +1,5 @@
-import { Dialog, Notice } from "../ui";
+import { Dialog, Notice } from "@course-harness/ui";
+
 import type { Library } from "../useLibrary";
 
 /** Ask once per vendor before a hosted Document Processor receives any document. */

@@ -1,6 +1,7 @@
+import { Dialog } from "@course-harness/ui";
+
 import { ModelSettings } from "../ProviderSetup";
 import type { ModelCatalog } from "../models";
-import { Dialog } from "../ui";
 
 /** The Settings model form, opened in place from the composer. */
 export function ModelSetupDialog({

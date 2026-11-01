@@ -1,3 +1,13 @@
+import type { PreviewSlot, Slide, SlideLayout } from "@course-harness/ui";
+
+// The Slide schema is shared with the Classroom; it lives in the shared interface package.
+export type {
+	PreviewSlot,
+	Slide,
+	SlideCitation,
+	SlideLayout,
+} from "@course-harness/ui";
+
 export type ProviderKind =
 	| "openrouter"
 	| "openai"
@@ -243,48 +253,6 @@ export type DiscoveryResult = {
 	error: string | null;
 };
 
-export type SlideLayout =
-	| "title"
-	| "section"
-	| "bullets"
-	| "two_column"
-	| "big_statement"
-	| "closing"
-	| "code"
-	| "image"
-	| "quote";
-
-export type SlideCitation = {
-	source_id: string;
-	label: string;
-	url?: string;
-	line_start?: number;
-	line_end?: number;
-};
-
-export type Slide = {
-	id: string;
-	layout: SlideLayout;
-	title?: string;
-	subtitle?: string;
-	bullets?: string[];
-	left_content?: string[];
-	right_content?: string[];
-	statement?: string;
-	text?: string;
-	code?: string;
-	language?: string;
-	image_source_id?: string | null;
-	image_url?: string;
-	caption?: string;
-	quote?: string;
-	attribution?: string;
-	speaker_notes?: string;
-	purpose?: string;
-	citations: SlideCitation[];
-	archived: boolean;
-};
-
 export type Presentation = {
 	schema_version: 1;
 	id: string;
@@ -369,17 +337,6 @@ export type CalibrationSlide = {
 	semantic_layout: string;
 	template_layout_index: number;
 	image_url: string;
-};
-
-export type PreviewSlot = {
-	left: number;
-	top: number;
-	width: number;
-	height: number;
-	font_family: string;
-	font_size: number;
-	bold: boolean;
-	alignment: string | null;
 };
 
 export type SlidePreviewDescriptor = {

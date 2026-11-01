@@ -1,4 +1,15 @@
 import {
+	type CitationOpening,
+	CitationList,
+	ConfirmDialog,
+	downloadResponse,
+	errorMessage,
+	isAbort,
+	Notice,
+	SlidePreview,
+	slideSummary,
+} from "@course-harness/ui";
+import {
 	Archive,
 	ArchiveRestore,
 	ArrowLeftToLine,
@@ -12,7 +23,6 @@ import {
 	Trash2,
 } from "lucide-react";
 import {
-	type CSSProperties,
 	useCallback,
 	useEffect,
 	useLayoutEffect,
@@ -27,7 +37,6 @@ import type {
 	Lecture,
 	Presentation,
 	PresentationPreview,
-	PreviewSlot,
 	ReaderTarget,
 	Slide,
 	SlideCitation,
@@ -35,15 +44,7 @@ import type {
 	Source,
 	TemplateProfileSummary,
 } from "../models";
-import {
-	ConfirmDialog,
-	Notice,
-	downloadResponse,
-	errorMessage,
-	isAbort,
-} from "../ui";
 import type { AgentContext } from "../useCourseAgent";
-import { lineRangeLabel } from "./SourceReader";
 
 type Freshness = "checking" | "rendering" | "ready";
 
@@ -134,61 +135,11 @@ function fieldValue(slide: Slide, field: EditableField): string {
 	return (slide[field] as string | undefined) ?? "";
 }
 
-export function slideSummary(slide: Slide): string {
-	return (
-		slide.title ||
-		slide.statement ||
-		slide.quote ||
-		slide.bullets?.[0] ||
-		slide.text ||
-		"Untitled Slide"
-	);
-}
-
-function slotContent(slide: Slide, slot: string): string | null {
-	const value =
-		slot === "title"
-			? slide.title
-			: slot === "subtitle"
-				? slide.subtitle
-				: slot === "body"
-					? (slide.bullets?.join("\n") ??
-						slide.code ??
-						slide.quote ??
-						slide.text)
-					: slot === "left"
-						? slide.left_content?.join("\n")
-						: slot === "right"
-							? slide.right_content?.join("\n")
-							: slot === "statement"
-								? slide.statement
-								: slot === "image"
-									? (slide.caption ?? (slide.image_source_id ? null : "Image"))
-									: undefined;
-	return value ?? null;
-}
-
-function slotStyle(slot: PreviewSlot): CSSProperties {
-	return {
-		left: `${slot.left * 100}%`,
-		top: `${slot.top * 100}%`,
-		width: `${slot.width * 100}%`,
-		height: `${slot.height * 100}%`,
-		fontFamily: slot.font_family,
-		fontWeight: slot.bold ? 700 : 400,
-		textAlign:
-			slot.alignment === "center" || slot.alignment === "right"
-				? slot.alignment
-				: "left",
-		fontSize: `clamp(4px, ${slot.font_size / 9.6}cqw, ${slot.font_size}px)`,
-	};
-}
-
 function sourceImageUrl(sourceId: string): string {
 	return `/api/sources/${encodeURIComponent(sourceId)}/image`;
 }
 
-function SlidePreview({
+function LectureSlidePreview({
 	slide,
 	preview,
 	freshness,
@@ -199,49 +150,18 @@ function SlidePreview({
 	freshness: Freshness;
 	aspectRatio: number;
 }) {
-	const rendered = Boolean(preview?.thumbnail_url);
-	const slots = Object.entries(preview?.slots ?? {});
 	return (
-		<div
-			className={`slide-preview ${rendered ? "is-rendered" : "is-approximate"}`}
-			style={{
-				aspectRatio,
-				...(preview?.background_url
-					? { backgroundImage: `url("${preview.background_url}")` }
-					: {}),
-			}}
-		>
-			{rendered && preview?.thumbnail_url ? (
-				<img src={preview.thumbnail_url} alt="" />
-			) : (
-				slots.map(([name, slot]) => {
-					if (name === "image" && slide.image_source_id)
-						return (
-							<img
-								key={name}
-								className="slide-slot slide-slot-image"
-								style={slotStyle(slot)}
-								src={sourceImageUrl(slide.image_source_id)}
-								alt=""
-							/>
-						);
-					const content = slotContent(slide, name);
-					return content ? (
-						<span key={name} className="slide-slot" style={slotStyle(slot)}>
-							{content}
-						</span>
-					) : null;
-				})
-			)}
-			{!rendered && slots.length === 0 ? (
-				<span className="slide-fallback">{slideSummary(slide)}</span>
-			) : null}
-			{freshness !== "ready" ? (
-				<span className="slide-updating" aria-hidden="true">
-					Updating…
-				</span>
-			) : null}
-		</div>
+		<SlidePreview
+			slide={slide}
+			slots={preview?.slots ?? null}
+			backgroundUrl={preview?.background_url}
+			thumbnailUrl={preview?.thumbnail_url}
+			imageUrl={
+				slide.image_source_id ? sourceImageUrl(slide.image_source_id) : null
+			}
+			aspectRatio={aspectRatio}
+			updating={freshness !== "ready"}
+		/>
 	);
 }
 
@@ -735,7 +655,7 @@ export function LectureCanvas({
 					<section className="stage" aria-label="Selected Slide">
 						{selected ? (
 							<>
-								<SlidePreview
+								<LectureSlidePreview
 									slide={selected}
 									preview={previewBySlide.get(selected.id) ?? null}
 									freshness={freshnessFor(selected)}
@@ -919,7 +839,7 @@ export function LectureCanvas({
 										<span className="film-number" aria-hidden="true">
 											{index + 1}
 										</span>
-										<SlidePreview
+										<LectureSlidePreview
 											slide={slide}
 											preview={previewBySlide.get(slide.id) ?? null}
 											freshness={freshnessFor(slide)}
@@ -989,7 +909,7 @@ export function LectureCanvas({
 													disabled={editing}
 													onClick={() => select(slide.id)}
 												>
-													<SlidePreview
+													<LectureSlidePreview
 														slide={slide}
 														preview={previewBySlide.get(slide.id) ?? null}
 														freshness="ready"
@@ -1049,15 +969,27 @@ function SlideDetails({
 	sources: Source[];
 	onOpenEvidence: (target: ReaderTarget) => void;
 }) {
-	function openCitation(citation: SlideCitation) {
+	function opening(citation: SlideCitation): CitationOpening {
 		const source = sources.find((item) => item.id === citation.source_id);
-		onOpenEvidence({
-			sourceId: source ? citation.source_id : null,
-			resourceId: null,
-			label: source?.label ?? citation.label,
-			lineStart: citation.line_start ?? null,
-			lineEnd: citation.line_end ?? null,
-		});
+		if (source)
+			return {
+				title: "Open the cited passage",
+				onOpen: () =>
+					onOpenEvidence({
+						sourceId: citation.source_id,
+						resourceId: null,
+						label: source.label,
+						lineStart: citation.line_start ?? null,
+						lineEnd: citation.line_end ?? null,
+					}),
+			};
+		const { url } = citation;
+		return {
+			title: "This Source is no longer in the course",
+			onOpen: url
+				? () => window.open(url, "_blank", "noopener,noreferrer")
+				: undefined,
+		};
 	}
 	return (
 		<div className="slide-details">
@@ -1081,50 +1013,7 @@ function SlideDetails({
 					{slide.citations.length > 0 ? `(${slide.citations.length})` : ""}
 				</h2>
 				{slide.citations.length > 0 ? (
-					<ul className="citation-list">
-						{slide.citations.map((citation, index) => {
-							const admitted = sources.some(
-								(source) => source.id === citation.source_id,
-							);
-							return (
-								// biome-ignore lint/suspicious/noArrayIndexKey: Citations have no identity of their own
-								<li key={`${citation.source_id}-${index}`}>
-									<button
-										type="button"
-										className="citation-chip"
-										disabled={!admitted && !citation.url}
-										title={
-											admitted
-												? "Open the cited passage"
-												: "This Source is no longer in the course"
-										}
-										onClick={() => {
-											if (admitted) openCitation(citation);
-											else if (citation.url)
-												window.open(
-													citation.url,
-													"_blank",
-													"noopener,noreferrer",
-												);
-										}}
-									>
-										<span className="citation-marker">{index + 1}</span>
-										<span className="citation-label" title={citation.label}>
-											{citation.label}
-										</span>
-										{citation.line_start != null ? (
-											<span className="citation-where">
-												{lineRangeLabel(
-													citation.line_start,
-													citation.line_end ?? null,
-												)}
-											</span>
-										) : null}
-									</button>
-								</li>
-							);
-						})}
-					</ul>
+					<CitationList citations={slide.citations} opening={opening} />
 				) : (
 					<p className="meta">This Slide cites no Sources.</p>
 				)}

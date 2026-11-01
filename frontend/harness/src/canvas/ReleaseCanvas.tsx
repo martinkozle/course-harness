@@ -1,3 +1,4 @@
+import { errorMessage, isAbort, Notice } from "@course-harness/ui";
 import {
 	AlertTriangle,
 	CheckCircle2,
@@ -20,7 +21,6 @@ import type {
 	ReleaseWaiver,
 	Source,
 } from "../models";
-import { errorMessage, isAbort, Notice } from "../ui";
 import type { AgentContext } from "../useCourseAgent";
 import type { HistoryTab } from "./HistoryCanvas";
 import { findingScope, ReleaseDetail } from "./ReleaseDetail";

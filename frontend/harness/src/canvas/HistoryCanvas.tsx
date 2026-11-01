@@ -1,3 +1,4 @@
+import { ConfirmDialog, errorMessage, isAbort, Notice, Tabs } from "@course-harness/ui";
 import {
 	AlertTriangle,
 	ChevronRight,
@@ -26,7 +27,6 @@ import type {
 	CurrentStateFile,
 	PresentationSummary,
 } from "../models";
-import { ConfirmDialog, errorMessage, isAbort, Notice, Tabs } from "../ui";
 import { formatDate, ReleaseDetail } from "./ReleaseDetail";
 
 export type HistoryTab = "changes" | "revisions" | "releases";

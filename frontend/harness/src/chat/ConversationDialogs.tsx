@@ -1,6 +1,6 @@
+import { ConfirmDialog, Dialog, Notice } from "@course-harness/ui";
 import { useEffect, useState } from "react";
 
-import { ConfirmDialog, Dialog, Notice } from "../ui";
 import type {
 	CompactionPreview,
 	Conversation,

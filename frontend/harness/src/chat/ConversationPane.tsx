@@ -1,3 +1,4 @@
+import { Menu, Notice } from "@course-harness/ui";
 import {
 	ArrowDown,
 	ArrowUp,
@@ -39,7 +40,6 @@ import type {
 	ResourceState,
 	Source,
 } from "../models";
-import { Menu, Notice } from "../ui";
 import {
 	ATTACHABLE_TYPES,
 	type AgentContext,

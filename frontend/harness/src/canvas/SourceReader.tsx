@@ -1,9 +1,15 @@
+import {
+	errorMessage,
+	isAbort,
+	lineRangeLabel,
+	Notice,
+	Tabs,
+} from "@course-harness/ui";
 import { ArrowLeft, MessageSquareText } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { responseError } from "../api";
 import type { ReaderTarget } from "../models";
-import { errorMessage, isAbort, Notice, Tabs } from "../ui";
 import type { AgentContext } from "../useCourseAgent";
 
 type Content =
@@ -12,15 +18,6 @@ type Content =
 	| { kind: "pdf"; url: string }
 	| { kind: "image"; url: string }
 	| { kind: "error"; message: string };
-
-export function lineRangeLabel(
-	lineStart: number | null,
-	lineEnd: number | null,
-): string | null {
-	if (lineStart === null) return null;
-	if (lineEnd === null || lineEnd === lineStart) return `Line ${lineStart + 1}`;
-	return `Lines ${lineStart + 1}–${lineEnd + 1}`;
-}
 
 export function SourceReader({
 	target,

@@ -1,0 +1,55 @@
+/* A Slide drawn as a rendered background with selectable text on top (ADR 0010). */
+
+.slide-preview {
+	position: relative;
+	overflow: hidden;
+	width: 100%;
+	container-type: inline-size;
+	border: 1px solid var(--rule);
+	border-radius: var(--radius-s);
+	background-color: #fff;
+	background-size: cover;
+	background-position: center;
+	box-shadow: 0 1px 3px rgb(29 39 51 / 10%);
+}
+
+.slide-preview img {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+}
+
+.slide-slot {
+	position: absolute;
+	overflow: hidden;
+	color: #1f2933;
+	line-height: 1.2;
+	white-space: pre-line;
+}
+
+.slide-preview img.slide-slot-image {
+	inset: auto;
+	object-fit: contain;
+}
+
+.slide-fallback {
+	position: absolute;
+	inset: 12% 8%;
+	font-family: var(--font-display);
+	font-size: 5.5cqw;
+	line-height: 1.2;
+	color: var(--ink);
+}
+
+.slide-updating {
+	position: absolute;
+	right: 6px;
+	bottom: 6px;
+	padding: 1px 6px;
+	border-radius: 999px;
+	background: rgb(29 39 51 / 70%);
+	font-size: 0.6875rem;
+	color: #fff;
+}

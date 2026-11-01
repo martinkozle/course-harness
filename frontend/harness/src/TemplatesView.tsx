@@ -1,3 +1,4 @@
+import { ConfirmDialog, Notice } from "@course-harness/ui";
 import {
 	AlertTriangle,
 	Check,
@@ -20,7 +21,6 @@ import type {
 	TemplateProfileSummary,
 	TemplateValidationFinding,
 } from "./models";
-import { ConfirmDialog, Notice } from "./ui";
 
 const BUILTIN_ID = "_builtin-default";
 const REVIEW_THRESHOLD = 0.8;
