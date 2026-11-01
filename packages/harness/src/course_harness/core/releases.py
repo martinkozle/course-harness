@@ -38,7 +38,6 @@ from course_harness.core.course_plan import LECTURE_ID_PATTERN, CoursePlan
 from course_harness.core.presentation import Presentation
 from course_harness.core.quiz import InvalidQuiz, Quiz, parse_quiz, quiz_path
 from course_harness.core.release_validation import (
-    SOURCE_WITHOUT_LOCATOR,
     InvalidWaiver,
     ReleaseValidationResult,
     validate_release,
@@ -443,12 +442,7 @@ def verify_release_manifest(repository: Path, release: CourseRelease) -> None:
             selection=selection,
             waivers=release.validation.waivers,
             quizzes=quizzes,
-            # A Release published before Sources had locators recorded no locator warnings.
-            # One published since records them whenever they apply, so checking only then
-            # still re-derives its validation exactly.
-            check_source_locators=any(
-                finding.code == SOURCE_WITHOUT_LOCATOR for finding in release.validation.findings
-            ),
+            rules=release.validation.rules,
         )
     except InvalidWaiver as error:
         raise ReleaseError("Release manifest contains an invalid Waiver") from error

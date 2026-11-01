@@ -557,3 +557,15 @@
 		grid-template-columns: 1fr;
 	}
 }
+
+.release-finding.is-info {
+	border-left-color: var(--accent);
+}
+
+.release-finding.is-info .release-finding-head > svg {
+	color: var(--accent-ink);
+}
+
+.release-record li.is-info {
+	border-left-color: var(--accent);
+}

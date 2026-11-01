@@ -555,7 +555,7 @@ function CourseTab({
 										{source.label}
 									</button>
 									<div className="row-meta">
-										{kind && !source.locator ? <span>{kind}</span> : null}
+										{kind ? <span>{kind}</span> : null}
 										<PublicLink locator={source.locator} />
 										{resource?.snapshot ? (
 											<span>{formatBytes(resource.snapshot.byte_count)}</span>

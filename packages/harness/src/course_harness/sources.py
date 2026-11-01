@@ -251,11 +251,16 @@ def adopt_source_version(
 
 
 def resource_locator(resource: Resource) -> SourceLocator | None:
-    """The public locator of a Library Resource: only remote Resources have one.
+    """The public locator of a Library Resource: only a remote Resource fetched directly has one.
 
-    A local file or upload is named by its label alone, so no local path is ever written.
+    A local file or upload is named by its label alone, so no local path is ever written. A page
+    a Connector captured, or one without a Snapshot of its own, may not be publicly readable.
     """
-    if resource.kind != "remote":
+    if (
+        resource.kind != "remote"
+        or resource.captured_via is not None
+        or resource.snapshot_hash is None
+    ):
         return None
     return public_locator(resource.location)
 
@@ -292,11 +297,15 @@ def backfill_source_locators(workspace: Path, data_dir: Path) -> bool:
         if index is None or all(source.locator is not None for source in index.sources):
             return False
         locators = library_locators(data_dir)
+        # A cheap first look, before reading Current State, so a Workspace with nothing to fill
+        # in costs no Git work; the result is computed again below from the guarded bytes.
         if with_missing_locators(index, locators) is None:
             return False
         state = read_current_state(workspace)
         if state.drift != "clean" or not state.validation.valid:
             return False
+        # Read again under the captured precondition: reading Current State may have completed
+        # an interrupted transaction, and the write must start from exactly these bytes.
         expected = capture_canonical_file(workspace, "sources.yaml")
         index = read_sources_index(workspace)
         updated = with_missing_locators(index, locators) if index is not None else None

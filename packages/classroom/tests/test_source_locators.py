@@ -12,7 +12,7 @@ from course_harness.core.presentation import (
     write_presentation,
 )
 from course_harness.core.quiz import Quiz, QuizOption, QuizQuestion, write_quiz
-from course_harness.core.release_validation import ReleaseSelection, Waiver
+from course_harness.core.release_validation import ReleaseSelection
 from course_harness.core.sources import Source, SourceLocator, SourcesIndex, write_sources_index
 from course_harness.release_service import PublishReleaseRequest, publish_release
 from course_harness.workspace_history import (
@@ -28,6 +28,8 @@ CORRECT = "option-aaaaaaaaaaaa"
 WRONG = "option-bbbbbbbbbbbb"
 LINKED_ID = "source-aaaaaaaaaaaa"
 UNLINKED_ID = "source-bbbbbbbbbbbb"
+# Admitted but cited only on an archived Slide, so Learners never see it.
+UNCITED_ID = "source-cccccccccccc"
 LOCATOR = SourceLocator(url="https://example.org/rubin-1974", doi="10.1037/h0037350")
 
 LINKED = SlideCitation(source_id=LINKED_ID, label="Rubin (1974)")
@@ -56,6 +58,14 @@ def _publish_with_sources(repository: Any) -> None:
                     label="Lecture notes",
                     admitted_at="2026-09-14T00:00:00+00:00",
                 ),
+                Source(
+                    id=UNCITED_ID,
+                    resource_id="resource-cccccccccccc",
+                    source_version_id="c" * 64,
+                    label="Draft reading",
+                    admitted_at="2026-09-14T00:00:00+00:00",
+                    locator=SourceLocator(url="https://example.org/draft"),
+                ),
             ]
         ),
     )
@@ -69,7 +79,13 @@ def _publish_with_sources(repository: Any) -> None:
                     id="slide-aaaaaaaaaaaa",
                     title="Foundations",
                     citations=[LINKED, OWN_URL, UNLINKED],
-                )
+                ),
+                TitleSlide(
+                    id="slide-bbbbbbbbbbbb",
+                    title="Cut",
+                    archived=True,
+                    citations=[SlideCitation(source_id=UNCITED_ID, label="Draft reading")],
+                ),
             ],
         ),
     )
@@ -106,12 +122,6 @@ def _publish_with_sources(repository: Any) -> None:
             slug="fall-2026",
             name="Fall 2026",
             selection=ReleaseSelection(lecture_ids=[LECTURE_ID], artifact_ids=[PRESENTATION_ID]),
-            waivers=[
-                Waiver(
-                    finding_id=f"citation.source-without-locator:{UNLINKED_ID}",
-                    justification="Handed out in class.",
-                )
-            ],
         ),
     )
     repository.push()
@@ -162,7 +172,7 @@ def test_citations_link_to_their_own_url_or_their_sources_locator(
     assert tried["citations"][0]["url"] == "https://example.org/rubin-1974"
 
 
-def test_the_course_lists_its_sources_with_their_public_links(
+def test_the_course_lists_the_sources_learners_see_cited_with_their_public_links(
     make_client: Any, admin: TestClient, course_repository: Any
 ) -> None:
     _publish_with_sources(course_repository)

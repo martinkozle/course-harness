@@ -20,7 +20,12 @@ from course_harness.core.presentation import (
     TitleSlide,
     write_presentation,
 )
-from course_harness.core.release_validation import ReleaseSelection, Waiver, validate_release
+from course_harness.core.release_validation import (
+    InvalidWaiver,
+    ReleaseSelection,
+    Waiver,
+    validate_release,
+)
 from course_harness.core.releases import CourseRelease
 from course_harness.core.sources import (
     Source,
@@ -33,12 +38,9 @@ from course_harness.core.sources import (
     with_missing_locators,
     write_sources_index,
 )
-from course_harness.release_service import (
-    PublishReleaseRequest,
-    ReleaseValidationError,
-    publish_release,
-)
-from course_harness.sources import backfill_source_locators
+from course_harness.release_service import PublishReleaseRequest, publish_release
+from course_harness.resources import Resource
+from course_harness.sources import backfill_source_locators, resource_locator
 from course_harness.workspace_history import (
     RevisionCreateRequest,
     create_revision,
@@ -46,6 +48,7 @@ from course_harness.workspace_history import (
     record_app_authored_entries,
     record_app_authored_state,
 )
+from course_harness.workspaces import remember_workspace
 
 SEARCH_FIXTURES = Path(__file__).with_name("fixtures") / "search"
 SIGNED_URL = (
@@ -142,10 +145,28 @@ def _without_locators(workspace: Path) -> SourcesIndex:
 
 
 async def _open(workspace: Path, data_dir: Path, cache_dir: Path) -> None:
-    transport = httpx2.ASGITransport(app=_app(workspace, data_dir, cache_dir))
-    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/workspace")
+    """Start the app bound to ``workspace``, as the command line does."""
+    app = _app(workspace, data_dir, cache_dir)
+    async with app.router.lifespan_context(app):
+        transport = httpx2.ASGITransport(app=app)
+        async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/api/workspace")
     assert response.status_code == 200, response.text
+
+
+async def _reopen_from_launcher(
+    tmp_path: Path, workspace: Path, data_dir: Path, cache_dir: Path
+) -> httpx2.Response:
+    """Open ``workspace`` from the Workspace Launcher of an unbound app."""
+    recent = tmp_path / "recent.json"
+    remember_workspace(recent, workspace)
+    app = create_app(
+        None, recent_store_path=recent, library_data_path=data_dir, library_cache_path=cache_dir
+    )
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(transport=transport, base_url="http://test") as client:
+        (entry,) = (await client.get("/api/launcher/recent")).json()
+        return await client.post(f"/api/launcher/recent/{entry['id']}/open")
 
 
 # Sanitising public URLs
@@ -159,8 +180,38 @@ def test_public_locator_strips_credentials_secrets_and_fragments() -> None:
     assert with_userinfo is not None
     assert with_userinfo.url == "https://example.org:8443/a?q=b+c"
 
-    kept = public_locator("https://example.org/search?author=Rubin&year=1974&auth=x")
-    assert kept is not None and kept.url == "https://example.org/search?author=Rubin&year=1974"
+    kept = public_locator("https://example.org/search?q=causal&year=1974&page=2")
+    assert kept is not None and kept.url == "https://example.org/search?q=causal&year=1974&page=2"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "key",
+        "apikey",
+        "Key-Pair-Id",
+        "sig",
+        "X-Amz-Signature",
+        "auth",
+        "oauth_verifier",
+        "jwt",
+        "hash",
+        "hmac",
+        "otp",
+        "ticket",
+        "email",
+        "user_email",
+        "token",
+        "secret",
+        "session_id",
+        "rlkey",
+        "utm_source",
+        "utm_campaign",
+    ],
+)
+def test_query_parameters_that_may_hold_secrets_or_tracking_are_dropped(name: str) -> None:
+    locator = public_locator(f"https://example.org/paper?id=7&{name}=value")
+    assert locator is not None and locator.url == "https://example.org/paper?id=7"
 
 
 @pytest.mark.parametrize(
@@ -178,6 +229,32 @@ def test_public_locator_strips_credentials_secrets_and_fragments() -> None:
         "http://intranet.local/paper.pdf",
         "https://example.org/a b",
         "https:///no-host",
+        # Single-label and private-use names
+        "http://wiki/paper.pdf",
+        "http://fileserver./paper.pdf",
+        "http://files.lan/paper.pdf",
+        "http://docs.corp/paper.pdf",
+        "http://nas.home.arpa/paper.pdf",
+        "http://portal.intranet/paper.pdf",
+        "http://site.test/paper.pdf",
+        "http://site.example/paper.pdf",
+        "http://site.invalid/paper.pdf",
+        "http://svc.internal/paper.pdf",
+        # Numeric hosts that resolvers read as addresses
+        "http://2130706433/paper.pdf",
+        "http://127.1/paper.pdf",
+        "http://0x7f000001/paper.pdf",
+        "http://0x7f.0.0.1/paper.pdf",
+        # Personal share links
+        "https://drive.google.com/file/d/abc/view",
+        "https://docs.google.com/document/d/abc/edit",
+        "https://www.dropbox.com/s/abc/paper.pdf",
+        "https://1drv.ms/b/s!abc",
+        "https://onedrive.live.com/?cid=abc",
+        "https://contoso.sharepoint.com/:b:/s/team/abc",
+        "https://app.box.com/s/abc",
+        "https://mega.nz/file/abc",
+        "https://wetransfer.com/downloads/abc",
     ],
 )
 def test_non_public_locations_get_no_locator(location: str) -> None:
@@ -193,18 +270,42 @@ def test_doi_and_arxiv_ids_are_recognised_from_their_resolvers() -> None:
     assert arxiv.url == "https://arxiv.org/pdf/1706.03762v7.pdf"
     plain = public_locator("https://example.org/10.1037/h0037350")
     assert plain is not None and plain.doi is None and plain.arxiv_id is None
+    old_style = public_locator("https://arxiv.org/abs/math.GT/0309136v1")
+    assert old_style is not None and old_style.arxiv_id == "math.GT/0309136"
+    assert SourceLocator(arxiv_id="hep-th/9901001").arxiv_id == "hep-th/9901001"
+    google_docs = public_locator("https://docs.google.com/forms/u/0/")
+    assert google_docs is not None
 
 
-def test_the_locator_schema_only_accepts_public_http_metadata() -> None:
-    for url in ("file:///etc/passwd", "https://user:pw@example.org/", "http://localhost/"):
+def test_the_locator_schema_accepts_any_http_url_without_credentials() -> None:
+    for url in ("file:///etc/passwd", "https://user:pw@example.org/", "https://" + "a" * 2000):
         with pytest.raises(ValidationError):
             SourceLocator(url=url)
     with pytest.raises(ValidationError):
         SourceLocator()
-    with pytest.raises(ValidationError):
-        SourceLocator(doi="not-a-doi")
+    for doi in ("not-a-doi", "10.1000/xyz?download=1", "10.1000/xyz#page"):
+        with pytest.raises(ValidationError):
+            SourceLocator(doi=doi)
+    # Stricter rules for new locators never make existing files or tagged Releases unreadable.
+    assert SourceLocator(url="http://wiki.lan/paper?token=x").url == "http://wiki.lan/paper?token=x"
     assert SourceLocator(doi="10.1000/xyz").link() == "https://doi.org/10.1000/xyz"
     assert SourceLocator(arxiv_id="1706.03762").link() == "https://arxiv.org/abs/1706.03762"
+
+
+def test_only_directly_fetched_remote_resources_get_a_locator() -> None:
+    remote = Resource(
+        id="resource-aaaaaaaaaaaa",
+        kind="remote",
+        location="https://example.org/paper",
+        media_type="text/html",
+        registered_at="2026-09-14T00:00:00+00:00",
+        snapshot_hash="a" * 64,
+    )
+    assert resource_locator(remote) == SourceLocator(url="https://example.org/paper")
+    assert resource_locator(remote.model_copy(update={"captured_via": "Exa"})) is None
+    assert resource_locator(remote.model_copy(update={"snapshot_hash": None})) is None
+    upload = remote.model_copy(update={"kind": "upload", "location": "paper.pdf"})
+    assert resource_locator(upload) is None
 
 
 def test_a_citations_own_url_wins_over_its_sources_locator() -> None:
@@ -354,6 +455,25 @@ async def test_backfill_leaves_workspace_drift_alone_and_retries_on_a_later_open
 
 
 @pytest.mark.anyio
+async def test_opening_from_the_launcher_backfills_and_never_fails_opening(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, data_dir, cache_dir = await _admit_remote_and_upload(tmp_path)
+    _record_as_app_authored(workspace, _without_locators(workspace))
+
+    opened = await _reopen_from_launcher(tmp_path, workspace, data_dir, cache_dir)
+    assert opened.status_code == 200, opened.text
+    assert _sources_by_label(workspace)["Attention"].locator is not None
+
+    def broken(_workspace: Path, _data_dir: Path) -> bool:
+        raise RuntimeError("the Library is unreadable")
+
+    monkeypatch.setattr("course_harness.sources.backfill_source_locators", broken)
+    again = await _reopen_from_launcher(tmp_path / "again", workspace, data_dir, cache_dir)
+    assert again.status_code == 200, again.text
+
+
+@pytest.mark.anyio
 async def test_backfill_leaves_an_invalid_sources_file_alone(tmp_path: Path) -> None:
     workspace, data_dir, cache_dir = await _admit_remote_and_upload(tmp_path)
     (workspace / "sources.yaml").write_text("sources: [not valid", encoding="utf-8")
@@ -371,6 +491,7 @@ LINKED_ID = "source-aaaaaaaaaaaa"
 UNLINKED_ID = "source-bbbbbbbbbbbb"
 LOCATOR = SourceLocator(url="https://example.org/foundations", doi="10.1000/foundations")
 MISSING_LOCATOR = f"citation.source-without-locator:{UNLINKED_ID}"
+MISSING_LOCATOR_WAIVER = Waiver(finding_id=MISSING_LOCATOR, justification="Handed out in class.")
 
 
 def _release_sources() -> SourcesIndex:
@@ -425,23 +546,32 @@ def _validate(presentation: Presentation, waivers: list[Waiver] | None = None):
     )
 
 
-def test_a_cited_source_without_a_locator_is_a_waivable_warning() -> None:
+def test_a_cited_source_without_a_locator_is_a_note_that_never_blocks() -> None:
     unlinked = SlideCitation(source_id=UNLINKED_ID, label="Lecture notes")
     linked = SlideCitation(source_id=LINKED_ID, label="Foundations")
 
     result = _validate(_presentation(linked, unlinked))
     (finding,) = result.findings
     assert finding.id == MISSING_LOCATOR
-    assert finding.severity == "warning"
+    assert finding.severity == "info"
     assert finding.target.scope == "source" and finding.target.source_id == UNLINKED_ID
     assert "Lecture notes" in finding.message
-    assert result.structurally_valid and not result.can_publish
-
-    waived = _validate(
-        _presentation(linked, unlinked),
-        [Waiver(finding_id=MISSING_LOCATOR, justification="Notes are handed out in class.")],
+    assert result.structurally_valid and result.can_publish
+    assert result.rules == 2
+    # A note needs no Waiver, so one cannot be recorded for it.
+    with pytest.raises(InvalidWaiver):
+        _validate(_presentation(linked, unlinked), [MISSING_LOCATOR_WAIVER])
+    # Rules before version 2 have no note.
+    assert (
+        validate_release(
+            plan=_plan(),
+            presentations=[_presentation(linked, unlinked)],
+            sources=_release_sources(),
+            selection=SELECTION,
+            rules=1,
+        ).findings
+        == []
     )
-    assert waived.can_publish and waived.findings[0].waived
 
 
 def test_no_locator_warning_when_every_citation_has_its_own_link_or_none_cites_it() -> None:
@@ -481,13 +611,9 @@ def test_release_manifests_carry_source_locators_for_readers(tmp_path: Path) -> 
     workspace = _workspace_with_citation(
         tmp_path, SlideCitation(source_id=UNLINKED_ID, label="Lecture notes")
     )
-    with pytest.raises(ReleaseValidationError):
-        _publish(workspace, tmp_path, [])
-    release = _publish(
-        workspace,
-        tmp_path,
-        [Waiver(finding_id=MISSING_LOCATOR, justification="Notes are handed out in class.")],
-    )
+    release = _publish(workspace, tmp_path, [])
+    assert [finding.severity for finding in release.validation.findings] == ["info"]
+    assert release.validation.rules == 2
 
     mirror = tmp_path / "mirror.git"
     subprocess.run(
@@ -506,6 +632,7 @@ def test_release_manifests_carry_source_locators_for_readers(tmp_path: Path) -> 
         text=True,
     ).stdout
     assert '"locator":{"doi":"10.1000/foundations","url":"https://example.org/foundations"}' in tag
+    assert '"rules":2' in tag
 
 
 def test_releases_published_before_locators_still_verify(
@@ -523,19 +650,12 @@ def test_releases_published_before_locators_still_verify(
     write_sources_index(workspace, old_sources)
     create_revision(workspace, RevisionCreateRequest(summary="Initial Course"))
     record_app_authored_state(workspace)
-    monkeypatch.setattr(
-        release_service,
-        "validate_release",
-        partial(validate_release, check_source_locators=False),
-    )
-    monkeypatch.setattr(
-        releases,
-        "validate_release",
-        partial(validate_release, check_source_locators=False),
-    )
+    monkeypatch.setattr(release_service, "validate_release", partial(validate_release, rules=1))
+    monkeypatch.setattr(releases, "validate_release", partial(validate_release, rules=1))
     release = _publish(workspace, tmp_path, [])
     monkeypatch.undo()
 
     assert release.validation.findings == []
-    assert "locator" not in releases.canonical_json(release.model_dump(mode="json")).decode()
+    manifest = releases.canonical_json(release.model_dump(mode="json")).decode()
+    assert "locator" not in manifest and "rules" not in manifest
     assert releases.read_verified_release(workspace, "fall-2026") == release

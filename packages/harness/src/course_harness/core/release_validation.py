@@ -10,7 +10,8 @@ from course_harness.core.presentation import Presentation, SlideCitation
 from course_harness.core.quiz import Quiz, QuizOption, QuizQuestion, quiz_problems
 from course_harness.core.sources import SourcesIndex, citation_link
 
-FindingSeverity = Literal["error", "warning"]
+# "info" is a note for the Course Author: it never blocks publishing and needs no Waiver.
+FindingSeverity = Literal["error", "warning", "info"]
 FindingScope = Literal[
     "release",
     "lecture",
@@ -23,8 +24,11 @@ FindingScope = Literal[
     "option",
     "source",
 ]
-# Raised when a cited Source has no public locator, so its Citations cannot link anywhere.
+# Noted when a cited Source has no public locator, so its Citations cannot link anywhere.
 SOURCE_WITHOUT_LOCATOR = "citation.source-without-locator"
+# The version of the validation rules. A Release records the version it was checked with, so
+# re-checking it later applies exactly those rules. 2 adds the Source Locator note.
+CURRENT_RULES = 2
 LectureId = Annotated[str, Field(pattern=LECTURE_ID_PATTERN)]
 ArtifactId = Annotated[str, Field(pattern=r"^presentation-[0-9a-f]{12}$")]
 
@@ -95,6 +99,8 @@ class ReleaseValidationResult(BaseModel):
     waivers: list[Waiver] = Field(default_factory=list)
     structurally_valid: bool
     can_publish: bool
+    # Omitted when 1 so manifests of Releases published before rule versions stay exact.
+    rules: int = Field(default=1, ge=1, le=CURRENT_RULES, exclude_if=lambda value: value == 1)
 
 
 def validate_release(
@@ -106,13 +112,13 @@ def validate_release(
     waivers: list[Waiver] | None = None,
     evidence_line_counts: Mapping[str, int] | None = None,
     quizzes: Sequence[Quiz] = (),
-    check_source_locators: bool = True,
+    rules: int = CURRENT_RULES,
 ) -> ReleaseValidationResult:
     """Validate a proposed partial Release without mutating Course state.
 
     ``quizzes`` may hold any Quizzes; only those of selected Lectures are validated.
-    ``check_source_locators`` is off only when re-checking a Release published before
-    Sources had locators.
+    ``rules`` is the rule version to apply: an earlier one only when re-checking a Release
+    published with it.
     """
 
     findings: list[ValidationFinding] = []
@@ -247,7 +253,7 @@ def validate_release(
             evidence_line_counts=evidence_line_counts,
         )
     )
-    if check_source_locators:
+    if rules >= 2:
         findings.extend(
             _locator_findings(
                 presentations_by_id=presentations_by_id,
@@ -267,6 +273,7 @@ def validate_release(
         structurally_valid=structurally_valid,
         can_publish=structurally_valid
         and not any(finding.severity == "warning" and not finding.waived for finding in findings),
+        rules=rules,
     )
 
 
@@ -385,8 +392,8 @@ def _locator_findings(
     selection: ReleaseSelection,
     sources: SourcesIndex,
 ) -> list[ValidationFinding]:
-    """One warning per Source that some selected Citation names with no link of its own,
-    when the Source has no public locator either, in Source order."""
+    """One note per Source that some selected Citation names with no link of its own, when
+    the Source has no public locator either, in Source order. It never blocks publishing."""
     citations: list[SlideCitation] = []
     for artifact_id in selection.artifact_ids:
         presentation = presentations_by_id.get(artifact_id)
@@ -413,7 +420,7 @@ def _locator_findings(
             ValidationFinding(
                 id=f"{SOURCE_WITHOUT_LOCATOR}:{source.id}",
                 code=SOURCE_WITHOUT_LOCATOR,
-                severity="warning",
+                severity="info",
                 message=(
                     f"Source “{source.label}” has no public link, so its Citations show "
                     "only their label in a Classroom."

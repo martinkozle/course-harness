@@ -4,7 +4,7 @@ import logging
 import os
 import re
 import subprocess
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
 from pathlib import Path
@@ -578,7 +578,14 @@ def create_app(
             logging.getLogger(name).setLevel(logging.WARNING)
     logger = logging.getLogger("course-harness")
 
-    app = FastAPI(title="Course Harness")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        # A Workspace bound at startup, from the command line, opens with the app.
+        if workspace is not None:
+            await workspace_opened(workspace)
+        yield
+
+    app = FastAPI(title="Course Harness", lifespan=lifespan)
     background_render_tasks: set[asyncio.Task[None]] = set()
     deferred_agent_cleanup_tasks: set[asyncio.Task[None]] = set()
     conversation_title_tasks: set[asyncio.Task[None]] = set()
@@ -814,10 +821,6 @@ def create_app(
             except WorkspaceHistoryError as error:
                 raise HTTPException(status_code=409, detail=str(error)) from error
             recovered_workspaces.add(resolved)
-            if not mutation_lock(workspace).locked():
-                # Existing Sources gain the public locators of their Library Resources; a
-                # Workspace with Drift or invalid state is left alone and retried next open.
-                sources_module.backfill_source_locators(workspace, data_dir)
         return workspace
 
     def require_bound_workspace() -> Path:
@@ -942,6 +945,25 @@ def create_app(
             ) from error
         workspace = candidate
         return WorkspaceResponse(name=candidate.name, path=str(candidate))
+
+    async def workspace_opened(active: Path) -> None:
+        """Bring app-authored Course state up to date when a Workspace opens.
+
+        Existing Sources gain the public locators of their Library Resources. This never fails
+        opening: a Workspace that is busy, has Drift or is invalid is retried on the next open.
+        """
+        try:
+            async with exclusive_mutation(active):
+                await asyncio.to_thread(sources_module.backfill_source_locators, active, data_dir)
+        except HTTPException:
+            logger.info("Another Course change is running; opening tasks wait for the next open")
+        except Exception:
+            logger.exception("Opening tasks for the Course Workspace failed")
+
+    async def bind_and_open(selection: Path) -> WorkspaceResponse:
+        response = bind_workspace(selection)
+        await workspace_opened(Path(response.path))
+        return response
 
     def choose_folder() -> Path | None:
         try:
@@ -1336,7 +1358,7 @@ def create_app(
         selection = choose_folder()
         if selection is None:
             return Response(status_code=204)
-        return bind_workspace(selection)
+        return await bind_and_open(selection)
 
     @app.post("/api/launcher/new-course", response_model=WorkspaceResponse)
     async def new_course_workspace() -> WorkspaceResponse | Response:
@@ -1354,7 +1376,7 @@ def create_app(
                 status_code=409,
                 detail="That folder already contains a Course; use Open Folder instead",
             )
-        return bind_workspace(candidate)
+        return await bind_and_open(candidate)
 
     @app.get("/api/launcher/recent", response_model=list[RecentWorkspaceResponse])
     async def recent_workspaces() -> list[RecentWorkspaceResponse]:
@@ -1370,7 +1392,7 @@ def create_app(
         if selection is None:
             raise HTTPException(status_code=404, detail="Recent Course Workspace was not found")
         try:
-            return bind_workspace(selection)
+            return await bind_and_open(selection)
         except HTTPException as error:
             if error.status_code == 422:
                 raise HTTPException(

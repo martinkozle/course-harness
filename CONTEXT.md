@@ -173,7 +173,7 @@ A claim-level link to Evidence, rendered with the Resource's canonical identity 
 _Avoid_: URL, Reference, chunk identifier
 
 **Validation Finding**:
-A structural error or conservative quality warning produced while checking Course state or a proposed Course Release.
+A structural error, conservative quality warning, or informational note that never blocks publishing, produced while checking Course state or a proposed Course Release.
 _Avoid_: Agent criticism, claim count, automatic rejection
 
 **Waiver**:

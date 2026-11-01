@@ -69,17 +69,35 @@ def source_locators(snapshot: ServedSnapshot) -> dict[str, SourceLocator]:
 
 
 def course_sources(snapshot: ServedSnapshot) -> list[CourseSource]:
-    """Every Source the served Release pins, in Course order, with its link when it has one."""
-    return [
-        CourseSource(
-            id=pin.id,
-            label=pin.label,
-            url=pin.locator.link() if pin.locator else None,
-            doi=pin.locator.doi if pin.locator else None,
-            arxiv_id=pin.locator.arxiv_id if pin.locator else None,
+    """The Sources cited by the served Lectures' visible Slides and Quizzes, in Course order,
+    each with its link when it has one."""
+    cited: set[str] = set()
+    for lecture in snapshot.lectures:
+        if lecture.presentation is not None:
+            for slide in lecture.presentation.slides:
+                if not slide.archived:
+                    cited.update(citation.source_id for citation in slide.citations)
+        if lecture.quiz is not None:
+            for question in lecture.quiz.questions:
+                cited.update(citation.source_id for citation in question.citations)
+                for option in question.options:
+                    cited.update(citation.source_id for citation in option.citations)
+    locators = source_locators(snapshot)
+    sources: list[CourseSource] = []
+    for pin in snapshot.manifest.sources:
+        if pin.id not in cited:
+            continue
+        locator = locators.get(pin.id)
+        sources.append(
+            CourseSource(
+                id=pin.id,
+                label=pin.label,
+                url=locator.link() if locator else None,
+                doi=locator.doi if locator else None,
+                arxiv_id=locator.arxiv_id if locator else None,
+            )
         )
-        for pin in snapshot.manifest.sources
-    ]
+    return sources
 
 
 def linked_citations(

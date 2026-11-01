@@ -20,44 +20,81 @@ from course_harness.core.canonical_mutation import (
 from course_harness.core.canonical_yaml import load_canonical_yaml
 
 MAX_LOCATOR_URL_LENGTH = 2000
-DOI_PATTERN = r"^10\.\d{4,9}/[^\s]{1,300}$"
-ARXIV_ID_PATTERN = r"^(?:\d{4}\.\d{4,5}|[a-z][a-z.-]{0,30}/\d{7})$"
-# Query parameter names that carry credentials, signatures or session state, never public identity.
+DOI_PATTERN = r"^10\.\d{4,9}/[^\s?#]{1,300}$"
+# New-style IDs (1706.03762) and old-style ones with an optional subject class (math.GT/0309136).
+ARXIV_ID_PATTERN = r"^(?:\d{4}\.\d{4,5}|[a-z][a-z-]{0,20}(?:\.[A-Z]{2})?/\d{7})$"
+# Query parameter names that may carry credentials, signatures, sessions or personal data.
 _SECRET_QUERY_NAME = re.compile(
-    r"token|secret|passw|pwd|signature|credential|session|api[-_]?key|access[-_]?key"
-    r"|^auth$|^authorization$|^key$|^sig$|^sid$|^code$|^state$|^policy$|^expires$"
-    r"|^key-pair-id$|^x-amz-|^x-goog-",
+    r"key|sig|auth|jwt|hash|hmac|otp|ticket|email|token|secret|session|passw|pwd|credential"
+    r"|^code$|^state$|^policy$|^expires$|^sid$|^x-amz-|^x-goog-|^utm_",
     re.IGNORECASE,
+)
+# Hosts that never name a public site.
+_PRIVATE_HOST_SUFFIXES = (
+    ".localhost",
+    ".local",
+    ".internal",
+    ".lan",
+    ".corp",
+    ".home.arpa",
+    ".intranet",
+    ".test",
+    ".example",
+    ".invalid",
+)
+# Personal share links: whoever holds one can read the file, so it is never a public locator.
+_SHARE_LINK_HOSTS = (
+    "drive.google.com",
+    "dropbox.com",
+    "1drv.ms",
+    "onedrive.live.com",
+    "sharepoint.com",
+    "mega.nz",
+    "wetransfer.com",
 )
 
 
-def public_url_problem(value: str) -> str | None:
-    """Why ``value`` is not a public http(s) address a Source Locator may hold, if it is not."""
+def _url_shape_problem(value: str) -> str | None:
+    """Why ``value`` cannot be stored as a locator URL at all, if it cannot.
+
+    Deliberately lenient: stricter rules for new locators live in :func:`public_locator`, so
+    tightening them never makes an existing ``sources.yaml`` or tagged Release unreadable.
+    """
     if len(value) > MAX_LOCATOR_URL_LENGTH or any(
         character.isspace() or not character.isprintable() for character in value
     ):
         return "must be a single printable URL of at most 2000 characters"
-    parsed = urlsplit(value)
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return "is not a URL"
     if parsed.scheme not in {"http", "https"}:
         return "must use http or https"
     if parsed.username is not None or parsed.password is not None:
         return "must not contain credentials"
-    hostname = parsed.hostname
-    if not hostname:
+    if not parsed.hostname:
         return "must name a host"
-    try:
-        _ = parsed.port
-    except ValueError:
-        return "has an invalid port"
-    if hostname == "localhost" or hostname.endswith((".localhost", ".local", ".internal")):
-        return "must name a public host"
-    try:
-        address = ipaddress.ip_address(hostname)
-    except ValueError:
-        return None
-    if not address.is_global:
-        return "must name a public host"
     return None
+
+
+def _is_public_host(hostname: str) -> bool:
+    try:
+        return ipaddress.ip_address(hostname).is_global
+    except ValueError:
+        pass
+    if "." not in hostname or hostname.endswith(_PRIVATE_HOST_SUFFIXES):
+        return False
+    # Dotted numbers that are not a valid address, such as 127.1 or 2130706433.0, still reach
+    # private addresses through lenient resolvers.
+    return not all(label.isdigit() or label.startswith("0x") for label in hostname.split("."))
+
+
+def _is_share_link(hostname: str, path: str) -> bool:
+    if any(hostname == host or hostname.endswith(f".{host}") for host in _SHARE_LINK_HOSTS):
+        return True
+    if hostname == "docs.google.com" and "/d/" in path:
+        return True
+    return hostname in {"box.com", "app.box.com", "www.box.com"} and path.startswith("/s/")
 
 
 class SourceLocator(BaseModel):
@@ -75,8 +112,8 @@ class SourceLocator(BaseModel):
 
     @field_validator("url")
     @classmethod
-    def url_is_public(cls, value: str | None) -> str | None:
-        if value is not None and (problem := public_url_problem(value)) is not None:
+    def url_has_a_safe_shape(cls, value: str | None) -> str | None:
+        if value is not None and (problem := _url_shape_problem(value)) is not None:
             raise ValueError(f"Source Locator URL {problem}")
         return value
 
@@ -96,19 +133,23 @@ class SourceLocator(BaseModel):
 
 
 def public_locator(location: str) -> SourceLocator | None:
-    """The Source Locator for a remote Resource address, or ``None`` when it is not public.
+    """The Source Locator to record for a remote Resource address, or ``None`` when it is not
+    a public one: a private or single-label host, a numeric host, or a personal share link.
 
-    Credentials, the fragment and query parameters that look like secrets are dropped; a DOI or
-    arXiv ID is recognised from doi.org and arxiv.org addresses.
+    Credentials, the fragment, and query parameters that may hold secrets, personal data or
+    tracking are dropped; a DOI or arXiv ID is recognised from doi.org and arxiv.org addresses.
     """
     try:
         parsed = urlsplit(location.strip())
-        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        hostname = parsed.hostname
+        if parsed.scheme.lower() not in {"http", "https"} or not hostname:
             return None
         port = parsed.port
     except ValueError:
         return None
-    hostname = parsed.hostname
+    hostname = hostname.rstrip(".")
+    if not _is_public_host(hostname) or _is_share_link(hostname, parsed.path):
+        return None
     host = f"[{hostname}]" if ":" in hostname else hostname
     netloc = host if port is None else f"{host}:{port}"
     query = "&".join(
@@ -117,7 +158,7 @@ def public_locator(location: str) -> SourceLocator | None:
         if part and not _SECRET_QUERY_NAME.search(unquote_plus(part.split("=", 1)[0]))
     )
     url = urlunsplit((parsed.scheme.lower(), netloc, parsed.path or "/", query, ""))
-    if public_url_problem(url) is not None:
+    if _url_shape_problem(url) is not None:
         return None
     return SourceLocator(
         url=url, doi=_doi_from(hostname, parsed.path), arxiv_id=_arxiv_from(hostname, parsed.path)

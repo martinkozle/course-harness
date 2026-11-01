@@ -3,6 +3,7 @@ import {
 	AlertTriangle,
 	CheckCircle2,
 	FileSearch,
+	Info,
 	Presentation,
 	Sparkles,
 	XCircle,
@@ -285,6 +286,8 @@ export function ReleaseCanvas({
 		validation?.findings.filter((f) => f.severity === "error") ?? [];
 	const warnings =
 		validation?.findings.filter((f) => f.severity === "warning") ?? [];
+	const notes =
+		validation?.findings.filter((f) => f.severity === "info") ?? [];
 	const validationCurrent = validation !== null && validatedKey === selectedKey;
 
 	return (
@@ -444,14 +447,15 @@ export function ReleaseCanvas({
 						{!validationCurrent ? (
 							<p className="meta">Your changes need a new check.</p>
 						) : null}
-						{validation.findings.length === 0 ? (
+						{errors.length === 0 && warnings.length === 0 ? (
 							<p className="release-clear">
 								<CheckCircle2 aria-hidden="true" />
 								No issues found.
 							</p>
-						) : (
+						) : null}
+						{validation.findings.length > 0 ? (
 							<ul className="release-findings">
-								{[...errors, ...warnings].map((finding) => {
+								{[...errors, ...warnings, ...notes].map((finding) => {
 									const target = evidenceTarget(finding);
 									return (
 										<li
@@ -461,6 +465,8 @@ export function ReleaseCanvas({
 											<div className="release-finding-head">
 												{finding.severity === "error" ? (
 													<XCircle aria-hidden="true" />
+												) : finding.severity === "info" ? (
+													<Info aria-hidden="true" />
 												) : (
 													<AlertTriangle aria-hidden="true" />
 												)}
@@ -468,7 +474,9 @@ export function ReleaseCanvas({
 													<p className="release-finding-kind">
 														{finding.severity === "error"
 															? "Blocks publishing"
-															: "Warning"}
+															: finding.severity === "info"
+																? "Note · does not block publishing"
+																: "Warning"}
 														<span className="meta">
 															{" "}
 															· {findingScope(finding, course)}
@@ -522,7 +530,7 @@ export function ReleaseCanvas({
 									);
 								})}
 							</ul>
-						)}
+						) : null}
 					</div>
 				)}
 			</section>

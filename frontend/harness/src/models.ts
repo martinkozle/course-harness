@@ -447,7 +447,8 @@ export type EvidenceTarget = {
 export type ReleaseValidationFinding = {
 	id: string;
 	code: string;
-	severity: "error" | "warning";
+	/** An "info" finding is a note: it never blocks publishing and needs no Waiver. */
+	severity: "error" | "warning" | "info";
 	message: string;
 	target: ReleaseFindingTarget;
 	waived: boolean;
