@@ -57,3 +57,24 @@ export function useIdentity(): [Identity | null, (identity: Identity) => void] {
 	}, []);
 	return [identity, save];
 }
+
+const INSTRUCTOR_KEY = "classroom.instructor-id";
+
+/**
+ * The identity an Instructor's own tries go under. Instructors have no student ID, so each browser
+ * gets its own: their tries are recorded as an Instructor's and stay out of Insights by default.
+ */
+export function instructorIdentity(): Identity {
+	let id: string | null = null;
+	try {
+		id = localStorage.getItem(INSTRUCTOR_KEY);
+		if (!id) {
+			id = `instructor-${crypto.randomUUID().slice(0, 8)}`;
+			localStorage.setItem(INSTRUCTOR_KEY, id);
+		}
+	} catch {
+		// Without storage, the tries last until the page is closed.
+		id ??= `instructor-${crypto.randomUUID().slice(0, 8)}`;
+	}
+	return { name: "Instructor", studentId: id };
+}

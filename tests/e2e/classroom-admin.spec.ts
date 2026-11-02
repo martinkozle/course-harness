@@ -88,16 +88,14 @@ test("the Administrator attaches a course, creates its links, and a Learner open
 	// The Administrator opens the course as an Instructor without any link.
 	await card.getByRole("link", { name: "Open as Instructor" }).click();
 	await expect(page).toHaveURL(`${CLASSROOM}/c/causal`);
-	await expect(
-		page.getByText(
-			"You are signed in as the Administrator, so you see this course as an Instructor.",
-		),
-	).toBeVisible();
+	// Instructors are never asked for a name or student ID.
+	await expect(page.getByRole("tab", { name: "Lectures" })).toBeVisible();
+	await expect(page.getByLabel("Student ID")).toHaveCount(0);
 	const viewing = page.getByRole("group", { name: "Viewing as" });
 	await expect(
 		viewing.getByRole("button", { name: "Instructor" }),
 	).toHaveAttribute("aria-pressed", "true");
-	await page.getByRole("link", { name: "Open Insights" }).click();
+	await page.getByRole("tab", { name: "Insights" }).click();
 	const links = page.getByRole("region", { name: "Links to this course" });
 	await expect(links.getByLabel("Learner link", { exact: true })).toHaveValue(
 		learnerLink,

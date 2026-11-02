@@ -158,8 +158,12 @@ test("an Instructor sees where Learners get stuck after a Learner answers", asyn
 	const page = await instructorContext.newPage();
 	await page.goto(INSTRUCTOR_LINK);
 	await expect(page).toHaveURL(`${CLASSROOM}/c/causal`);
-	// Insights need no student identity.
-	await page.getByRole("link", { name: "Open Insights" }).click();
+	// An Instructor opens the course straight away, without a name or student ID.
+	await expect(
+		page.getByRole("link", { name: /Randomised experiments/ }),
+	).toBeVisible();
+	await expect(page.getByLabel("Student ID")).toHaveCount(0);
+	await page.getByRole("tab", { name: "Insights" }).click();
 	await expect(page).toHaveURL(`${CLASSROOM}/c/causal/insights`);
 	await expect(
 		page.getByRole("heading", { name: "Where Learners get stuck" }),
@@ -253,9 +257,6 @@ test("an Instructor switches between the Instructor and Learner views", async ({
 	const context = await browser.newContext({ reducedMotion: "reduce" });
 	const page = await context.newPage();
 	await page.goto(INSTRUCTOR_LINK);
-	await page.getByLabel("Your name").fill("Instructor Ida");
-	await page.getByLabel("Student ID").fill(`${STUDENT_ID}-i`);
-	await page.getByRole("button", { name: "Start" }).click();
 
 	const viewing = page.getByRole("group", { name: "Viewing as" });
 	const asInstructor = viewing.getByRole("button", { name: "Instructor" });

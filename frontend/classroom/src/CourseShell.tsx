@@ -21,14 +21,13 @@ import {
 import { CoursePage } from "./CoursePage";
 import { IdentityForm } from "./IdentityForm";
 import { InsightsPage } from "./InsightsPage";
-import { type Identity, useIdentity } from "./identity";
+import { type Identity, instructorIdentity, useIdentity } from "./identity";
 import { LecturePage } from "./LecturePage";
 import { type ProgressMap, progressMap, withAnswer } from "./progress";
 import {
 	type CourseView,
 	coursePath,
 	followLink,
-	insightsPath,
 	navigate,
 } from "./router";
 
@@ -216,7 +215,8 @@ export function CourseShell({
 	view: CourseView;
 }) {
 	const { course: served, error, refresh: refreshCourse } = useCourse(slug);
-	const [identity, setIdentity] = useIdentity();
+	const [learnerIdentity, setIdentity] = useIdentity();
+	const [ownIdentity] = useState(instructorIdentity);
 	const [editing, setEditing] = useState(false);
 	const [chosenView, setViewAs] = useViewAs(slug);
 	// Insights are always seen as an Instructor.
@@ -230,6 +230,8 @@ export function CourseShell({
 				: served,
 		[served, instructor, viewAs],
 	);
+	// Instructors are never asked for a name or student ID.
+	const identity = instructor ? ownIdentity : learnerIdentity;
 	const learning = useLearning(slug, course, identity?.studentId ?? null);
 
 	function switchView(role: Role) {
@@ -278,20 +280,6 @@ export function CourseShell({
 					follows you to other devices and the course’s Instructors can see
 					where you are.
 				</p>
-				{course.role === "instructor" ? (
-					<Notice tone="info">
-						{course.administrator
-							? "You are signed in as the Administrator, so you see this course as an Instructor."
-							: "You opened an Instructor link."}{" "}
-						<a href={insightsPath(slug)} onClick={followLink}>
-							Open Insights
-						</a>{" "}
-						to see where Learners get stuck, or enter a name and student ID to
-						try the course. Switch “Viewing as” to Learner to see exactly what
-						Learners see. Your own answers are left out of Insights unless you
-						include them.
-					</Notice>
-				) : null}
 				<IdentityForm
 					initial={null}
 					submitLabel="Start"
@@ -338,7 +326,7 @@ export function CourseShell({
 					{course && instructor ? (
 						<ViewSwitch viewAs={viewAs} onChange={switchView} />
 					) : null}
-					{identity && course ? (
+					{identity && course && !instructor ? (
 						<button
 							type="button"
 							className="identity-chip"
@@ -353,7 +341,7 @@ export function CourseShell({
 				</div>
 			</header>
 			<main className="classroom-main">{content}</main>
-			{editing && identity ? (
+			{editing && identity && !instructor ? (
 				<Dialog
 					title="Your name and student ID"
 					onClose={() => setEditing(false)}
