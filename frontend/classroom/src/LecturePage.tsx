@@ -81,34 +81,37 @@ export function LecturePage({
 
 			{lecture.slides.length ? (
 				<ol className="slide-sequence" aria-label="Slides">
-					{lecture.slides.map(({ slide, slots, background_url }, index) => (
-						<li key={slide.id} className="slide-item">
-							<figure>
-								<SlidePreview
-									slide={slide}
-									slots={slots}
-									backgroundUrl={background_url}
-									aspectRatio={lecture.aspect_ratio}
-									fallback="content"
-									headingLevel={3}
-								/>
-								<figcaption className="slide-caption">
-									<span className="slide-number">
-										{index + 1} / {lecture.slides.length}
-									</span>
-									{slide.citations.length ? (
-										<CitationList citations={slide.citations} />
-									) : null}
-								</figcaption>
-							</figure>
-							{slide.speaker_notes?.trim() ? (
-								<details className="speaker-notes">
-									<summary>Speaker notes</summary>
-									<p>{slide.speaker_notes}</p>
-								</details>
-							) : null}
-						</li>
-					))}
+					{lecture.slides.map(
+						({ slide, slots, background_url, image_url }, index) => (
+							<li key={slide.id} className="slide-item">
+								<figure>
+									<SlidePreview
+										slide={slide}
+										slots={slots}
+										backgroundUrl={background_url}
+										imageUrl={image_url}
+										aspectRatio={lecture.aspect_ratio}
+										fallback="content"
+										headingLevel={3}
+									/>
+									<figcaption className="slide-caption">
+										<span className="slide-number">
+											{index + 1} / {lecture.slides.length}
+										</span>
+										{slide.citations.length ? (
+											<CitationList citations={slide.citations} />
+										) : null}
+									</figcaption>
+								</figure>
+								{slide.speaker_notes?.trim() ? (
+									<details className="speaker-notes">
+										<summary>Speaker notes</summary>
+										<p>{slide.speaker_notes}</p>
+									</details>
+								) : null}
+							</li>
+						),
+					)}
 				</ol>
 			) : (
 				<p className="meta">This Lecture has no slides.</p>

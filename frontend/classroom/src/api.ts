@@ -86,6 +86,7 @@ export type LearnerSlide = {
 	slide: Slide;
 	slots: Record<string, PreviewSlot> | null;
 	background_url: string | null;
+	image_url: string | null;
 };
 
 export type Lecture = {

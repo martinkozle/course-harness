@@ -24,12 +24,7 @@ import { InsightsPage } from "./InsightsPage";
 import { type Identity, instructorIdentity, useIdentity } from "./identity";
 import { LecturePage } from "./LecturePage";
 import { type ProgressMap, progressMap, withAnswer } from "./progress";
-import {
-	type CourseView,
-	coursePath,
-	followLink,
-	navigate,
-} from "./router";
+import { type CourseView, coursePath, followLink, navigate } from "./router";
 
 export type LearnerState = {
 	course: CourseSummary;

@@ -12,6 +12,7 @@ Layout of ``<course dir>/served/<release slug>-<commit prefix>/``::
     artifacts/<presentation id>.pptx   verified Artifact bytes
     template.pptx                      verified template bytes, for a custom Template Profile
     previews/<profile>/backgrounds/v<n>/<layout>.png   rendered layout backgrounds
+    images/<presentation id>/<slide id>.<ext>           image Slide pictures, from the PPTX
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ from course_harness.core.slide_preview import (
     render_layout_backgrounds,
     renderer_capability,
 )
+from course_harness_classroom.slide_images import extract_slide_images
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,8 @@ class ServedLecture(BaseModel):
     # Present only when the Release files were read and verified.
     artifact: ServedArtifact | None = None
     quiz: Quiz | None = None
+    # The file name below ``images/<artifact id>/`` of each image Slide's picture.
+    slide_images: dict[str, str] = {}
 
 
 class ServedSnapshot(BaseModel):
@@ -89,7 +93,8 @@ class ServedSnapshot(BaseModel):
 
 
 # 2: slide previews carry the template's text colours.
-SNAPSHOT_FORMAT = 2
+# 3: image Slides show the picture embedded in the Release PPTX.
+SNAPSHOT_FORMAT = 3
 
 
 @dataclass(frozen=True)
@@ -166,7 +171,8 @@ def prepare_release(
                 mirror,
                 release,
                 plan,
-                files_available=files is not None,
+                files=files,
+                staging=staging,
                 context=context,
                 can_preview=can_preview,
             )
@@ -194,7 +200,8 @@ def _served_lectures(
     release: CourseRelease,
     plan: CoursePlan,
     *,
-    files_available: bool,
+    files: ReleaseFiles | None,
+    staging: Path,
     context: PreviewContext,
     can_preview: bool,
 ) -> list[ServedLecture]:
@@ -209,6 +216,11 @@ def _served_lectures(
             tagged_presentation(mirror, release.commit_oid, artifact.id) if artifact else None
         )
         preview = build_preview(presentation, context) if presentation and can_preview else None
+        images = (
+            _slide_images(presentation, artifact.id, files, staging)
+            if presentation and artifact
+            else {}
+        )
         lectures.append(
             ServedLecture(
                 id=lecture.id,
@@ -218,7 +230,7 @@ def _served_lectures(
                 preview=preview,
                 artifact=(
                     ServedArtifact(id=artifact.id, size=artifact.size)
-                    if artifact and files_available
+                    if artifact and files is not None
                     else None
                 ),
                 quiz=(
@@ -226,9 +238,26 @@ def _served_lectures(
                     if lecture.id in quizzes
                     else None
                 ),
+                slide_images=images,
             )
         )
     return lectures
+
+
+def _slide_images(
+    presentation: Presentation, artifact_id: str, files: ReleaseFiles | None, staging: Path
+) -> dict[str, str]:
+    """The pictures of a Lecture's image Slides, taken from its verified Release PPTX."""
+    if files is None or artifact_id not in files.artifacts:
+        return {}
+    try:
+        check_pptx_archive(staging / "artifacts" / f"{artifact_id}.pptx")
+        return extract_slide_images(
+            files.artifacts[artifact_id], presentation, staging / "images" / artifact_id
+        )
+    except Exception as error:  # A damaged PPTX only loses its pictures
+        logger.warning("Images of %s could not be read: %s", artifact_id, error)
+        return {}
 
 
 def load_snapshot(directory: Path) -> ServedSnapshot:

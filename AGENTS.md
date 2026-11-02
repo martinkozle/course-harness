@@ -33,7 +33,8 @@ publishes on a `v*` tag; never upload from a local machine.
 
 - The Classroom serves only validated Course Release tags read from a bare mirror, never mutable
   working state, and never checks out or executes repository content.
-- The Classroom never hosts Source binaries.
+- The Classroom never hosts Source binaries. An image Slide's picture is served as the Release PPTX
+  embeds it, never from the Library.
 - The Administrator token never appears in a URL. Learner and Instructor Share Link tokens are
   exchanged for HttpOnly cookies and a redirect to a clean URL. Share Link tokens are stored so
   links can be shown again (ADR 0016); session IDs are stored only as hashes, and no token is ever

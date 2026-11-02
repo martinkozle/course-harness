@@ -92,8 +92,15 @@ COURSE_SLUG_PATTERN = r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
 LINK_PREFIX: dict[Role, str] = {"learner": "l", "instructor": "i"}
 ASSET_PATH = re.compile(
     r"(?:previews/[A-Za-z0-9_-]{1,64}/backgrounds/v[0-9]{1,6}/[a-z_]{1,32}\.png"
-    r"|artifacts/presentation-[0-9a-f]{12}\.pptx)\Z"
+    r"|artifacts/presentation-[0-9a-f]{12}\.pptx"
+    r"|images/presentation-[0-9a-f]{12}/slide-[0-9a-f]{12}\.(?:png|jpg|gif|webp))\Z"
 )
+IMAGE_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
 FAILED_LOGIN_DELAY_SECONDS = 1.0
 NO_ACCESS = "Open the link you were given to see this course."
 NO_RELEASE = "This course has no Release yet."
@@ -189,6 +196,8 @@ class LearnerSlide(BaseModel):
     slide: dict[str, Any]
     slots: dict[str, PreviewSlot] | None
     background_url: str | None
+    # The picture of an image Slide, as embedded in the Release PPTX.
+    image_url: str | None = None
 
 
 class LectureResponse(BaseModel):
@@ -618,6 +627,12 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
                     slide=linked.model_dump(mode="json", exclude={"purpose"}),
                     slots=preview.slots if preview else None,
                     background_url=preview.background_url if preview else None,
+                    image_url=(
+                        f"/api/c/{course.slug}/assets/{directory.name}/images/"
+                        f"{lecture.artifact.id}/{lecture.slide_images[slide.id]}"
+                        if lecture.artifact and slide.id in lecture.slide_images
+                        else None
+                    ),
                 )
             )
         return LectureResponse(
@@ -859,8 +874,9 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
 
     @app.get("/api/c/{slug}/assets/{name}/{path:path}")
     def course_asset(name: str, path: str, access: CourseAccess) -> FileResponse:
-        """A rendered background or the Release PPTX of the Release the course serves now, or of
-        the one it served before, so a page opened before a switch keeps working."""
+        """A rendered background, an image Slide's picture or the Release PPTX of the Release the
+        course serves now, or of the one it served before, so a page opened before a switch keeps
+        working."""
         course = access.course
         found = sync_service.snapshot_named(course, name) if ASSET_PATH.fullmatch(path) else None
         if found is None:
@@ -887,7 +903,9 @@ def create_app(settings: ClassroomSettings | None = None, *, periodic_sync: bool
                 filename=filename,
                 headers=headers,
             )
-        return FileResponse(target, media_type="image/png", headers=headers)
+        return FileResponse(
+            target, media_type=IMAGE_MEDIA_TYPES.get(target.suffix, "image/png"), headers=headers
+        )
 
     @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     def unknown_api(path: str) -> None:
