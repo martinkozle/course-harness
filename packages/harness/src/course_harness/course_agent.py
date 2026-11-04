@@ -2128,39 +2128,50 @@ def build_provider_model(configuration: object, api_key: str | None) -> Model:
     )
 
 
+# Bedrock counts max_tokens against the account's tokens-per-minute quota when a request starts, so
+# the cap stays well above a long Lecture without reserving a model's whole 64K-128K output.
+BEDROCK_MAX_OUTPUT_TOKENS = 32_000
+
+
 def _build_bedrock_model(configured: Any, api_key: str | None, *, caching: bool) -> Model:
-    """Bedrock only caches at explicit cache points, so they are always requested."""
+    """Bedrock only caches at explicit cache points, so they are always requested.
+
+    Bedrock also caps a response at a few thousand tokens unless ``max_tokens`` is sent, which cuts
+    off a Lecture written in one tool call, so a model with a known output limit gets it.
+    """
     from pydantic_ai.models.bedrock import BedrockConverseModel, BedrockModelSettings
     from pydantic_ai.profiles import merge_profile
     from pydantic_ai.providers.bedrock import BedrockModelProfile, BedrockProvider
 
-    from course_harness.bedrock import BedrockError
+    from course_harness.bedrock import BedrockError, inference_profile_model_id
     from course_harness.providers import ProviderValidationError
 
+    access = configured.bedrock_access(api_key)
     try:
-        client = configured.bedrock_access(api_key).client(
-            "bedrock-runtime", read_timeout=600, connect_timeout=5
-        )
+        client = access.client("bedrock-runtime", read_timeout=600, connect_timeout=5)
     except BedrockError as error:
         raise ProviderValidationError(str(error)) from error
     profile = BedrockProvider.model_profile(configured.model)
+    if profile is None and (resolved := inference_profile_model_id(access, configured.model)):
+        profile = BedrockProvider.model_profile(resolved)
     if configured.capabilities.prompt_caching is True and not (profile or {}).get(
         "bedrock_supports_prompt_caching"
     ):
         # The Course Author confirmed caching for a model ID, such as an application
         # inference profile ARN, that does not reveal its model family.
         profile = merge_profile(profile, BedrockModelProfile(bedrock_supports_prompt_caching=True))
+    settings = BedrockModelSettings()
+    if caching:
+        settings.update(
+            bedrock_cache_instructions=True,
+            bedrock_cache_tool_definitions=True,
+            bedrock_cache_messages=True,
+        )
+    if max_output := (profile or {}).get("anthropic_max_output_tokens"):
+        settings["max_tokens"] = min(max_output, BEDROCK_MAX_OUTPUT_TOKENS)
     return BedrockConverseModel(
         configured.model,
         provider=BedrockProvider(bedrock_client=client),
         profile=profile,
-        settings=(
-            BedrockModelSettings(
-                bedrock_cache_instructions=True,
-                bedrock_cache_tool_definitions=True,
-                bedrock_cache_messages=True,
-            )
-            if caching
-            else None
-        ),
+        settings=settings or None,
     )

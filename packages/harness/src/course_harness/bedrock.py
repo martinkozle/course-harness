@@ -54,6 +54,37 @@ def foundation_model_id(model_id: str) -> str | None:
     return model_id
 
 
+_resolved_inference_profiles: dict[tuple[str, str], str] = {}
+
+
+def inference_profile_model_id(access: BedrockAccess, model_id: str) -> str | None:
+    """The foundation model an application inference profile ARN routes to.
+
+    Only an ARN that routes every request to one model resolves. A resolved ARN is remembered for
+    the process; a failed lookup is retried the next time.
+    """
+    if ":application-inference-profile/" not in model_id:
+        return None
+    key = (access.region, model_id)
+    if key in _resolved_inference_profiles:
+        return _resolved_inference_profiles[key]
+    try:
+        details = access.client("bedrock").get_inference_profile(
+            inferenceProfileIdentifier=model_id
+        )
+    except Exception:  # noqa: BLE001 - missing permission or network; the model still runs
+        return None
+    models = {
+        str(model.get("modelArn", "")).rpartition("foundation-model/")[2]
+        for model in details.get("models", [])
+    }
+    models.discard("")
+    if len(models) != 1:
+        return None
+    _resolved_inference_profiles[key] = resolved = models.pop()
+    return resolved
+
+
 # Only sizes that are the same in every region are listed; anything else is entered.
 _CONTEXT_WINDOWS: tuple[tuple[str, int], ...] = (
     ("anthropic.claude", 200_000),

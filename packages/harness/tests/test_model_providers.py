@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx2
 import pytest
@@ -298,7 +298,10 @@ async def test_openai_needs_no_base_url_and_knows_its_model_families() -> None:
     assert known.vision is True
 
 
-def test_models_request_prompt_caching_where_it_is_not_automatic() -> None:
+def test_models_request_prompt_caching_where_it_is_not_automatic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bedrock, "inference_profile_model_id", lambda _access, _model: None)
     claude = build_provider_model(
         _bedrock_configuration("us.anthropic.claude-haiku-4-5-v1:0", prompt_caching=True), "key"
     )
@@ -306,6 +309,7 @@ def test_models_request_prompt_caching_where_it_is_not_automatic() -> None:
         "bedrock_cache_instructions": True,
         "bedrock_cache_tool_definitions": True,
         "bedrock_cache_messages": True,
+        "max_tokens": 32_000,
     }
 
     arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc"
@@ -325,6 +329,54 @@ def test_models_request_prompt_caching_where_it_is_not_automatic() -> None:
     )
     assert anthropic.settings is not None
     assert anthropic.settings.get("anthropic_cache") is True
+
+
+def test_bedrock_claude_answers_are_not_cut_off_at_the_bedrock_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arn = "arn:aws:bedrock:eu-central-1:123456789012:application-inference-profile/abc"
+    monkeypatch.setattr(
+        bedrock,
+        "inference_profile_model_id",
+        lambda _access, model: "anthropic.claude-haiku-5-5" if model == arn else None,
+    )
+
+    behind_arn = build_provider_model(_bedrock_configuration(arn, prompt_caching=False), "key")
+    unknown = build_provider_model(
+        _bedrock_configuration("amazon.nova-pro-v1:0", prompt_caching=False), "key"
+    )
+
+    assert behind_arn.settings == {"max_tokens": 32_000}
+    assert behind_arn.profile.get("anthropic_max_output_tokens") == 128_000
+    assert unknown.settings is None
+
+
+def test_application_inference_profile_resolves_to_its_one_model() -> None:
+    arn = "arn:aws:bedrock:eu-central-1:123456789012:application-inference-profile/one"
+    lookups: list[str] = []
+
+    class Client:
+        def get_inference_profile(self, *, inferenceProfileIdentifier: str) -> dict[str, object]:
+            lookups.append(inferenceProfileIdentifier)
+            regions = ("eu-west-1", "eu-central-1")
+            return {
+                "models": [
+                    {"modelArn": f"arn:aws:bedrock:{region}::foundation-model/anthropic.claude-x"}
+                    for region in regions
+                ]
+            }
+
+    class Access:
+        region = "eu-central-1"
+
+        def client(self, _service: str) -> Client:
+            return Client()
+
+    access = cast(bedrock.BedrockAccess, Access())
+    assert bedrock.inference_profile_model_id(access, arn) == "anthropic.claude-x"
+    assert bedrock.inference_profile_model_id(access, arn) == "anthropic.claude-x"
+    assert bedrock.inference_profile_model_id(access, "eu.anthropic.claude-x") is None
+    assert lookups == [arn]
 
 
 def _write_aws_config(home: Path) -> None:
