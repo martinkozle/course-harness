@@ -28,6 +28,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import ModelRequestContext
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 
+from course_harness.conversation_usage import forget_context
 from course_harness.workspaces import workspace_identity
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,11 @@ def traces_directory(store_path: Path, workspace: Path) -> Path:
 
 def trace_path(store_path: Path, workspace: Path, conversation_id: str) -> Path:
     return traces_directory(store_path, workspace) / f"{conversation_id}.jsonl"
+
+
+def usage_path(store_path: Path, workspace: Path, conversation_id: str) -> Path:
+    """Where a Conversation's token and cost totals are kept."""
+    return _directory(store_path, workspace) / "usage" / f"{conversation_id}.json"
 
 
 def _now() -> str:
@@ -420,6 +426,7 @@ def delete_conversation(
     trace = trace_path(store_path, workspace, conversation_id)
     trace.unlink(missing_ok=True)
     trace.with_suffix(".state.json").unlink(missing_ok=True)
+    usage_path(store_path, workspace, conversation_id).unlink(missing_ok=True)
     return list_conversations(store_path, workspace)
 
 
@@ -691,6 +698,7 @@ def clear_chat_history(store_path: Path, workspace: Path) -> None:
     if _has_pending_approval(store_path, workspace, conversation_id):
         raise ConversationConflict("Resolve the pending approval before clearing this conversation")
     _atomic_write(_thread_path(store_path, workspace, conversation_id), _empty_thread())
+    usage_path(store_path, workspace, conversation_id).unlink(missing_ok=True)
     item.updated_at = _now()
     _update_metadata(index, item)
     _atomic_write(_index_path(store_path, workspace), index)
@@ -768,6 +776,7 @@ def compact_conversation(
     thread["summary"] = summary
     item.updated_at = _now()
     _atomic_write(_thread_path(store_path, workspace, conversation_id), thread)
+    forget_context(usage_path(store_path, workspace, conversation_id))
     _update_metadata(index, item)
     _atomic_write(_index_path(store_path, workspace), index)
     return read_conversation_transcript(store_path, workspace, conversation_id)

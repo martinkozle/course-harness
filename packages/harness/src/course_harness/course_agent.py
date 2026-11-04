@@ -2128,6 +2128,23 @@ def build_provider_model(configuration: object, api_key: str | None) -> Model:
     )
 
 
+def pricing_model_name(configuration: object, api_key: str | None) -> str | None:
+    """The model to price a provider's responses as, when the responses do not name it.
+
+    A Bedrock application inference profile answers under its ARN, which price data cannot know.
+    """
+    from course_harness.bedrock import BedrockError, inference_profile_model_id
+    from course_harness.providers import ProviderConfiguration
+
+    configured = ProviderConfiguration.model_validate(configuration)
+    if configured.kind != "bedrock":
+        return None
+    try:
+        return inference_profile_model_id(configured.bedrock_access(api_key), configured.model)
+    except BedrockError:
+        return None
+
+
 # Bedrock counts max_tokens against the account's tokens-per-minute quota when a request starts, so
 # the cap stays well above a long Lecture without reserving a model's whole 64K-128K output.
 BEDROCK_MAX_OUTPUT_TOKENS = 32_000

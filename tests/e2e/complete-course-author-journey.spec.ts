@@ -123,11 +123,16 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	await expect(composer).toHaveValue(
 		"Create a practical causal inference Course for applied researchers.",
 	);
-	await page.getByRole("button", { name: "Where messages are sent" }).click();
+	await page
+		.getByRole("button", { name: "Usage and where messages are sent" })
+		.click();
 	await expect(
 		page.getByText(
 			/When you send a message, it, any Source excerpts, and any images/,
 		),
+	).toBeVisible();
+	await expect(
+		page.getByText("This conversation has not used any tokens yet."),
 	).toBeVisible();
 
 	// The first fake-agent turn creates the two-Lecture Course Plan through chat.
@@ -135,6 +140,7 @@ test("Course Author completes a deterministic Course-to-Release journey", async 
 	await expect(
 		page.getByText("I created a two-Lecture Course Plan."),
 	).toBeVisible();
+	await expect(page.getByText("Estimated cost")).toBeVisible();
 
 	const courseResponse = await page.request.get("/api/course");
 	expect(courseResponse.ok()).toBe(true);

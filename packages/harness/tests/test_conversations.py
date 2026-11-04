@@ -400,3 +400,32 @@ def test_stored_titles_without_a_source_keep_author_renames(tmp_path: Path) -> N
         item.title: item.title_source for item in list_conversations(store, workspace).conversations
     }
     assert sources == {"Conversation 1": "default", "Week one": "author"}
+
+
+@pytest.mark.anyio
+async def test_conversation_usage_adds_up_each_response_until_deleted(tmp_path: Path) -> None:
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=_titled_app(tmp_path)), base_url="http://test"
+    ) as client:
+        conversation = (await client.get("/api/conversations")).json()["active_id"]
+        assert (await client.get(f"/api/conversations/{conversation}/usage")).json()[
+            "requests"
+        ] == 0
+
+        await _send(client, "Plan a lecture on anchoring")
+        first = (await client.get(f"/api/conversations/{conversation}/usage")).json()
+        await _send(client, "Now a quiz")
+        second = (await client.get(f"/api/conversations/{conversation}/usage")).json()
+
+        assert first["requests"] == 1
+        assert first["context_tokens"] == first["input_tokens"] + first["output_tokens"] > 0
+        assert second["requests"] == 2
+        assert second["output_tokens"] > first["output_tokens"]
+        # A test model has no price.
+        assert second["cost_usd"] is None
+        assert second["unpriced_requests"] == 2
+
+        await client.post("/api/conversations", json={})
+        assert (await client.delete(f"/api/conversations/{conversation}")).status_code == 200
+        gone = await client.get(f"/api/conversations/{conversation}/usage")
+        assert gone.status_code == 404

@@ -772,6 +772,62 @@
 	color: var(--ink-muted);
 }
 
+.composer-disclosure p {
+	margin: 0;
+}
+
+.usage-summary {
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: 2px 12px;
+	margin: 0 0 8px;
+}
+
+.usage-summary dt {
+	font-weight: 600;
+	color: var(--ink);
+}
+
+.usage-summary dd {
+	margin: 0;
+	font-variant-numeric: tabular-nums;
+}
+
+.context-meter {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	height: 28px;
+	padding: 0 6px;
+	border: 0;
+	border-radius: 999px;
+	background: none;
+	font-size: 0.75rem;
+	font-variant-numeric: tabular-nums;
+	color: var(--ink-muted);
+	white-space: nowrap;
+}
+
+.context-meter svg {
+	flex: none;
+	width: 15px;
+	height: 15px;
+}
+
+.context-meter:hover {
+	background: var(--surface-sunken);
+	color: var(--ink);
+}
+
+.context-meter.is-filling {
+	color: var(--warning);
+}
+
+.context-meter.is-full {
+	background: var(--danger-soft);
+	color: var(--danger);
+}
+
 .composer .menu {
 	min-width: 240px;
 }

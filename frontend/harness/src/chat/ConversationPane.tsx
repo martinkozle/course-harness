@@ -625,6 +625,10 @@ function Composer({
 	const [dragging, setDragging] = useState(false);
 	const [disclosureOpen, setDisclosureOpen] = useState(false);
 	const [modelError, setModelError] = useState<string | null>(null);
+	const usage = useConversationUsage(
+		agent.conversations?.active_id ?? null,
+		agent.running,
+	);
 	const selected = catalog.model_presets.find(
 		(preset) => preset.id === catalog.selected_model_id,
 	);
@@ -892,13 +896,19 @@ function Composer({
 				{selected && account ? (
 					<button
 						type="button"
-						className="icon-btn is-small"
-						aria-label="Where messages are sent"
-						title="Where messages are sent"
+						className={`context-meter${contextLevel(usage, selected)}`}
+						aria-label="Usage and where messages are sent"
+						title="Usage and where messages are sent"
 						aria-expanded={disclosureOpen}
 						onClick={() => setDisclosureOpen((value) => !value)}
 					>
 						<Info aria-hidden="true" />
+						{usage?.context_tokens ? (
+							<span>
+								{compactTokens(usage.context_tokens)} /{" "}
+								{compactTokens(selected.capabilities.context_window)}
+							</span>
+						) : null}
 					</button>
 				) : null}
 				<div className="composer-spacer" />
@@ -932,15 +942,116 @@ function Composer({
 				)}
 			</div>
 			{disclosureOpen && selected && account ? (
-				<p className="composer-disclosure" role="note">
+				<div className="composer-disclosure" role="note">
+					<UsageSummary
+						usage={usage}
+						contextWindow={selected.capabilities.context_window}
+					/>
+					<p>
 					When you send a message, it, any Source excerpts, and any images the
 					Course Agent looks at for the reply leave this device for{" "}
 					<strong>{account.name}</strong> at <strong>{account.base_url}</strong>{" "}
 					using {selected.model}. The API key stays in Course Harness&apos;s
 					private credential store.
-				</p>
+					</p>
+				</div>
 			) : null}
 			{modelError ? <p className="field-error">{modelError}</p> : null}
 		</form>
+	);
+}
+
+type ConversationUsage = {
+	requests: number;
+	context_tokens: number | null;
+	input_tokens: number;
+	cache_read_tokens: number;
+	cache_write_tokens: number;
+	output_tokens: number;
+	cost_usd: number | null;
+	unpriced_requests: number;
+};
+
+/** The active Conversation's token totals, refreshed when it changes and after each run. */
+function useConversationUsage(
+	conversationId: string | null,
+	running: boolean,
+): ConversationUsage | null {
+	const [usage, setUsage] = useState<ConversationUsage | null>(null);
+	useEffect(() => {
+		if (!conversationId || running) return;
+		let current = true;
+		void fetch(`/api/conversations/${encodeURIComponent(conversationId)}/usage`)
+			.then((response) => (response.ok ? response.json() : null))
+			.then((next: ConversationUsage | null) => {
+				if (current) setUsage(next);
+			})
+			.catch(() => undefined);
+		return () => {
+			current = false;
+		};
+	}, [conversationId, running]);
+	return usage;
+}
+
+function contextLevel(
+	usage: ConversationUsage | null,
+	preset: { capabilities: { context_window: number } },
+): string {
+	if (!usage?.context_tokens) return "";
+	const share = usage.context_tokens / preset.capabilities.context_window;
+	return share >= 0.9 ? " is-full" : share >= 0.7 ? " is-filling" : "";
+}
+
+function compactTokens(count: number): string {
+	if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+	if (count >= 1_000) return `${Math.round(count / 1_000)}k`;
+	return String(count);
+}
+
+const tokens = new Intl.NumberFormat();
+
+function formatCost(usd: number): string {
+	return usd < 0.01 ? "under $0.01" : `$${usd.toFixed(2)}`;
+}
+
+function UsageSummary({
+	usage,
+	contextWindow,
+}: {
+	usage: ConversationUsage | null;
+	contextWindow: number;
+}) {
+	if (!usage || usage.requests === 0)
+		return <p>This conversation has not used any tokens yet.</p>;
+	const cached = usage.cache_read_tokens + usage.cache_write_tokens;
+	return (
+		<dl className="usage-summary">
+			<dt>Context</dt>
+			<dd>
+				{usage.context_tokens === null
+					? "Shown after the next reply"
+					: `${tokens.format(usage.context_tokens)} of ${tokens.format(contextWindow)} tokens (${Math.round((usage.context_tokens / contextWindow) * 100)}%)`}
+			</dd>
+			<dt>Sent</dt>
+			<dd>
+				{tokens.format(usage.input_tokens)} tokens in {usage.requests}{" "}
+				{usage.requests === 1 ? "request" : "requests"}
+				{cached
+					? `, ${tokens.format(usage.cache_read_tokens)} read from cache and ${tokens.format(usage.cache_write_tokens)} written to it`
+					: ""}
+			</dd>
+			<dt>Received</dt>
+			<dd>{tokens.format(usage.output_tokens)} tokens</dd>
+			<dt>Estimated cost</dt>
+			<dd>
+				{usage.cost_usd === null
+					? "No price is known for this model"
+					: formatCost(usage.cost_usd)}
+				{usage.cost_usd !== null && usage.unpriced_requests > 0
+					? `, plus ${usage.unpriced_requests} unpriced ${usage.unpriced_requests === 1 ? "request" : "requests"}`
+					: ""}
+			</dd>
+		</dl>
 	);
 }

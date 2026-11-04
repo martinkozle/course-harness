@@ -56,6 +56,7 @@ from course_harness.chat_history import (
     trace_path,
     traces_directory,
     update_conversation,
+    usage_path,
 )
 from course_harness.connector_tools import (
     ConnectorConnect,
@@ -74,6 +75,11 @@ from course_harness.connectors import (
     ResolvedConnector,
 )
 from course_harness.conversation_titles import generate_conversation_title
+from course_harness.conversation_usage import (
+    ConversationUsage,
+    TrackConversationUsage,
+    read_usage,
+)
 from course_harness.core.canonical_mutation import (
     MAX_CANONICAL_FILES,
     CanonicalMutationConflict,
@@ -159,6 +165,7 @@ from course_harness.course_agent import (
     create_autonomous_course_agent,
     create_course_agent,
     create_reconciliation_agent,
+    pricing_model_name,
 )
 from course_harness.credential_store import CredentialStoreError
 from course_harness.document_processing_settings import (
@@ -2145,6 +2152,14 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Conversation was not found") from error
 
+    @app.get("/api/conversations/{conversation_id}/usage", response_model=ConversationUsage)
+    async def conversation_usage(conversation_id: str) -> ConversationUsage:
+        active = require_workspace()
+        catalog = list_conversations(chat_path, active)
+        if all(conversation.id != conversation_id for conversation in catalog.conversations):
+            raise HTTPException(status_code=404, detail="Conversation was not found")
+        return read_usage(usage_path(chat_path, active, conversation_id))
+
     @app.post(
         "/api/conversations/{conversation_id}/compact/preview", response_model=CompactionPreview
     )
@@ -2478,6 +2493,14 @@ def create_app(
                 allowed_file_url_schemes=frozenset(),
                 capabilities=[
                     AgentTrace(trace_path(chat_path, active, conversation_id)),
+                    TrackConversationUsage(
+                        usage_path(chat_path, active, conversation_id),
+                        price_model=(
+                            None
+                            if agent_model is not None
+                            else pricing_model_name(configuration, api_key)
+                        ),
+                    ),
                     SaveConversationProgress(chat_path, active, conversation_id),
                 ],
                 toolsets=(
