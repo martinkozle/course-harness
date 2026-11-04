@@ -625,9 +625,10 @@ function Composer({
 	const [dragging, setDragging] = useState(false);
 	const [disclosureOpen, setDisclosureOpen] = useState(false);
 	const [modelError, setModelError] = useState<string | null>(null);
+	// A new chat is a local draft until its first message, so it has no usage of its own yet.
 	const usage = useConversationUsage(
-		agent.conversations?.active_id ?? null,
-		agent.running,
+		agent.localDraft ? null : (agent.conversations?.active_id ?? null),
+		`${agent.running}:${agent.messages.length}:${agent.activities.length}`,
 	);
 	const selected = catalog.model_presets.find(
 		(preset) => preset.id === catalog.selected_model_id,
@@ -972,26 +973,33 @@ type ConversationUsage = {
 	unpriced_requests: number;
 };
 
-/** The active Conversation's token totals, refreshed when it changes and after each run. */
+/**
+ * The active Conversation's token totals. The server adds each model response as it arrives, so
+ * they are fetched again whenever the run streams a new message or step.
+ */
 function useConversationUsage(
 	conversationId: string | null,
-	running: boolean,
+	progress: string,
 ): ConversationUsage | null {
-	const [usage, setUsage] = useState<ConversationUsage | null>(null);
+	const [usage, setUsage] = useState<{
+		conversationId: string;
+		value: ConversationUsage;
+	} | null>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: progress drives refetching
 	useEffect(() => {
-		if (!conversationId || running) return;
+		if (!conversationId) return;
 		let current = true;
 		void fetch(`/api/conversations/${encodeURIComponent(conversationId)}/usage`)
 			.then((response) => (response.ok ? response.json() : null))
-			.then((next: ConversationUsage | null) => {
-				if (current) setUsage(next);
+			.then((value: ConversationUsage | null) => {
+				if (current) setUsage(value ? { conversationId, value } : null);
 			})
 			.catch(() => undefined);
 		return () => {
 			current = false;
 		};
-	}, [conversationId, running]);
-	return usage;
+	}, [conversationId, progress]);
+	return usage && usage.conversationId === conversationId ? usage.value : null;
 }
 
 function contextLevel(
