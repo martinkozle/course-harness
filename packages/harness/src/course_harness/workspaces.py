@@ -1,11 +1,13 @@
 import hashlib
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from course_harness.runtime_paths import RuntimePaths
 
@@ -108,9 +110,16 @@ def native_folder_picker() -> Path | None:
             text=True,
         )
     else:
+        try:
+            return portal_folder_picker()
+        except PortalUnavailableError:
+            pass
         picker = shutil.which("zenity") or shutil.which("kdialog")
         if picker is None:
-            raise RuntimeError("No native folder picker is available (install zenity or kdialog)")
+            raise RuntimeError(
+                "No folder picker is available. Install zenity or kdialog, or start Course Harness "
+                "with the folder: course-harness /path/to/folder"
+            )
         arguments = [picker, "--file-selection", "--directory", "--title=Open Course Workspace"]
         if Path(picker).name == "kdialog":
             arguments = [picker, "--getexistingdirectory", str(Path.home())]
@@ -120,3 +129,87 @@ def native_folder_picker() -> Path | None:
         return None
     selection = result.stdout.strip()
     return Path(selection) if selection else None
+
+
+class PortalUnavailableError(RuntimeError):
+    """The desktop has no XDG portal that can choose a folder."""
+
+
+PORTAL_PATH = "/org/freedesktop/portal/desktop"
+# The FileChooser portal can choose folders from interface version 3 on.
+PORTAL_DIRECTORY_VERSION = 3
+
+
+def portal_folder_picker() -> Path | None:
+    """Choose a folder with the XDG desktop portal, as browsers and other desktop apps do on Linux.
+
+    The portal shows the desktop's own file chooser (GNOME, KDE, or the GTK one on Hyprland and
+    Sway), so no dialog program has to be installed. Returns ``None`` when the dialog is cancelled
+    and raises ``PortalUnavailableError`` when there is no session bus or folder-choosing portal.
+    """
+    try:
+        from jeepney import DBusAddress, MatchRule, Properties, message_bus, new_method_call
+        from jeepney.io.blocking import Proxy, open_dbus_connection
+        from jeepney.wrappers import DBusErrorResponse, unwrap_msg
+    except ImportError as error:
+        raise PortalUnavailableError("jeepney is not installed") from error
+
+    portal = DBusAddress(
+        PORTAL_PATH,
+        bus_name="org.freedesktop.portal.Desktop",
+        interface="org.freedesktop.portal.FileChooser",
+    )
+    try:
+        connection = open_dbus_connection(bus="SESSION")
+    except (KeyError, OSError, ValueError) as error:
+        raise PortalUnavailableError("No D-Bus session bus") from error
+    with connection:
+        try:
+            (version_variant,) = unwrap_msg(
+                connection.send_and_get_reply(Properties(portal).get("version"), timeout=5)
+            )
+        except (DBusErrorResponse, TimeoutError) as error:
+            raise PortalUnavailableError("No FileChooser portal") from error
+        if version_variant[1] < PORTAL_DIRECTORY_VERSION:
+            raise PortalUnavailableError("The FileChooser portal cannot choose folders")
+
+        # Subscribe to the Response signal on the request path before asking, so it is not missed.
+        token = f"course_harness_{secrets.token_hex(8)}"
+        sender = (connection.unique_name or "").removeprefix(":").replace(".", "_")
+        rule = MatchRule(
+            type="signal",
+            interface="org.freedesktop.portal.Request",
+            member="Response",
+            path=f"{PORTAL_PATH}/request/{sender}/{token}",
+        )
+        unwrap_msg(connection.send_and_get_reply(Proxy(message_bus, connection).AddMatch(rule)))
+        with connection.filter(rule) as responses:
+            options = {
+                "handle_token": ("s", token),
+                "directory": ("b", True),
+                "modal": ("b", True),
+            }
+            request = new_method_call(
+                portal, "OpenFile", "ssa{sv}", ("", "Open Course Workspace", options)
+            )
+            try:
+                unwrap_msg(connection.send_and_get_reply(request, timeout=10))
+            except (DBusErrorResponse, TimeoutError) as error:
+                raise PortalUnavailableError("The FileChooser portal did not open") from error
+            response, results = connection.recv_until_filtered(responses).body
+    return folder_from_portal_response(response, results)
+
+
+def folder_from_portal_response(
+    response: int, results: Mapping[str, tuple[str, object]]
+) -> Path | None:
+    """The chosen folder of a FileChooser Response, or ``None`` when nothing was chosen."""
+    if response != 0:
+        return None
+    _signature, uris = results.get("uris", ("as", []))
+    if not isinstance(uris, list) or not uris:
+        return None
+    location = urlparse(str(uris[0]))
+    if location.scheme != "file":
+        return None
+    return Path(unquote(location.path))

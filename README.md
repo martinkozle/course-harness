@@ -38,6 +38,9 @@ course-harness --no-browser               # do not open the browser
 course-harness --port 9000                # use another local port
 ```
 
+On Linux, New course and Open course use `zenity` or `kdialog` to choose a folder. Without either,
+pass the folder on the command line instead; an empty folder opens as a new Course.
+
 ## Set up a model
 
 Open **Models** to add a provider. Course Harness works with OpenRouter, OpenAI, Anthropic, Amazon

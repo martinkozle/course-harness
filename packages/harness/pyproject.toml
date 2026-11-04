@@ -26,6 +26,8 @@ dependencies = [
   "fastapi",
   "fastmcp-slim[client]>=4",
   "httpx2",
+  # Chooses folders through the XDG desktop portal on Linux.
+  "jeepney>=0.9; sys_platform == 'linux'",
   "keyring>=25.6",
   "pillow>=12.3.0",
   "pydantic-ai-slim[ag-ui,anthropic,bedrock,mcp,openai]",
