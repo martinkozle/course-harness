@@ -11,6 +11,17 @@ in your own template.
 
 ![A Course Agent conversation beside a cited Lecture Slide](https://raw.githubusercontent.com/martinkozle/course-harness/main/docs/images/workspace.png)
 
+## Examples
+
+Watch a [demo video](https://youtu.be/N4lEOd4WrMM) of a Course built from an empty folder to a
+published Course Harness Classroom course, with Lectures, a Quiz and Learner results. The Course
+Workspaces of example Courses are public, so you can read what Course Harness produces:
+
+- [System 1 Thinking in Decisions](https://github.com/martinkozle/course-harness-example-system-1-thinking-in-decisions),
+  the Course made in the demo video
+- [The Model Context Protocol](https://github.com/martinkozle/course-harness-example-mcp):
+  architecture, building servers, and security
+
 ## Install and launch
 
 Install [uv](https://docs.astral.sh/uv/). It downloads Python 3.14 if you do not have it.
